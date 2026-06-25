@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Binance Futures Strategy</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <h1>Binance Futures Strategy</h1>
+        <p>EMA/ATR 顺势回踩策略 · 默认只读与模拟交易</p>
+      </div>
+      <button id="refreshBtn">刷新数据</button>
+    </header>
+
+    <main class="layout">
+      <section class="panel wide">
+        <h2>实盘状态</h2>
+        <div id="status" class="status-grid"></div>
+        <div class="actions">
+          <button type="button" data-action="start" data-confirmation="START_BOT">启动机器人</button>
+          <button type="button" data-action="pause">暂停机器人</button>
+          <button type="button" data-action="stage_growth">切回滚仓阶段</button>
+          <button type="button" data-action="stage_grid" data-confirmation="SWITCH_TO_GRID">确认切到网格阶段</button>
+          <button type="button" id="executeStage1">执行阶段一信号</button>
+          <button type="button" id="executeGrid">执行阶段二网格</button>
+        </div>
+        <pre id="executeResult" class="result-box"></pre>
+      </section>
+
+      <section class="panel">
+        <h2>市场</h2>
+        <div id="market" class="table-wrap"></div>
+      </section>
+
+      <section class="panel">
+        <h2>策略信号</h2>
+        <div id="signals" class="grid"></div>
+      </section>
+
+      <section class="panel wide">
+        <h2>两阶段决策</h2>
+        <div id="decisions" class="table-wrap"></div>
+      </section>
+
+      <section class="panel wide">
+        <h2>回测结果</h2>
+        <div id="backtest" class="table-wrap"></div>
+      </section>
+
+      <section class="panel wide">
+        <h2>配置</h2>
+        <form id="configForm" class="config-grid">
+          <label>交易对 <input name="symbols" placeholder="BTCUSDT,ETHUSDT,SOLUSDT" /></label>
+          <label>阶段一币种 <input name="stage1_symbols" placeholder="SOLUSDT" /></label>
+          <label>阶段二网格币种 <input name="stage2_symbols" placeholder="BTCUSDT,ETHUSDT" /></label>
+          <label>K线周期 <input name="interval" value="4h" /></label>
+          <label>K线数量 <input name="limit" type="number" min="100" max="1500" /></label>
+          <label>阶段一目标权益U <input name="stage1_target_equity" type="number" step="1" /></label>
+          <label>阶段二切换 <input name="stage2_activation" placeholder="manual / auto" /></label>
+          <label>单笔风险% <input name="risk_per_trade_pct" type="number" step="0.1" /></label>
+          <label>每日最大亏损% <input name="daily_loss_limit_pct" type="number" step="0.1" /></label>
+          <label>最大回撤% <input name="max_drawdown_pct" type="number" step="0.1" /></label>
+          <label>连续亏损暂停笔数 <input name="max_consecutive_losses" type="number" /></label>
+          <label>冷却小时 <input name="cooldown_hours" type="number" /></label>
+          <label>最大持仓数 <input name="max_open_positions" type="number" /></label>
+          <label>单币保证金上限% <input name="max_symbol_margin_pct" type="number" step="0.1" /></label>
+          <label>阶段一最大杠杆 <input name="stage1_max_leverage" type="number" step="0.1" /></label>
+          <label>阶段二最大杠杆 <input name="stage2_max_leverage" type="number" step="0.1" /></label>
+          <label>网格最少层数 <input name="grid_min_levels" type="number" /></label>
+          <label>网格最多层数 <input name="grid_max_levels" type="number" /></label>
+          <label>网格保留现金% <input name="grid_reserve_cash_pct" type="number" step="0.1" /></label>
+          <label>Binance URL <input name="binance_base_url" /></label>
+          <label>API Key <input name="api_key" autocomplete="off" /></label>
+          <label>API Secret <input name="api_secret" autocomplete="off" type="password" placeholder="留空则不修改" /></label>
+          <label class="check"><input name="allow_short" type="checkbox" /> 允许做空</label>
+          <label class="check"><input name="grid_enabled" type="checkbox" /> 启用阶段二网格</label>
+          <label class="check"><input name="grid_stop_on_breakout" type="checkbox" /> 突破区间停止网格</label>
+          <label class="check"><input name="dry_run" type="checkbox" /> 模拟交易 dry-run</label>
+          <label class="check"><input name="live_trading_enabled" type="checkbox" /> 允许实盘交易</label>
+          <label>实盘确认短语 <input name="live_trading_confirmation" placeholder="ENABLE_LIVE_TRADING" /></label>
+          <button type="submit">保存配置</button>
+        </form>
+        <p class="warning">风险提示：合约可能快速亏损本金。本系统只提供工具和回测，不保证收益；实盘默认关闭。</p>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
