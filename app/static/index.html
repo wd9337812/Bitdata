@@ -10,7 +10,7 @@
     <header class="topbar">
       <div>
         <h1>币安合约策略控制台</h1>
-        <p>两阶段系统：滚仓增长 + 合约网格；默认只读与模拟交易</p>
+        <p>多币种扫描 · 锦标赛/进攻/稳健三档模式 · 默认模拟交易</p>
       </div>
       <button id="refreshBtn">刷新数据</button>
     </header>
@@ -24,7 +24,7 @@
           <button type="button" data-action="pause">暂停机器人</button>
           <button type="button" data-action="stage_growth">切回滚仓阶段</button>
           <button type="button" data-action="stage_grid" data-confirmation="SWITCH_TO_GRID">确认切到网格阶段</button>
-          <button type="button" id="executeStage1">执行阶段一信号</button>
+          <button type="button" id="executeStage1">执行当前最高分信号</button>
           <button type="button" id="executeGrid">执行阶段二网格</button>
         </div>
         <pre id="executeResult" class="result-box"></pre>
@@ -41,7 +41,7 @@
       </section>
 
       <section class="panel wide">
-        <h2>两阶段决策</h2>
+        <h2>多币种候选排名</h2>
         <div id="decisions" class="table-wrap"></div>
       </section>
 
@@ -54,27 +54,44 @@
         <h2>系统配置</h2>
         <form id="configForm" class="config-grid">
           <label>行情交易对 <input name="symbols" placeholder="BTCUSDT,ETHUSDT,SOLUSDT" /></label>
-          <label>阶段一币种 <input name="stage1_symbols" placeholder="SOLUSDT" /></label>
+          <label>手动候选币种 <input name="stage1_symbols" placeholder="SOLUSDT,LABUSDT,SUIUSDT" /></label>
           <label>阶段二网格币种 <input name="stage2_symbols" placeholder="BTCUSDT,ETHUSDT" /></label>
+          <label>增长模式 <input name="growth_mode" placeholder="conservative / balanced / attack / tournament" /></label>
           <label>K线周期 <input name="interval" value="4h" /></label>
           <label>K线数量 <input name="limit" type="number" min="100" max="1500" /></label>
+          <label>最大扫描币种数 <input name="max_scan_symbols" type="number" /></label>
+          <label>最低24小时成交额（U） <input name="min_24h_volume_usdt" type="number" step="1000000" /></label>
           <label>阶段一目标权益（U） <input name="stage1_target_equity" type="number" step="1" /></label>
+          <label>锦标赛停止权益（U） <input name="tournament_stop_equity" type="number" step="1" /></label>
           <label>阶段二切换方式 <input name="stage2_activation" placeholder="manual / auto" /></label>
-          <label>单笔风险（%） <input name="risk_per_trade_pct" type="number" step="0.1" /></label>
-          <label>每日最大亏损（%） <input name="daily_loss_limit_pct" type="number" step="0.1" /></label>
+          <label>稳健单笔风险（%） <input name="risk_per_trade_pct" type="number" step="0.1" /></label>
+          <label>进攻单笔风险（%） <input name="attack_risk_per_trade_pct" type="number" step="0.1" /></label>
+          <label>锦标赛单笔风险（%） <input name="tournament_risk_per_trade_pct" type="number" step="0.1" /></label>
+          <label>稳健每日最大亏损（%） <input name="daily_loss_limit_pct" type="number" step="0.1" /></label>
+          <label>进攻每日最大亏损（%） <input name="attack_daily_loss_limit_pct" type="number" step="0.1" /></label>
+          <label>锦标赛每日最大亏损（%） <input name="tournament_daily_loss_limit_pct" type="number" step="0.1" /></label>
           <label>最大回撤（%） <input name="max_drawdown_pct" type="number" step="0.1" /></label>
           <label>连续亏损暂停笔数 <input name="max_consecutive_losses" type="number" /></label>
           <label>冷却小时 <input name="cooldown_hours" type="number" /></label>
           <label>最大持仓数量 <input name="max_open_positions" type="number" /></label>
-          <label>单币保证金上限（%） <input name="max_symbol_margin_pct" type="number" step="0.1" /></label>
-          <label>阶段一最大杠杆 <input name="stage1_max_leverage" type="number" step="0.1" /></label>
+          <label>稳健保证金上限（%） <input name="max_symbol_margin_pct" type="number" step="0.1" /></label>
+          <label>进攻保证金上限（%） <input name="attack_max_symbol_margin_pct" type="number" step="0.1" /></label>
+          <label>锦标赛保证金上限（%） <input name="tournament_max_symbol_margin_pct" type="number" step="0.1" /></label>
+          <label>稳健最大杠杆 <input name="stage1_max_leverage" type="number" step="0.1" /></label>
+          <label>进攻最大杠杆 <input name="attack_max_leverage" type="number" step="0.1" /></label>
+          <label>锦标赛最大杠杆 <input name="tournament_max_leverage" type="number" step="0.1" /></label>
           <label>阶段二最大杠杆 <input name="stage2_max_leverage" type="number" step="0.1" /></label>
+          <label>最低近期交易数 <input name="min_recent_trades" type="number" /></label>
+          <label>最低盈亏比 PF <input name="min_profit_factor" type="number" step="0.1" /></label>
+          <label>最低收益/成本比 <input name="min_expected_profit_cost_ratio" type="number" step="0.1" /></label>
           <label>网格最少层数 <input name="grid_min_levels" type="number" /></label>
           <label>网格最多层数 <input name="grid_max_levels" type="number" /></label>
           <label>网格保留现金（%） <input name="grid_reserve_cash_pct" type="number" step="0.1" /></label>
           <label>币安接口地址 <input name="binance_base_url" /></label>
           <label>API Key <input name="api_key" autocomplete="off" /></label>
           <label>API Secret <input name="api_secret" autocomplete="off" type="password" placeholder="留空则不修改" /></label>
+          <label class="check"><input name="auto_discover_symbols" type="checkbox" /> 自动发现高成交加密币</label>
+          <label class="check"><input name="auto_risk_by_equity" type="checkbox" /> 按账户权益自动切换风险模式</label>
           <label class="check"><input name="allow_short" type="checkbox" /> 允许做空</label>
           <label class="check"><input name="grid_enabled" type="checkbox" /> 启用阶段二网格</label>
           <label class="check"><input name="grid_stop_on_breakout" type="checkbox" /> 突破区间停止网格</label>
@@ -83,7 +100,7 @@
           <label>实盘确认短语 <input name="live_trading_confirmation" placeholder="ENABLE_LIVE_TRADING" /></label>
           <button type="submit">保存配置</button>
         </form>
-        <p class="warning">风险提示：合约可能快速亏损本金。本系统只提供工具、回测和执行框架，不保证收益；实盘默认关闭。</p>
+        <p class="warning">风险提示：锦标赛/进攻模式会显著提高亏损速度。本系统不保证收益；实盘默认关闭。</p>
       </section>
     </main>
 

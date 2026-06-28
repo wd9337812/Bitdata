@@ -14,6 +14,12 @@ This file tracks local verification for the two-stage futures system.
 - `pytest -q`: `6 passed`
 - HTTP smoke test on `127.0.0.1:8091`: `/`, `/api/market`, `/api/status`, `/api/decisions` all returned `200`
 
+## 2026-06-28 Multi-Symbol Optimization
+
+- Added multi-symbol crypto-only scanner.
+- Added conservative, balanced, attack, and tournament growth modes.
+- Added tests for crypto-only discovery and automatic small-account mode selection.
+
 ## Current Risk Notes
 
 - Stage 1 live order path supports market entry plus protective stop and take-profit orders.

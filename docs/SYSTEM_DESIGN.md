@@ -24,6 +24,25 @@ Execution path:
 5. Round quantity/price by Binance exchange filters.
 6. In live mode, set leverage, market buy, then place stop-market and take-profit-market close-position orders.
 
+### Multi-Symbol Growth Scan
+
+Stage 1 now scans a ranked universe instead of only one configured symbol.
+
+- If `auto_discover_symbols=true`, Binance exchange info is used to include only `PERPETUAL` USDT contracts with `underlyingType=COIN`.
+- TradFi, equity, gold, and other non-crypto perpetuals are excluded.
+- Symbols must pass the configured 24h quote-volume threshold.
+- The scanner ranks candidates by current signal, recent backtest net return after fees, profit factor, win rate, and liquidity.
+- The runner executes only the highest-ranked candidate that passes all filters.
+
+Growth modes:
+
+- `conservative`: default EMA20/EMA50 pullback, low risk.
+- `balanced`: default pullback with a looser PF gate.
+- `attack`: EMA10/EMA20 pullback or momentum continuation, higher risk.
+- `tournament`: breakout strategy with the highest risk profile for very small accounts.
+
+When `auto_risk_by_equity=true`, equity below `100U` uses `tournament`, `100U-500U` uses `attack`, and larger accounts use the configured mode.
+
 ## Stage 2: Grid Mode
 
 Purpose: use lower-leverage grid plans after the account reaches the configured target.
@@ -62,6 +81,7 @@ Dashboard start also requires the confirmation phrase `START_BOT`.
 
 - `paused`: no action
 - `growth`: evaluate Stage 1 symbols and execute the first eligible decision
+- `growth`: scan all eligible Stage 1 symbols and execute only the best eligible decision
 - `grid`: generate and place/preview Stage 2 grid orders
 
 The runner defaults to a 300-second loop through `BOT_LOOP_SECONDS`.

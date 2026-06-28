@@ -38,9 +38,13 @@ def assess_new_position(
     equity: float,
     symbol: str,
     open_positions: list[dict[str, Any]],
+    overrides: dict[str, Any] | None = None,
 ) -> RiskDecision:
+    overrides = overrides or {}
     if state.get("bot_status") != "running":
         return RiskDecision(False, "bot_paused")
+    if equity <= float(config.get("tournament_stop_equity", 0)):
+        return RiskDecision(False, "tournament_stop_equity")
 
     cooldown_until = state.get("cooldown_until")
     if cooldown_until:
@@ -54,9 +58,10 @@ def assess_new_position(
         return RiskDecision(False, "consecutive_loss_limit")
 
     daily_start = float(state.get("daily_start_equity") or equity)
+    daily_loss_limit_pct = float(overrides.get("daily_loss_limit_pct", config.get("daily_loss_limit_pct", 3.0)))
     if daily_start > 0:
         daily_dd_pct = max(0.0, (daily_start - equity) / daily_start * 100)
-        if daily_dd_pct >= float(config.get("daily_loss_limit_pct", 3.0)):
+        if daily_dd_pct >= daily_loss_limit_pct:
             return RiskDecision(False, "daily_loss_limit")
 
     high_watermark = max(float(state.get("equity_high_watermark") or equity), equity)
@@ -72,9 +77,9 @@ def assess_new_position(
     if len(active_positions) >= int(config.get("max_open_positions", 1)):
         return RiskDecision(False, "max_open_positions")
 
-    symbol_margin_pct = float(config.get("max_symbol_margin_pct", 35.0))
+    symbol_margin_pct = float(overrides.get("margin_pct", config.get("max_symbol_margin_pct", 35.0)))
     max_margin = equity * symbol_margin_pct / 100
-    leverage = float(config.get("stage1_max_leverage", 2))
+    leverage = float(overrides.get("leverage", config.get("stage1_max_leverage", 2)))
     return RiskDecision(True, "allowed", max_notional=max_margin * leverage, max_margin=max_margin)
 
 

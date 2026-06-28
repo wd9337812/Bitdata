@@ -17,6 +17,7 @@ from app.models import BotControlPayload, ExecutePayload, TradingConfig
 from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
 from app.trading_engine import (
+    build_best_growth_decision,
     build_grid_decisions,
     build_stage1_decision,
     execute_grid_orders,
@@ -161,9 +162,12 @@ def api_decisions() -> dict[str, Any]:
         account_summary = {"equity": 50.0, "available_balance": 50.0, "unrealized_pnl": 0.0, "positions": []}
 
     stage1_decisions = []
-    for symbol in config.get("stage1_symbols", ["SOLUSDT"]):
-        bars = client.klines(symbol.upper(), config["interval"], int(config["limit"]))
-        stage1_decisions.append(build_stage1_decision(symbol.upper(), bars, config, state, account_summary))
+    best_growth = build_best_growth_decision(client, config, state, account_summary)
+    if best_growth.get("action") == "WAIT":
+        top_candidates = best_growth.get("scan", {}).get("candidates", [])[:10]
+        stage1_decisions = top_candidates or [best_growth]
+    else:
+        stage1_decisions = [best_growth] + best_growth.get("scan", {}).get("candidates", [])[1:10]
 
     grid_klines = {
         symbol.upper(): client.klines(symbol.upper(), config["interval"], int(config["limit"]))
@@ -174,6 +178,7 @@ def api_decisions() -> dict[str, Any]:
         "state": state,
         "account": account_summary,
         "stage1": stage1_decisions,
+        "growth_scan": best_growth.get("scan"),
         "stage2_grid": grid_decisions,
     }
 
@@ -218,7 +223,7 @@ def api_execute(payload: ExecutePayload) -> dict[str, Any]:
 
 
 @app.post("/api/execute/stage1", dependencies=[Depends(require_auth)])
-def api_execute_stage1(symbol: str) -> dict[str, Any]:
+def api_execute_stage1(symbol: str | None = None) -> dict[str, Any]:
     config = load_config()
     state = load_state()
     client = client_from_config()
@@ -227,8 +232,11 @@ def api_execute_stage1(symbol: str) -> dict[str, Any]:
         state = sync_stage(config, state, account_summary)
     else:
         account_summary = {"equity": 50.0, "available_balance": 50.0, "unrealized_pnl": 0.0, "positions": []}
-    bars = client.klines(symbol.upper(), config["interval"], int(config["limit"]))
-    decision = build_stage1_decision(symbol.upper(), bars, config, state, account_summary)
+    if symbol:
+        bars = client.klines(symbol.upper(), config["interval"], int(config["limit"]))
+        decision = build_stage1_decision(symbol.upper(), bars, config, state, account_summary)
+    else:
+        decision = build_best_growth_decision(client, config, state, account_summary)
     return execute_stage1_market_order(client, decision, config)
 
 

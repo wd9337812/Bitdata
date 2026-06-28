@@ -6,6 +6,7 @@ from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.grid import build_grid_orders, build_grid_plan
 from app.risk import assess_new_position, current_stage, live_trading_allowed, position_size_from_risk
+from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates
 from app.state_store import save_state
 from app.strategy import StrategyParams, latest_signal
 
@@ -43,18 +44,45 @@ def build_stage1_decision(
     config: dict[str, Any],
     state: dict[str, Any],
     account_summary: dict[str, Any],
+    scan_candidate: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    signal = latest_signal(symbol, bars, StrategyParams())
+    active_mode = mode_config(config, account_summary.get("equity"))
+    if scan_candidate:
+        active_mode = {
+            **active_mode,
+            "mode": scan_candidate.get("mode", active_mode["mode"]),
+            "strategy": scan_candidate.get("strategy", active_mode["strategy"]),
+            "risk_pct": scan_candidate.get("risk_pct", active_mode["risk_pct"]),
+            "leverage": scan_candidate.get("leverage", active_mode["leverage"]),
+            "margin_pct": scan_candidate.get("margin_pct", active_mode["margin_pct"]),
+        }
+    signal = latest_strategy_signal(symbol, bars, active_mode["strategy"]) if active_mode["strategy"] != "default" else latest_signal(symbol, bars, StrategyParams())
     equity = account_summary.get("equity")
     if signal.get("signal") != "LONG":
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "no_signal"}}
     if equity is None:
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "account_unavailable"}}
 
-    risk = assess_new_position(config, state, equity, symbol, account_summary.get("positions", []))
+    daily_loss_key = "daily_loss_limit_pct"
+    if active_mode["mode"] == "attack":
+        daily_loss_key = "attack_daily_loss_limit_pct"
+    if active_mode["mode"] == "tournament":
+        daily_loss_key = "tournament_daily_loss_limit_pct"
+    risk = assess_new_position(
+        config,
+        state,
+        equity,
+        symbol,
+        account_summary.get("positions", []),
+        overrides={
+            "margin_pct": active_mode["margin_pct"],
+            "leverage": active_mode["leverage"],
+            "daily_loss_limit_pct": config.get(daily_loss_key, config.get("daily_loss_limit_pct", 3.0)),
+        },
+    )
     quantity = position_size_from_risk(
         equity=equity,
-        risk_pct=float(config.get("risk_per_trade_pct", 1.0)),
+        risk_pct=float(active_mode["risk_pct"]),
         entry=float(signal["last_price"]),
         stop=float(signal["stop"]),
     )
@@ -67,7 +95,33 @@ def build_stage1_decision(
         "risk": risk.__dict__,
         "quantity": quantity,
         "estimated_notional": quantity * float(signal["last_price"]),
+        "mode": active_mode["mode"],
+        "strategy": active_mode["strategy"],
+        "risk_pct": active_mode["risk_pct"],
+        "leverage": active_mode["leverage"],
     }
+
+
+def build_best_growth_decision(
+    client: BinanceFuturesClient,
+    config: dict[str, Any],
+    state: dict[str, Any],
+    account_summary: dict[str, Any],
+) -> dict[str, Any]:
+    scan = scan_growth_candidates(client, config, account_summary)
+    best = next((item for item in scan["candidates"] if item.get("passed")), None)
+    if not best:
+        return {
+            "action": "WAIT",
+            "reason": "no_candidate_passed",
+            "scan": scan,
+            "risk": {"allowed": False, "reason": "no_candidate_passed"},
+        }
+    bars = client.klines(best["symbol"], config.get("interval", "4h"), int(config.get("limit", 1000)))
+    decision = build_stage1_decision(best["symbol"], bars, config, state, account_summary, scan_candidate=best)
+    decision["scan"] = scan
+    decision["candidate"] = best
+    return decision
 
 
 def build_grid_decisions(config: dict[str, Any], account_summary: dict[str, Any], klines: dict[str, list[list[Any]]]) -> list[dict[str, Any]]:
@@ -106,7 +160,7 @@ def execute_stage1_market_order(
         return {"mode": "blocked", "message": "Quantity is below exchange minimum.", "order": order}
     if not live_trading_allowed(config):
         return {"mode": "dry_run", "order": order}
-    leverage = max(1, min(10, int(float(config.get("stage1_max_leverage", 2)))))
+    leverage = max(1, min(50, int(float(decision.get("leverage", config.get("stage1_max_leverage", 2))))))
     client.set_leverage(symbol, leverage)
     entry_order = client.place_market_order(symbol=symbol, side="BUY", quantity=quantity)
     stop_order = client.place_stop_market(symbol=symbol, side="SELL", stop_price=stop)

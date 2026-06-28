@@ -1,70 +1,42 @@
 const fmt = (value, digits = 2) => Number(value).toLocaleString("zh-CN", { maximumFractionDigits: digits });
 
-const statusText = {
-  running: "运行中",
-  paused: "已暂停",
-};
-
-const stageText = {
-  growth: "阶段一：滚仓增长",
-  grid: "阶段二：合约网格",
-};
-
-const signalText = {
-  LONG: "做多",
-  WAIT: "等待",
-};
-
-const actionText = {
-  OPEN_LONG: "开多",
-  WAIT: "等待",
-};
-
-const resultModeText = {
-  dry_run: "模拟执行",
-  live: "实盘执行",
-  blocked: "已阻止",
-  none: "无操作",
-};
-
+const statusText = { running: "运行中", paused: "已暂停" };
+const stageText = { growth: "阶段一：滚仓增长", grid: "阶段二：合约网格" };
+const signalText = { LONG: "做多", WAIT: "等待" };
+const actionText = { OPEN_LONG: "开多", WAIT: "等待" };
+const modeText = { conservative: "稳健", balanced: "均衡", attack: "进攻", tournament: "锦标赛" };
+const strategyText = { default: "稳健回踩", attack: "进攻回踩/动量", breakout: "突破" };
+const resultModeText = { dry_run: "模拟执行", live: "实盘执行", blocked: "已阻止", none: "无操作" };
 const reasonText = {
   allowed: "允许执行",
+  passed: "通过过滤",
+  filters_not_passed: "过滤未通过",
+  no_candidate_passed: "没有候选币通过",
   no_signal: "没有交易信号",
   filters_not_aligned: "条件未满足",
   not_enough_data: "K线数据不足",
   trend_pullback_recovered: "趋势回踩后收回",
+  attack_pullback_or_momentum: "进攻回踩或动量",
+  breakout: "突破信号",
   bot_paused: "机器人已暂停",
   cooldown_active: "冷却中",
-  invalid_cooldown_state: "冷却状态异常",
   consecutive_loss_limit: "连续亏损达到上限",
   daily_loss_limit: "每日亏损达到上限",
   max_drawdown_limit: "最大回撤达到上限",
   max_open_positions: "持仓数量达到上限",
+  tournament_stop_equity: "低于锦标赛停止权益",
   account_unavailable: "账户不可用",
   volatility_too_low: "波动太低",
   volatility_too_high: "波动太高",
   grid_ready: "网格计划可用",
 };
 
-function zhStatus(value) {
-  return statusText[value] || value || "-";
-}
-
-function zhStage(value) {
-  return stageText[value] || value || "-";
-}
-
-function zhSignal(value) {
-  return signalText[value] || value || "-";
-}
-
-function zhAction(value) {
-  return actionText[value] || value || "-";
-}
-
-function zhReason(value) {
-  return reasonText[value] || value || "-";
-}
+const zh = (dict, value) => dict[value] || value || "-";
+const zhStatus = (value) => zh(statusText, value);
+const zhStage = (value) => zh(stageText, value);
+const zhSignal = (value) => zh(signalText, value);
+const zhAction = (value) => zh(actionText, value);
+const zhReason = (value) => zh(reasonText, value);
 
 function renderExecutionResult(result) {
   const lines = [];
@@ -81,10 +53,7 @@ function renderExecutionResult(result) {
 
 async function getJson(url, options) {
   const res = await fetch(url, options);
-  if (!res.ok) {
-    const detail = await res.text();
-    throw new Error(detail);
-  }
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
@@ -112,9 +81,11 @@ async function loadStatus() {
   const data = await getJson("/api/status");
   const state = data.state;
   const account = data.account;
+  const mode = data.config?.growth_mode || "-";
   document.querySelector("#status").innerHTML = [
     ["运行状态", zhStatus(state.bot_status)],
     ["当前阶段", zhStage(state.stage)],
+    ["增长模式", modeText[mode] || mode],
     ["账户权益", account.equity ?? "未配置API"],
     ["可用余额", account.available_balance ?? "未配置API"],
     ["未实现盈亏", account.unrealized_pnl ?? "未配置API"],
@@ -151,27 +122,49 @@ async function loadBacktest() {
   renderTable("#backtest", ["币种", "交易笔数", "盈利笔数", "胜率", "未杠杆净收益", "单笔平均收益", "盈亏比"], rows);
 }
 
+function stage1Row(item) {
+  const signal = item.signal || {};
+  const recent = item.recent || item.candidate?.recent || {};
+  const ticker = item.ticker || item.candidate?.ticker || {};
+  return [
+    item.passed ? "通过" : "未通过",
+    item.symbol || "-",
+    modeText[item.mode] || item.mode || "-",
+    strategyText[item.strategy] || item.strategy || "-",
+    item.score ?? "-",
+    zhSignal(signal.signal),
+    zhReason(signal.reason || item.reason),
+    recent.trades ?? "-",
+    recent.win_rate !== undefined ? `${fmt(recent.win_rate, 1)}%` : "-",
+    recent.net_pct !== undefined ? `${fmt(recent.net_pct, 2)}%` : "-",
+    recent.profit_factor !== undefined ? fmt(recent.profit_factor, 2) : "-",
+    ticker.volume_usdt_b !== undefined ? fmt(ticker.volume_usdt_b, 3) : "-",
+  ];
+}
+
 async function loadDecisions() {
   const data = await getJson("/api/decisions");
-  const stage1Rows = data.stage1.map((item) => [
-    "阶段一：滚仓增长",
-    item.symbol,
-    zhAction(item.action),
-    zhReason(item.signal?.reason),
-    zhReason(item.risk?.reason),
-    item.quantity ? fmt(item.quantity, 5) : "-",
-    item.estimated_notional ? fmt(item.estimated_notional, 2) : "-",
-  ]);
+  const candidates = data.growth_scan?.candidates || data.stage1 || [];
+  const stage1Rows = candidates.slice(0, 15).map(stage1Row);
   const gridRows = data.stage2_grid.map((item) => [
-    "阶段二：合约网格",
+    "网格",
     item.symbol ?? "-",
+    "-",
+    "-",
+    "-",
     item.status === "READY" ? "可执行" : "等待",
     zhReason(item.reason ?? "grid_ready"),
-    `${item.lower ? fmt(item.lower, 4) : "-"} / ${item.upper ? fmt(item.upper, 4) : "-"}`,
     item.levels ?? "-",
+    "-",
     item.deploy_equity ? fmt(item.deploy_equity, 2) : "-",
+    "-",
+    `${item.lower ? fmt(item.lower, 4) : "-"} / ${item.upper ? fmt(item.upper, 4) : "-"}`,
   ]);
-  renderTable("#decisions", ["阶段", "币种", "动作", "信号原因", "风控或区间", "数量或层数", "名义金额或投入"], stage1Rows.concat(gridRows));
+  renderTable(
+    "#decisions",
+    ["状态", "币种", "模式", "策略", "评分", "信号", "原因", "近期交易", "胜率", "净收益", "PF", "成交额/区间"],
+    stage1Rows.concat(gridRows),
+  );
 }
 
 async function loadConfig() {
@@ -218,18 +211,13 @@ document.querySelectorAll("[data-action]").forEach((button) => {
     await getJson("/api/control", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: button.dataset.action,
-        confirmation: button.dataset.confirmation || "",
-      }),
+      body: JSON.stringify({ action: button.dataset.action, confirmation: button.dataset.confirmation || "" }),
     });
     await refreshAll();
   });
 });
 document.querySelector("#executeStage1").addEventListener("click", async () => {
-  const config = await getJson("/api/config");
-  const symbol = (config.stage1_symbols?.[0] || "SOLUSDT").toUpperCase();
-  const result = await getJson(`/api/execute/stage1?symbol=${encodeURIComponent(symbol)}`, { method: "POST" });
+  const result = await getJson("/api/execute/stage1", { method: "POST" });
   document.querySelector("#executeResult").textContent = renderExecutionResult(result);
   await refreshAll();
 });

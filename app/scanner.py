@@ -1,0 +1,327 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+from app.binance_client import BinanceFuturesClient
+from app.strategy import StrategyParams, atr, ema
+
+
+MODE_PRESETS: dict[str, dict[str, Any]] = {
+    "conservative": {
+        "strategy": "default",
+        "risk_key": "risk_per_trade_pct",
+        "leverage_key": "stage1_max_leverage",
+        "margin_key": "max_symbol_margin_pct",
+        "min_pf": 1.2,
+        "min_trades": 2,
+        "recent_days": 30,
+    },
+    "balanced": {
+        "strategy": "default",
+        "risk_key": "risk_per_trade_pct",
+        "leverage_key": "stage1_max_leverage",
+        "margin_key": "max_symbol_margin_pct",
+        "min_pf": 1.05,
+        "min_trades": 2,
+        "recent_days": 30,
+    },
+    "attack": {
+        "strategy": "attack",
+        "risk_key": "attack_risk_per_trade_pct",
+        "leverage_key": "attack_max_leverage",
+        "margin_key": "attack_max_symbol_margin_pct",
+        "min_pf": 1.1,
+        "min_trades": 3,
+        "recent_days": 20,
+    },
+    "tournament": {
+        "strategy": "breakout",
+        "risk_key": "tournament_risk_per_trade_pct",
+        "leverage_key": "tournament_max_leverage",
+        "margin_key": "tournament_max_symbol_margin_pct",
+        "min_pf": 1.0,
+        "min_trades": 1,
+        "recent_days": 20,
+    },
+}
+
+
+def active_growth_mode(config: dict[str, Any], equity: float | None = None) -> str:
+    configured = str(config.get("growth_mode", "balanced")).lower()
+    if not config.get("auto_risk_by_equity", True):
+        return configured if configured in MODE_PRESETS else "balanced"
+    if equity is None:
+        return configured if configured in MODE_PRESETS else "balanced"
+    if equity < 100:
+        return "tournament"
+    if equity < 500:
+        return "attack"
+    return configured if configured in MODE_PRESETS else "balanced"
+
+
+def mode_config(config: dict[str, Any], equity: float | None = None) -> dict[str, Any]:
+    mode = active_growth_mode(config, equity)
+    preset = MODE_PRESETS[mode].copy()
+    preset["mode"] = mode
+    preset["risk_pct"] = float(config.get(preset["risk_key"], config.get("risk_per_trade_pct", 1.0)))
+    preset["leverage"] = float(config.get(preset["leverage_key"], config.get("stage1_max_leverage", 2)))
+    preset["margin_pct"] = float(config.get(preset["margin_key"], config.get("max_symbol_margin_pct", 35.0)))
+    preset["min_pf"] = float(config.get("min_profit_factor", preset["min_pf"])) if mode in {"conservative", "balanced"} else preset["min_pf"]
+    preset["min_trades"] = int(config.get("min_recent_trades", preset["min_trades"])) if mode in {"conservative", "balanced"} else preset["min_trades"]
+    return preset
+
+
+def discover_coin_symbols(client: BinanceFuturesClient, config: dict[str, Any]) -> list[str]:
+    if not config.get("auto_discover_symbols", True):
+        return [symbol.upper() for symbol in config.get("stage1_symbols", ["SOLUSDT"])]
+
+    exchange_info = client.exchange_info()
+    coin_symbols = {
+        item["symbol"]
+        for item in exchange_info.get("symbols", [])
+        if item.get("contractType") == "PERPETUAL"
+        and item.get("underlyingType") == "COIN"
+        and item.get("status") == "TRADING"
+        and item.get("quoteAsset") == "USDT"
+    }
+    min_volume = float(config.get("min_24h_volume_usdt", 100_000_000))
+    tickers = client.ticker_24h()
+    ranked = [
+        (item["symbol"], float(item.get("quoteVolume", 0)))
+        for item in tickers
+        if item["symbol"] in coin_symbols and float(item.get("quoteVolume", 0)) >= min_volume
+    ]
+    ranked.sort(key=lambda row: row[1], reverse=True)
+    manual = [symbol.upper() for symbol in config.get("stage1_symbols", [])]
+    merged = []
+    for symbol in manual + [symbol for symbol, _ in ranked]:
+        if symbol in coin_symbols and symbol not in merged:
+            merged.append(symbol)
+    return merged[: int(config.get("max_scan_symbols", 30))]
+
+
+def latest_strategy_signal(symbol: str, bars: list[list[Any]], strategy: str, params: StrategyParams | None = None) -> dict[str, Any]:
+    params = params or StrategyParams()
+    if len(bars) < 80:
+        return {"symbol": symbol, "signal": "WAIT", "reason": "not_enough_data"}
+
+    closes = [float(bar[4]) for bar in bars]
+    highs = [float(bar[2]) for bar in bars]
+    lows = [float(bar[3]) for bar in bars]
+    e10 = ema(closes, 10)
+    e20 = ema(closes, 20)
+    e50 = ema(closes, 50)
+    atr_values = atr(bars, params.atr_period)
+    i = len(bars) - 1
+    close = closes[i]
+    atr_value = atr_values[i]
+
+    if strategy == "attack":
+        trend = close > e10[i] > e20[i]
+        trigger = (lows[i] <= e10[i] and close > e10[i]) or (close > highs[i - 1] and closes[i - 1] > e10[i - 1])
+        stop_mult = 1.0
+        take_mult = 2.2
+        min_atr = 0.006
+        reason = "attack_pullback_or_momentum"
+    elif strategy == "breakout":
+        trend = close > e20[i] > e50[i]
+        recent_high = max(highs[max(0, i - 12):i])
+        trigger = close > recent_high
+        stop_mult = 1.2
+        take_mult = 2.5
+        min_atr = 0.006
+        reason = "breakout"
+    else:
+        trend = close > e20[i] > e50[i]
+        trigger = lows[i] <= e20[i] and close > e20[i]
+        stop_mult = params.stop_atr
+        take_mult = params.take_profit_atr
+        min_atr = params.min_atr_pct
+        reason = "trend_pullback_recovered"
+
+    volatility_ok = (atr_value / close) >= min_atr
+    if trend and trigger and volatility_ok:
+        stop = close - atr_value * stop_mult
+        take_profit = close + atr_value * take_mult
+        return {
+            "symbol": symbol,
+            "signal": "LONG",
+            "reason": reason,
+            "strategy": strategy,
+            "last_price": close,
+            "ema_fast": e10[i] if strategy == "attack" else e20[i],
+            "ema_slow": e20[i] if strategy == "attack" else e50[i],
+            "atr": atr_value,
+            "stop": stop,
+            "take_profit": take_profit,
+            "risk_pct": (close - stop) / close,
+            "expected_profit_pct": (take_profit - close) / close * 100,
+        }
+
+    return {
+        "symbol": symbol,
+        "signal": "WAIT",
+        "reason": "filters_not_aligned",
+        "strategy": strategy,
+        "last_price": close,
+        "ema_fast": e10[i] if strategy == "attack" else e20[i],
+        "ema_slow": e20[i] if strategy == "attack" else e50[i],
+        "atr": atr_value,
+        "trend": trend,
+        "trigger": trigger,
+        "volatility_ok": volatility_ok,
+    }
+
+
+def backtest_strategy(symbol: str, bars: list[list[Any]], strategy: str, days: int) -> dict[str, Any]:
+    if len(bars) < 100:
+        return {"symbol": symbol, "trades": 0, "wins": 0, "win_rate": 0, "net_pct": 0, "profit_factor": 0}
+
+    params = StrategyParams()
+    opens = [float(bar[1]) for bar in bars]
+    highs = [float(bar[2]) for bar in bars]
+    lows = [float(bar[3]) for bar in bars]
+    closes = [float(bar[4]) for bar in bars]
+    e10 = ema(closes, 10)
+    e20 = ema(closes, 20)
+    e50 = ema(closes, 50)
+    atr_values = atr(bars, params.atr_period)
+    cutoff = datetime.fromtimestamp(bars[-1][0] / 1000, timezone.utc) - timedelta(days=days)
+
+    trades: list[dict[str, Any]] = []
+    i = 60
+    while i < len(bars) - 2:
+        if strategy == "attack":
+            trend = closes[i] > e10[i] > e20[i]
+            trigger = (lows[i] <= e10[i] and closes[i] > e10[i]) or (closes[i] > highs[i - 1] and closes[i - 1] > e10[i - 1])
+            stop_mult = 1.0
+            take_mult = 2.2
+            max_hold = 12
+            min_atr = 0.006
+        elif strategy == "breakout":
+            trend = closes[i] > e20[i] > e50[i]
+            trigger = closes[i] > max(highs[max(0, i - 12):i])
+            stop_mult = 1.2
+            take_mult = 2.5
+            max_hold = 10
+            min_atr = 0.006
+        else:
+            trend = closes[i] > e20[i] > e50[i]
+            trigger = lows[i] <= e20[i] and closes[i] > e20[i]
+            stop_mult = params.stop_atr
+            take_mult = params.take_profit_atr
+            max_hold = params.max_hold_bars
+            min_atr = params.min_atr_pct
+
+        if not (trend and trigger and (atr_values[i] / closes[i]) >= min_atr):
+            i += 1
+            continue
+
+        entry_index = i + 1
+        entry = opens[entry_index]
+        stop = entry - atr_values[i] * stop_mult
+        take_profit = entry + atr_values[i] * take_mult
+        exit_index = min(entry_index + max_hold, len(bars) - 1)
+        exit_price = None
+        exit_reason = "timeout"
+        for j in range(entry_index, min(entry_index + max_hold + 1, len(bars))):
+            if lows[j] <= stop and highs[j] >= take_profit:
+                exit_price = stop
+                exit_reason = "stop_same_bar"
+                exit_index = j
+                break
+            if lows[j] <= stop:
+                exit_price = stop
+                exit_reason = "stop"
+                exit_index = j
+                break
+            if highs[j] >= take_profit:
+                exit_price = take_profit
+                exit_reason = "take_profit"
+                exit_index = j
+                break
+        if exit_price is None:
+            exit_price = closes[exit_index]
+
+        entry_time = datetime.fromtimestamp(bars[entry_index][0] / 1000, timezone.utc)
+        if entry_time >= cutoff:
+            net_return = (exit_price - entry) / entry - params.taker_fee * 2
+            trades.append({"entry_time": bars[entry_index][0], "net_return_pct": net_return * 100, "exit_reason": exit_reason})
+        i = exit_index + 1
+
+    wins = [trade for trade in trades if trade["net_return_pct"] > 0]
+    gains = sum(trade["net_return_pct"] for trade in trades if trade["net_return_pct"] > 0)
+    losses = abs(sum(trade["net_return_pct"] for trade in trades if trade["net_return_pct"] < 0))
+    return {
+        "symbol": symbol,
+        "strategy": strategy,
+        "days": days,
+        "trades": len(trades),
+        "wins": len(wins),
+        "win_rate": len(wins) / len(trades) * 100 if trades else 0,
+        "net_pct": sum(trade["net_return_pct"] for trade in trades),
+        "profit_factor": gains / losses if losses else (999 if gains > 0 else 0),
+    }
+
+
+def scan_growth_candidates(
+    client: BinanceFuturesClient,
+    config: dict[str, Any],
+    account_summary: dict[str, Any],
+) -> dict[str, Any]:
+    equity = account_summary.get("equity")
+    mode = mode_config(config, equity)
+    symbols = discover_coin_symbols(client, config)
+    candidates = []
+    tickers = {item["symbol"]: item for item in client.ticker_24h(symbols)}
+    cost_pct = (StrategyParams().taker_fee * 2 + 0.0004) * 100
+
+    for symbol in symbols:
+        try:
+            bars = client.klines(symbol, config.get("interval", "4h"), int(config.get("limit", 1000)))
+            signal = latest_strategy_signal(symbol, bars, mode["strategy"])
+            recent = backtest_strategy(symbol, bars, mode["strategy"], int(mode["recent_days"]))
+            last_price = float(signal.get("last_price") or tickers.get(symbol, {}).get("lastPrice", 0))
+            expected_profit_pct = float(signal.get("expected_profit_pct") or 0)
+            cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
+            passed = (
+                signal.get("signal") == "LONG"
+                and recent["trades"] >= int(mode["min_trades"])
+                and recent["profit_factor"] >= float(mode["min_pf"])
+                and recent["net_pct"] > 0
+                and cost_ratio >= float(config.get("min_expected_profit_cost_ratio", 3.0))
+            )
+            score = 0.0
+            score += min(float(tickers.get(symbol, {}).get("quoteVolume", 0)) / 1_000_000_000, 5) * 0.5
+            score += recent["net_pct"] * 0.15
+            score += min(recent["profit_factor"], 10) * 2
+            score += recent["win_rate"] * 0.05
+            score += 10 if signal.get("signal") == "LONG" else 0
+            score += 3 if passed else 0
+            candidates.append(
+                {
+                    "symbol": symbol,
+                    "mode": mode["mode"],
+                    "strategy": mode["strategy"],
+                    "score": round(score, 4),
+                    "passed": passed,
+                    "reason": "passed" if passed else "filters_not_passed",
+                    "signal": signal,
+                    "recent": recent,
+                    "ticker": {
+                        "last": last_price,
+                        "change_pct": float(tickers.get(symbol, {}).get("priceChangePercent", 0)),
+                        "volume_usdt_b": round(float(tickers.get(symbol, {}).get("quoteVolume", 0)) / 1_000_000_000, 3),
+                    },
+                    "cost_ratio": cost_ratio,
+                    "risk_pct": mode["risk_pct"],
+                    "leverage": mode["leverage"],
+                    "margin_pct": mode["margin_pct"],
+                }
+            )
+        except Exception as exc:
+            candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})
+
+    candidates.sort(key=lambda item: (item.get("passed", False), item.get("score", -999)), reverse=True)
+    return {"mode": mode, "symbols": symbols, "candidates": candidates, "best": candidates[0] if candidates else None}

@@ -8,8 +8,8 @@ from dotenv import load_dotenv
 from app.binance_client import BinanceFuturesClient
 from app.config_store import load_config
 from app.trading_engine import (
+    build_best_growth_decision,
     build_grid_decisions,
-    build_stage1_decision,
     execute_grid_orders,
     execute_stage1_market_order,
     summarize_account,
@@ -47,15 +47,9 @@ def run_once() -> dict:
             results.append(execute_grid_orders(client, plan, config, position_amount=position_amount))
         return {"status": "grid_checked", "results": results}
 
-    results = []
-    for symbol in config.get("stage1_symbols", ["SOLUSDT"]):
-        bars = client.klines(symbol.upper(), config["interval"], int(config["limit"]))
-        decision = build_stage1_decision(symbol.upper(), bars, config, state, account)
-        result = execute_stage1_market_order(client, decision, config)
-        results.append(result)
-        if result.get("mode") in {"live", "dry_run"}:
-            break
-    return {"status": "growth_checked", "results": results}
+    decision = build_best_growth_decision(client, config, state, account)
+    result = execute_stage1_market_order(client, decision, config)
+    return {"status": "growth_checked", "decision": decision, "results": [result]}
 
 
 def main() -> None:
