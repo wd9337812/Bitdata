@@ -130,6 +130,29 @@ th {
   color: #e2e8f0;
 }
 
+.mode-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.mode-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.mode-card strong,
+.mode-card span {
+  display: block;
+}
+
+.mode-card span {
+  margin-top: 6px;
+  color: #475569;
+  line-height: 1.5;
+}
+
 .signal {
   border: 1px solid #e5e7eb;
   border-radius: 8px;

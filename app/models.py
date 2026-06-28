@@ -8,9 +8,17 @@ class TradingConfig(BaseModel):
     stage1_symbols: list[str] = Field(default_factory=lambda: ["SOLUSDT", "LABUSDT", "SUIUSDT", "AAVEUSDT", "WLDUSDT"])
     stage2_symbols: list[str] = Field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
     auto_discover_symbols: bool = True
-    max_scan_symbols: int = Field(default=30, ge=1, le=120)
+    max_scan_symbols: int = Field(default=15, ge=1, le=120)
     min_24h_volume_usdt: float = Field(default=100_000_000, ge=0)
     interval: str = "4h"
+    conservative_interval: str = "4h"
+    balanced_interval: str = "1h"
+    attack_interval: str = "15m"
+    tournament_interval: str = "5m"
+    conservative_recent_days: int = Field(default=30, ge=1, le=120)
+    balanced_recent_days: int = Field(default=20, ge=1, le=120)
+    attack_recent_days: int = Field(default=10, ge=1, le=60)
+    tournament_recent_days: int = Field(default=5, ge=1, le=30)
     limit: int = Field(default=1000, ge=100, le=1500)
     stage1_target_equity: float = Field(default=10000.0, gt=0)
     stage2_activation: str = "manual"
@@ -37,6 +45,8 @@ class TradingConfig(BaseModel):
     min_recent_trades: int = Field(default=2, ge=0, le=50)
     min_profit_factor: float = Field(default=1.2, ge=0, le=10)
     min_expected_profit_cost_ratio: float = Field(default=3.0, ge=0, le=20)
+    estimated_slippage_pct: float = Field(default=0.04, ge=0, le=5)
+    min_expected_profit_pct: float = Field(default=0.35, ge=0, le=20)
     allow_short: bool = False
     grid_enabled: bool = True
     grid_min_levels: int = Field(default=20, ge=5, le=200)

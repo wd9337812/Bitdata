@@ -19,6 +19,7 @@ This file tracks local verification for the two-stage futures system.
 - Added multi-symbol crypto-only scanner.
 - Added conservative, balanced, attack, and tournament growth modes.
 - Added tests for crypto-only discovery and automatic small-account mode selection.
+- Added mode-specific intervals and fee/slippage filters for high-frequency growth modes.
 
 ## Current Risk Notes
 

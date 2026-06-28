@@ -117,7 +117,7 @@ def build_best_growth_decision(
             "scan": scan,
             "risk": {"allowed": False, "reason": "no_candidate_passed"},
         }
-    bars = client.klines(best["symbol"], config.get("interval", "4h"), int(config.get("limit", 1000)))
+    bars = client.klines_history(best["symbol"], scan["mode"]["interval"], int(scan["mode"]["recent_days"]))
     decision = build_stage1_decision(best["symbol"], bars, config, state, account_summary, scan_candidate=best)
     decision["scan"] = scan
     decision["candidate"] = best

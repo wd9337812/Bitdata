@@ -1,4 +1,4 @@
-from app.scanner import active_growth_mode, discover_coin_symbols, latest_strategy_signal
+from app.scanner import active_growth_mode, discover_coin_symbols, latest_strategy_signal, mode_config
 
 
 class FakeClient:
@@ -37,6 +37,23 @@ def test_auto_growth_mode_uses_tournament_for_small_equity():
     assert active_growth_mode({"auto_risk_by_equity": True, "growth_mode": "balanced"}, 50) == "tournament"
     assert active_growth_mode({"auto_risk_by_equity": True, "growth_mode": "balanced"}, 200) == "attack"
     assert active_growth_mode({"auto_risk_by_equity": True, "growth_mode": "balanced"}, 1000) == "balanced"
+
+
+def test_mode_config_uses_mode_specific_interval():
+    config = {
+        "auto_risk_by_equity": False,
+        "growth_mode": "attack",
+        "attack_interval": "15m",
+        "attack_risk_per_trade_pct": 5,
+        "attack_max_leverage": 3,
+        "attack_max_symbol_margin_pct": 60,
+        "attack_recent_days": 10,
+    }
+    active = mode_config(config, 200)
+    assert active["mode"] == "attack"
+    assert active["interval"] == "15m"
+    assert active["recent_days"] == 10
+    assert active["risk_pct"] == 5
 
 
 def test_discover_coin_symbols_excludes_equity_contracts():

@@ -138,7 +138,7 @@ function stage1Row(item) {
     recent.win_rate !== undefined ? `${fmt(recent.win_rate, 1)}%` : "-",
     recent.net_pct !== undefined ? `${fmt(recent.net_pct, 2)}%` : "-",
     recent.profit_factor !== undefined ? fmt(recent.profit_factor, 2) : "-",
-    ticker.volume_usdt_b !== undefined ? fmt(ticker.volume_usdt_b, 3) : "-",
+    `${ticker.volume_usdt_b !== undefined ? fmt(ticker.volume_usdt_b, 3) : "-"} / ${item.cost_ratio !== undefined ? fmt(item.cost_ratio, 2) : "-"}`,
   ];
 }
 
@@ -162,7 +162,7 @@ async function loadDecisions() {
   ]);
   renderTable(
     "#decisions",
-    ["状态", "币种", "模式", "策略", "评分", "信号", "原因", "近期交易", "胜率", "净收益", "PF", "成交额/区间"],
+    ["状态", "币种", "模式", "策略", "评分", "信号", "原因", "近期交易", "胜率", "净收益", "PF", "成交额/成本比"],
     stage1Rows.concat(gridRows),
   );
 }

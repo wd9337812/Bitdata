@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import math
 from typing import Any
 
 from app.binance_client import BinanceFuturesClient
@@ -10,6 +11,8 @@ from app.strategy import StrategyParams, atr, ema
 MODE_PRESETS: dict[str, dict[str, Any]] = {
     "conservative": {
         "strategy": "default",
+        "interval_key": "conservative_interval",
+        "recent_days_key": "conservative_recent_days",
         "risk_key": "risk_per_trade_pct",
         "leverage_key": "stage1_max_leverage",
         "margin_key": "max_symbol_margin_pct",
@@ -19,30 +22,36 @@ MODE_PRESETS: dict[str, dict[str, Any]] = {
     },
     "balanced": {
         "strategy": "default",
+        "interval_key": "balanced_interval",
+        "recent_days_key": "balanced_recent_days",
         "risk_key": "risk_per_trade_pct",
         "leverage_key": "stage1_max_leverage",
         "margin_key": "max_symbol_margin_pct",
         "min_pf": 1.05,
         "min_trades": 2,
-        "recent_days": 30,
+        "recent_days": 20,
     },
     "attack": {
         "strategy": "attack",
+        "interval_key": "attack_interval",
+        "recent_days_key": "attack_recent_days",
         "risk_key": "attack_risk_per_trade_pct",
         "leverage_key": "attack_max_leverage",
         "margin_key": "attack_max_symbol_margin_pct",
         "min_pf": 1.1,
         "min_trades": 3,
-        "recent_days": 20,
+        "recent_days": 10,
     },
     "tournament": {
         "strategy": "breakout",
+        "interval_key": "tournament_interval",
+        "recent_days_key": "tournament_recent_days",
         "risk_key": "tournament_risk_per_trade_pct",
         "leverage_key": "tournament_max_leverage",
         "margin_key": "tournament_max_symbol_margin_pct",
         "min_pf": 1.0,
         "min_trades": 1,
-        "recent_days": 20,
+        "recent_days": 5,
     },
 }
 
@@ -67,6 +76,8 @@ def mode_config(config: dict[str, Any], equity: float | None = None) -> dict[str
     preset["risk_pct"] = float(config.get(preset["risk_key"], config.get("risk_per_trade_pct", 1.0)))
     preset["leverage"] = float(config.get(preset["leverage_key"], config.get("stage1_max_leverage", 2)))
     preset["margin_pct"] = float(config.get(preset["margin_key"], config.get("max_symbol_margin_pct", 35.0)))
+    preset["interval"] = str(config.get(preset["interval_key"], config.get("interval", "4h")))
+    preset["recent_days"] = int(config.get(preset["recent_days_key"], preset["recent_days"]))
     preset["min_pf"] = float(config.get("min_profit_factor", preset["min_pf"])) if mode in {"conservative", "balanced"} else preset["min_pf"]
     preset["min_trades"] = int(config.get("min_recent_trades", preset["min_trades"])) if mode in {"conservative", "balanced"} else preset["min_trades"]
     return preset
@@ -275,11 +286,13 @@ def scan_growth_candidates(
     symbols = discover_coin_symbols(client, config)
     candidates = []
     tickers = {item["symbol"]: item for item in client.ticker_24h(symbols)}
-    cost_pct = (StrategyParams().taker_fee * 2 + 0.0004) * 100
+    fee_pct = StrategyParams().taker_fee * 2 * 100
+    slippage_pct = float(config.get("estimated_slippage_pct", 0.04))
+    cost_pct = fee_pct + slippage_pct
 
     for symbol in symbols:
         try:
-            bars = client.klines(symbol, config.get("interval", "4h"), int(config.get("limit", 1000)))
+            bars = client.klines_history(symbol, mode["interval"], int(mode["recent_days"]))
             signal = latest_strategy_signal(symbol, bars, mode["strategy"])
             recent = backtest_strategy(symbol, bars, mode["strategy"], int(mode["recent_days"]))
             last_price = float(signal.get("last_price") or tickers.get(symbol, {}).get("lastPrice", 0))
@@ -290,6 +303,7 @@ def scan_growth_candidates(
                 and recent["trades"] >= int(mode["min_trades"])
                 and recent["profit_factor"] >= float(mode["min_pf"])
                 and recent["net_pct"] > 0
+                and expected_profit_pct >= float(config.get("min_expected_profit_pct", 0.35))
                 and cost_ratio >= float(config.get("min_expected_profit_cost_ratio", 3.0))
             )
             score = 0.0
@@ -315,6 +329,10 @@ def scan_growth_candidates(
                         "volume_usdt_b": round(float(tickers.get(symbol, {}).get("quoteVolume", 0)) / 1_000_000_000, 3),
                     },
                     "cost_ratio": cost_ratio,
+                    "fee_pct": fee_pct,
+                    "estimated_slippage_pct": slippage_pct,
+                    "estimated_cost_pct": cost_pct,
+                    "expected_profit_pct": expected_profit_pct,
                     "risk_pct": mode["risk_pct"],
                     "leverage": mode["leverage"],
                     "margin_pct": mode["margin_pct"],
@@ -324,4 +342,15 @@ def scan_growth_candidates(
             candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})
 
     candidates.sort(key=lambda item: (item.get("passed", False), item.get("score", -999)), reverse=True)
-    return {"mode": mode, "symbols": symbols, "candidates": candidates, "best": candidates[0] if candidates else None}
+    candidates = [_json_safe(candidate) for candidate in candidates]
+    return {"mode": _json_safe(mode), "symbols": symbols, "candidates": candidates[:30], "best": candidates[0] if candidates else None}
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return 999.0 if value > 0 else 0.0
+    return value

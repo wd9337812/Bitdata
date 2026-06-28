@@ -36,12 +36,23 @@ Stage 1 now scans a ranked universe instead of only one configured symbol.
 
 Growth modes:
 
-- `conservative`: default EMA20/EMA50 pullback, low risk.
-- `balanced`: default pullback with a looser PF gate.
-- `attack`: EMA10/EMA20 pullback or momentum continuation, higher risk.
-- `tournament`: breakout strategy with the highest risk profile for very small accounts.
+- `conservative`: default EMA20/EMA50 pullback, default interval `4h`, low risk.
+- `balanced`: default pullback, default interval `1h`, medium signal frequency, default recent window `20d`.
+- `attack`: EMA10/EMA20 pullback or momentum continuation, default interval `15m`, higher risk, default recent window `10d`.
+- `tournament`: breakout strategy, default interval `5m`, highest risk profile for very small accounts, default recent window `5d`.
 
 When `auto_risk_by_equity=true`, equity below `100U` uses `tournament`, `100U-500U` uses `attack`, and larger accounts use the configured mode.
+
+Fee and slippage filter:
+
+- Estimated cost = open fee + close fee + configured slippage.
+- A candidate must have expected take-profit distance above `min_expected_profit_pct`.
+- A candidate must also satisfy `expected_profit / estimated_cost >= min_expected_profit_cost_ratio`.
+- This is especially important for `5m` and `15m`, where fees can eat a large part of the edge.
+
+Historical scan:
+
+- High-frequency modes fetch paginated historical klines so 5m/15m backtests are not limited to only the latest 1000 bars.
 
 ## Stage 2: Grid Mode
 

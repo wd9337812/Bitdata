@@ -8,6 +8,21 @@ from urllib.parse import urlencode
 
 import requests
 
+INTERVAL_MS = {
+    "1m": 60_000,
+    "3m": 180_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "2h": 7_200_000,
+    "4h": 14_400_000,
+    "6h": 21_600_000,
+    "8h": 28_800_000,
+    "12h": 43_200_000,
+    "1d": 86_400_000,
+}
+
 
 class BinanceFuturesClient:
     def __init__(
@@ -51,6 +66,33 @@ class BinanceFuturesClient:
 
     def klines(self, symbol: str, interval: str = "4h", limit: int = 1000) -> list[list[Any]]:
         return self.public_get("/fapi/v1/klines", {"symbol": symbol.upper(), "interval": interval, "limit": limit})
+
+    def klines_history(self, symbol: str, interval: str = "4h", days: int = 30, warmup: int = 200) -> list[list[Any]]:
+        interval_ms = INTERVAL_MS.get(interval)
+        if interval_ms is None:
+            return self.klines(symbol, interval, 1000)
+        target_bars = int(days * 86_400_000 / interval_ms) + warmup
+        target_bars = max(100, min(target_bars, 6000))
+        rows: list[list[Any]] = []
+        end_time: int | None = None
+        while len(rows) < target_bars:
+            batch_limit = min(1500, target_bars - len(rows))
+            params: dict[str, Any] = {"symbol": symbol.upper(), "interval": interval, "limit": batch_limit}
+            if end_time is not None:
+                params["endTime"] = end_time
+            batch = self.public_get("/fapi/v1/klines", params)
+            if not batch:
+                break
+            rows = batch + rows
+            first_open = int(batch[0][0])
+            next_end = first_open - 1
+            if end_time == next_end:
+                break
+            end_time = next_end
+            if len(batch) < batch_limit:
+                break
+        dedup = {int(row[0]): row for row in rows}
+        return [dedup[key] for key in sorted(dedup)]
 
     def ticker_24h(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
         data = self.public_get("/fapi/v1/ticker/24hr")

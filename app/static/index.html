@@ -46,6 +46,29 @@
       </section>
 
       <section class="panel wide">
+        <h2>模式说明</h2>
+        <div class="mode-grid">
+          <div class="mode-card">
+            <strong>稳健 conservative</strong>
+            <span>默认 4h，EMA20/EMA50 回踩。信号少，适合资金变大后控制回撤。</span>
+          </div>
+          <div class="mode-card">
+            <strong>均衡 balanced</strong>
+            <span>默认 1h，仍用稳健回踩，但频率比 4h 高。适合 500U 以后过渡。</span>
+          </div>
+          <div class="mode-card">
+            <strong>进攻 attack</strong>
+            <span>默认 15m，EMA10/EMA20 回踩或动量。信号更多，手续费和滑点影响更明显。</span>
+          </div>
+          <div class="mode-card">
+            <strong>锦标赛 tournament</strong>
+            <span>默认 5m，突破策略。适合小资金搏机会，但必须接受高波动和连续止损。</span>
+          </div>
+        </div>
+        <p class="warning">手续费过滤：系统会估算开平仓手续费 + 滑点，只有预期止盈空间达到成本倍数要求才允许交易。周期越短，手续费占比越重要。</p>
+      </section>
+
+      <section class="panel wide">
         <h2>回测结果</h2>
         <div id="backtest" class="table-wrap"></div>
       </section>
@@ -58,6 +81,14 @@
           <label>阶段二网格币种 <input name="stage2_symbols" placeholder="BTCUSDT,ETHUSDT" /></label>
           <label>增长模式 <input name="growth_mode" placeholder="conservative / balanced / attack / tournament" /></label>
           <label>K线周期 <input name="interval" value="4h" /></label>
+          <label>稳健周期 <input name="conservative_interval" placeholder="4h" /></label>
+          <label>均衡周期 <input name="balanced_interval" placeholder="1h" /></label>
+          <label>进攻周期 <input name="attack_interval" placeholder="15m" /></label>
+          <label>锦标赛周期 <input name="tournament_interval" placeholder="5m" /></label>
+          <label>稳健回测天数 <input name="conservative_recent_days" type="number" /></label>
+          <label>均衡回测天数 <input name="balanced_recent_days" type="number" /></label>
+          <label>进攻回测天数 <input name="attack_recent_days" type="number" /></label>
+          <label>锦标赛回测天数 <input name="tournament_recent_days" type="number" /></label>
           <label>K线数量 <input name="limit" type="number" min="100" max="1500" /></label>
           <label>最大扫描币种数 <input name="max_scan_symbols" type="number" /></label>
           <label>最低24小时成交额（U） <input name="min_24h_volume_usdt" type="number" step="1000000" /></label>
@@ -84,6 +115,8 @@
           <label>最低近期交易数 <input name="min_recent_trades" type="number" /></label>
           <label>最低盈亏比 PF <input name="min_profit_factor" type="number" step="0.1" /></label>
           <label>最低收益/成本比 <input name="min_expected_profit_cost_ratio" type="number" step="0.1" /></label>
+          <label>估算滑点（%） <input name="estimated_slippage_pct" type="number" step="0.01" /></label>
+          <label>最低预期止盈空间（%） <input name="min_expected_profit_pct" type="number" step="0.01" /></label>
           <label>网格最少层数 <input name="grid_min_levels" type="number" /></label>
           <label>网格最多层数 <input name="grid_max_levels" type="number" /></label>
           <label>网格保留现金（%） <input name="grid_reserve_cash_pct" type="number" step="0.1" /></label>
