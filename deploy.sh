@@ -1,29 +1,111 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/opt/binance-strategy}"
-REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_URL="${REPO_URL:-https://github.com/wd9337812/Bitdata.git}"
+BRANCH="${BRANCH:-codex/two-stage-live-system}"
+APP_DIR="${APP_DIR:-/opt/bitdata}"
+APP_PORT="${APP_PORT:-8080}"
+ACTION="${1:-install}"
 
-if ! command -v docker >/dev/null 2>&1; then
-  curl -fsSL https://get.docker.com | sh
-fi
+need_sudo() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
 
-if ! docker compose version >/dev/null 2>&1; then
-  echo "Docker Compose plugin is required. Please install docker-compose-plugin." >&2
-  exit 1
-fi
+install_packages() {
+  if ! command -v git >/dev/null 2>&1 || ! command -v curl >/dev/null 2>&1 || ! command -v rsync >/dev/null 2>&1; then
+    need_sudo apt-get update
+    need_sudo apt-get install -y git curl rsync ca-certificates
+  fi
+}
 
-sudo mkdir -p "$APP_DIR"
-sudo rsync -a --delete \
-  --exclude '.git' \
-  --exclude 'data/config.json' \
-  "$REPO_DIR"/ "$APP_DIR"/
+install_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    curl -fsSL https://get.docker.com | sh
+  fi
+  if ! docker compose version >/dev/null 2>&1; then
+    need_sudo apt-get update
+    need_sudo apt-get install -y docker-compose-plugin
+  fi
+}
 
-cd "$APP_DIR"
-if [ ! -f .env ]; then
-  cp .env.example .env
-fi
-mkdir -p data
-docker compose up -d --build
+sync_repo() {
+  if [ -d "$APP_DIR/.git" ]; then
+    git -C "$APP_DIR" fetch origin "$BRANCH"
+    git -C "$APP_DIR" checkout "$BRANCH"
+    git -C "$APP_DIR" pull --ff-only origin "$BRANCH"
+  else
+    need_sudo mkdir -p "$APP_DIR"
+    tmp_dir="$(mktemp -d)"
+    git clone --branch "$BRANCH" "$REPO_URL" "$tmp_dir"
+    need_sudo rsync -a "$tmp_dir"/ "$APP_DIR"/
+    rm -rf "$tmp_dir"
+    if [ "$(id -u)" -ne 0 ]; then
+      need_sudo chown -R "$(id -u):$(id -g)" "$APP_DIR"
+    fi
+  fi
+}
 
-echo "Dashboard: http://YOUR_VPS_IP:8080"
+ensure_env() {
+  cd "$APP_DIR"
+  mkdir -p data
+  if [ ! -f .env ]; then
+    cp .env.example .env
+    sed -i "s/^APP_PORT=.*/APP_PORT=$APP_PORT/" .env
+    echo "Created $APP_DIR/.env. Edit BASIC_AUTH_USER, BASIC_AUTH_PASSWORD and Binance API before live trading."
+  fi
+}
+
+compose_up() {
+  cd "$APP_DIR"
+  docker compose up -d --build
+}
+
+open_firewall_hint() {
+  if command -v ufw >/dev/null 2>&1; then
+    echo "If UFW is enabled, run: sudo ufw allow ${APP_PORT}/tcp"
+  fi
+}
+
+case "$ACTION" in
+  install)
+    install_packages
+    install_docker
+    sync_repo
+    ensure_env
+    compose_up
+    open_firewall_hint
+    echo "Bitdata deployed."
+    echo "Dashboard: http://YOUR_VPS_IP:${APP_PORT}"
+    echo "Config: $APP_DIR/.env and $APP_DIR/data/config.json"
+    ;;
+  update)
+    sync_repo
+    ensure_env
+    compose_up
+    echo "Bitdata updated."
+    ;;
+  restart)
+    cd "$APP_DIR"
+    docker compose restart
+    ;;
+  stop)
+    cd "$APP_DIR"
+    docker compose down
+    ;;
+  logs)
+    cd "$APP_DIR"
+    docker compose logs -f --tail=200
+    ;;
+  status)
+    cd "$APP_DIR"
+    docker compose ps
+    ;;
+  *)
+    echo "Usage: $0 {install|update|restart|stop|logs|status}" >&2
+    exit 1
+    ;;
+esac

@@ -107,17 +107,30 @@ python -m app.runner
 
 ## VPS 部署
 
-把本目录上传到 VPS 后执行：
+推荐 Ubuntu 22.04/24.04。首次部署：
 
 ```bash
-chmod +x deploy.sh
-./deploy.sh
+curl -fsSL https://raw.githubusercontent.com/wd9337812/Bitdata/codex/two-stage-live-system/deploy.sh | bash
 ```
 
 部署完成后打开：
 
 ```text
 http://YOUR_VPS_IP:8080
+```
+
+更新：
+
+```bash
+cd /opt/bitdata
+./deploy.sh update
+```
+
+查看日志：
+
+```bash
+cd /opt/bitdata
+./deploy.sh logs
 ```
 
 Compose 会启动两个服务：
