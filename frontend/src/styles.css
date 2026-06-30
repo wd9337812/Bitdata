@@ -182,6 +182,15 @@ td { color: #d8e8fb; font-size: 14px; }
 .field-title { display: grid; gap: 5px; color: #b8c9df; font-size: 13px; }
 .field-title span { color: #eaf6ff; font-weight: 800; }
 .field-title small { color: #7794b4; line-height: 1.45; }
+.account-warning {
+  border: 1px solid rgba(248, 113, 113, 0.22);
+  border-radius: 12px;
+  padding: 12px;
+  color: #fee2e2;
+  background: linear-gradient(135deg, rgba(127, 29, 29, 0.24), rgba(8, 47, 73, 0.22));
+}
+.account-warning strong { color: #fecaca; }
+.account-warning small { color: #f4b8b8; line-height: 1.55; }
 label { display: grid; gap: 7px; color: #b8c9df; font-size: 13px; }
 label small { color: #7794b4; line-height: 1.45; }
 input, select {

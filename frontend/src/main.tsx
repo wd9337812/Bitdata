@@ -452,6 +452,9 @@ function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) =
   const text = (key: string, label: string, hint?: string) => (
     <label>{label}<input value={Array.isArray(form[key]) ? form[key].join(",") : form[key] ?? ""} onChange={(event) => update(key, event.target.value)} />{hint && <small>{hint}</small>}</label>
   );
+  const password = (key: string, label: string, hint?: string) => (
+    <label>{label}<input type="password" autoComplete="new-password" value={form[key] ?? ""} onChange={(event) => update(key, event.target.value)} />{hint && <small>{hint}</small>}</label>
+  );
   const select = (key: string, label: string, options: string[][], hint?: string) => (
     <label>{label}<select value={form[key] ?? ""} onChange={(event) => update(key, event.target.value)}>{options.map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select>{hint && <small>{hint}</small>}</label>
   );
@@ -494,6 +497,13 @@ function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) =
       <details className="panel danger-zone">
         <summary>危险配置</summary>
         <div className="form-grid">
+          <div className="field-wide account-warning">
+            <strong>Binance API 配置</strong>
+            <small>建议只创建 U 本位合约 API，关闭提现权限，并绑定你的 VPS IP。保存后页面只显示打码 Key，Secret 不会明文回显。</small>
+          </div>
+          {text("api_key", "Binance API Key", "保存后会自动打码显示；如果不修改，保持打码值即可")}
+          {password("api_secret", "Binance API Secret", "第一次配置时填写完整 Secret；保存后显示 ********")}
+          {text("binance_base_url", "Binance 合约接口地址", "默认 https://fapi.binance.com，一般不用改")}
           {toggle("allow_short", "允许做空", "不建议新手开启")}
           {text("live_trading_confirmation", "实盘确认短语", "必须填写 ENABLE_LIVE_TRADING")}
           {number("max_drawdown_pct", "最大回撤%")}
