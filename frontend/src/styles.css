@@ -191,6 +191,12 @@ td { color: #d8e8fb; font-size: 14px; }
 }
 .account-warning strong { color: #fecaca; }
 .account-warning small { color: #f4b8b8; line-height: 1.55; }
+.credential-field input {
+  min-height: 48px;
+  font-family: "Cascadia Mono", "Consolas", "SFMono-Regular", monospace;
+  font-size: 14px;
+  letter-spacing: 0;
+}
 label { display: grid; gap: 7px; color: #b8c9df; font-size: 13px; }
 label small { color: #7794b4; line-height: 1.45; }
 input, select {

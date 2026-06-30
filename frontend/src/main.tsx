@@ -499,11 +499,11 @@ function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) =
         <div className="form-grid">
           <div className="field-wide account-warning">
             <strong>Binance API 配置</strong>
-            <small>建议只创建 U 本位合约 API，关闭提现权限，并绑定你的 VPS IP。保存后页面只显示打码 Key，Secret 不会明文回显。</small>
+            <small>只需要开启“允许读取”和“U 本位合约交易/合约交易”。不要开启提现、万向划转、现货杠杆、预测交易。建议绑定 VPS IP：203.248.94.70。保存后页面只显示打码 Key，Secret 不会明文回显。</small>
           </div>
-          {text("api_key", "Binance API Key", "保存后会自动打码显示；如果不修改，保持打码值即可")}
-          {password("api_secret", "Binance API Secret", "第一次配置时填写完整 Secret；保存后显示 ********")}
-          {text("binance_base_url", "Binance 合约接口地址", "默认 https://fapi.binance.com，一般不用改")}
+          <div className="field-wide credential-field">{text("api_key", "Binance API Key", "保存后会自动打码显示；如果不修改，保持打码值即可")}</div>
+          <div className="field-wide credential-field">{password("api_secret", "Binance API Secret", "第一次配置时填写完整 Secret；保存后显示 ********")}</div>
+          <div className="field-wide credential-field">{text("binance_base_url", "Binance 合约接口地址", "默认 https://fapi.binance.com，一般不用改")}</div>
           {toggle("allow_short", "允许做空", "不建议新手开启")}
           {text("live_trading_confirmation", "实盘确认短语", "必须填写 ENABLE_LIVE_TRADING")}
           {number("max_drawdown_pct", "最大回撤%")}
