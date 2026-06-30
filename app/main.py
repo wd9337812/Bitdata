@@ -8,7 +8,7 @@ from typing import Any
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from app.binance_client import BinanceFuturesClient
@@ -32,6 +32,9 @@ load_dotenv()
 APP_DIR = Path(__file__).resolve().parent
 app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.1.0")
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
+assets_dir = APP_DIR / "static" / "assets"
+if assets_dir.exists():
+    app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 security = HTTPBasic(auto_error=False)
 
 
@@ -60,6 +63,11 @@ def client_from_config(include_secret: bool = True) -> BinanceFuturesClient:
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def index() -> str:
     return (APP_DIR / "static" / "index.html").read_text(encoding="utf-8")
+
+
+@app.get("/favicon.ico")
+def favicon() -> Response:
+    return Response(status_code=204)
 
 
 @app.get("/api/config", dependencies=[Depends(require_auth)])
