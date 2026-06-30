@@ -64,6 +64,24 @@ const modeOptions = [
   ["tournament", "锦标赛：5分钟，高风险机会模式"],
 ];
 
+const defaultSymbolOptions = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "BNBUSDT",
+  "XRPUSDT",
+  "DOGEUSDT",
+  "ADAUSDT",
+  "LINKUSDT",
+  "AVAXUSDT",
+  "SUIUSDT",
+  "AAVEUSDT",
+  "LABUSDT",
+  "ENAUSDT",
+  "WIFUSDT",
+  "PEPEUSDT",
+];
+
 function useData() {
   const [status, setStatus] = useState<StatusData | null>(null);
   const [decisions, setDecisions] = useState<DecisionsData | null>(null);
@@ -362,6 +380,68 @@ function RiskPanel({ config, state, account }: { config: any; state: any; accoun
   );
 }
 
+function normalizeSymbols(value: any): string[] {
+  if (Array.isArray(value)) {
+    return value.map(String).map((item) => item.trim().toUpperCase()).filter(Boolean);
+  }
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim().toUpperCase())
+    .filter(Boolean);
+}
+
+function SymbolMultiPicker({ value, onChange }: { value: any; onChange: (symbols: string[]) => void }) {
+  const selected = normalizeSymbols(value);
+  const selectedSet = new Set(selected);
+  const options = Array.from(new Set([...defaultSymbolOptions, ...selected])).sort();
+  const [custom, setCustom] = useState("");
+
+  function toggle(symbol: string) {
+    const next = selectedSet.has(symbol)
+      ? selected.filter((item) => item !== symbol)
+      : [...selected, symbol];
+    onChange(next);
+  }
+
+  function addCustom() {
+    const additions = normalizeSymbols(custom);
+    if (!additions.length) return;
+    onChange(Array.from(new Set([...selected, ...additions])));
+    setCustom("");
+  }
+
+  return (
+    <div className="field-wide">
+      <div className="field-title">
+        <span>手动候选币</span>
+        <small>多选框选择，系统会在这些币里优先扫描；也可以开启自动发现。</small>
+      </div>
+      <div className="symbol-picker">
+        {options.map((symbol) => (
+          <label className={`symbol-check ${selectedSet.has(symbol) ? "checked" : ""}`} key={symbol}>
+            <input type="checkbox" checked={selectedSet.has(symbol)} onChange={() => toggle(symbol)} />
+            <span>{symbol}</span>
+          </label>
+        ))}
+      </div>
+      <div className="custom-symbol-row">
+        <input
+          value={custom}
+          placeholder="添加自定义币种，例如 OPUSDT,ARBUSDT"
+          onChange={(event) => setCustom(event.target.value.toUpperCase())}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              addCustom();
+            }
+          }}
+        />
+        <button type="button" className="secondary" onClick={addCustom}>添加</button>
+      </div>
+    </div>
+  );
+}
+
 function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) => Promise<void> }) {
   const [form, setForm] = useState<Record<string, any>>(config);
   useEffect(() => setForm(config), [config]);
@@ -370,7 +450,7 @@ function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) =
     <label>{label}<input type="number" value={form[key] ?? ""} onChange={(event) => update(key, Number(event.target.value))} />{hint && <small>{hint}</small>}</label>
   );
   const text = (key: string, label: string, hint?: string) => (
-    <label>{label}<input value={Array.isArray(form[key]) ? form[key].join(",") : form[key] ?? ""} onChange={(event) => update(key, key.endsWith("symbols") || key === "symbols" ? event.target.value.split(",").map((item) => item.trim().toUpperCase()).filter(Boolean) : event.target.value)} />{hint && <small>{hint}</small>}</label>
+    <label>{label}<input value={Array.isArray(form[key]) ? form[key].join(",") : form[key] ?? ""} onChange={(event) => update(key, event.target.value)} />{hint && <small>{hint}</small>}</label>
   );
   const select = (key: string, label: string, options: string[][], hint?: string) => (
     <label>{label}<select value={form[key] ?? ""} onChange={(event) => update(key, event.target.value)}>{options.map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select>{hint && <small>{hint}</small>}</label>
@@ -387,7 +467,7 @@ function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) =
         <h2>基础配置</h2>
         <div className="form-grid">
           {select("growth_mode", "增长模式", modeOptions, "新手建议先用均衡或模拟观察")}
-          {text("stage1_symbols", "手动候选币", "逗号分隔，例如 SOLUSDT,AAVEUSDT")}
+          <SymbolMultiPicker value={form.stage1_symbols} onChange={(symbols) => update("stage1_symbols", symbols)} />
           {number("max_scan_symbols", "最大扫描币种", "2GB VPS 建议 10-15")}
           {number("min_24h_volume_usdt", "最低 24h 成交额", "过滤流动性太差的币")}
           {toggle("auto_discover_symbols", "自动发现加密币", "只纳入 Binance 永续币")}
