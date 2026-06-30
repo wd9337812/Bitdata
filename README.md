@@ -7,6 +7,8 @@
 ## 功能
 
 - 当前市场数据：价格、24h 涨跌、成交额、资金费率
+- React 管理后台：左侧菜单、总览、扫描、收益曲线、风控、配置、日志
+- 权益曲线：runner 写入 SQLite 快照，Dashboard 定时刷新
 - 阶段一：滚仓增长模式
 - 阶段二：合约网格模式
 - 策略信号、决策、回测
@@ -187,6 +189,10 @@ data/state.json
 ## 测试
 
 ```bash
+cd frontend
+npm install
+npm run build
+cd ..
 python -m compileall app
 pytest
 ```

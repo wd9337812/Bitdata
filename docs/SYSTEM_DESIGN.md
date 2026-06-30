@@ -96,3 +96,20 @@ Dashboard start also requires the confirmation phrase `START_BOT`.
 - `grid`: generate and place/preview Stage 2 grid orders
 
 The runner defaults to a 300-second loop through `BOT_LOOP_SECONDS`.
+
+## Dashboard
+
+The frontend is a Vite + React + TypeScript app under `frontend/`.
+
+- Build output is written to `app/static`.
+- FastAPI serves the built React entrypoint and static assets.
+- The Dockerfile builds the frontend first, then copies the static output into the Python image.
+- Dashboard sections: overview, multi-symbol scan, equity curve, risk center, configuration, and logs.
+
+## Telemetry
+
+Runtime telemetry is stored in SQLite at `data/bitdata.db`.
+
+- `equity_snapshots`: account equity, available balance, unrealized PnL, stage, mode, best candidate, action, reason.
+- `event_logs`: runner, control, Binance, and strategy events.
+- API endpoints expose snapshots, logs, heartbeat, and Binance health checks.

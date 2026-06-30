@@ -16,6 +16,7 @@ from app.config_store import load_config, save_config
 from app.models import BotControlPayload, ExecutePayload, TradingConfig
 from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
+from app.telemetry import heartbeat, list_equity_snapshots, list_events, record_equity_snapshot, record_event
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
@@ -85,14 +86,52 @@ def status() -> dict[str, Any]:
     return {"config": load_config(include_secret=False), "state": state, "account": account_summary}
 
 
+@app.get("/api/equity/snapshots", dependencies=[Depends(require_auth)])
+def equity_snapshots(limit: int = 500) -> dict[str, Any]:
+    return {"snapshots": list_equity_snapshots(limit)}
+
+
+@app.post("/api/equity/snapshot", dependencies=[Depends(require_auth)])
+def equity_snapshot() -> dict[str, Any]:
+    config = load_config()
+    state = load_state()
+    account_summary = {"equity": None, "available_balance": None, "unrealized_pnl": None, "positions": []}
+    if config.get("api_key") and config.get("api_secret"):
+        account_summary = summarize_account(client_from_config().account())
+    record_equity_snapshot(account_summary, state, action="manual_snapshot", reason="dashboard")
+    return {"ok": True}
+
+
+@app.get("/api/logs", dependencies=[Depends(require_auth)])
+def logs(limit: int = 200, category: str | None = None) -> dict[str, Any]:
+    return {"events": list_events(limit, category)}
+
+
+@app.get("/api/runner/heartbeat", dependencies=[Depends(require_auth)])
+def runner_heartbeat() -> dict[str, Any]:
+    return heartbeat()
+
+
+@app.get("/api/health/binance", dependencies=[Depends(require_auth)])
+def binance_health() -> dict[str, Any]:
+    try:
+        data = client_from_config().public_get("/fapi/v1/time")
+        return {"ok": True, "serverTime": data.get("serverTime")}
+    except Exception as exc:
+        record_event("error", "binance", str(exc))
+        return {"ok": False, "error": str(exc)}
+
+
 @app.post("/api/control", dependencies=[Depends(require_auth)])
 def control(payload: BotControlPayload) -> dict[str, Any]:
     action = payload.action.lower()
     if action == "start":
         if payload.confirmation != "START_BOT":
             raise HTTPException(status_code=400, detail="Use confirmation START_BOT.")
+        record_event("warning", "control", "用户启动机器人")
         return {"state": save_state({"bot_status": "running", "last_error": ""})}
     if action == "pause":
+        record_event("warning", "control", "用户暂停机器人")
         return {"state": save_state({"bot_status": "paused"})}
     if action == "stage_grid":
         if payload.confirmation != "SWITCH_TO_GRID":

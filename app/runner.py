@@ -16,6 +16,7 @@ from app.trading_engine import (
     sync_stage,
 )
 from app.state_store import load_state, save_state
+from app.telemetry import record_equity_snapshot, record_event
 
 
 def run_once() -> dict:
@@ -27,6 +28,7 @@ def run_once() -> dict:
         base_url=config.get("binance_base_url", "https://fapi.binance.com"),
     )
     if state.get("bot_status") != "running":
+        record_event("info", "runner", "机器人暂停，跳过本轮扫描")
         return {"status": "paused"}
 
     if config.get("api_key") and config.get("api_secret"):
@@ -45,10 +47,23 @@ def run_once() -> dict:
                 if position.get("symbol") == symbol.upper():
                     position_amount = float(position.get("positionAmt", 0))
             results.append(execute_grid_orders(client, plan, config, position_amount=position_amount))
+        record_equity_snapshot(account, state, mode="grid", action="grid_checked", reason="grid_loop")
+        record_event("info", "grid", "完成网格检查", {"results": results})
         return {"status": "grid_checked", "results": results}
 
     decision = build_best_growth_decision(client, config, state, account)
     result = execute_stage1_market_order(client, decision, config)
+    scan = decision.get("scan") or {}
+    best = decision.get("candidate") or scan.get("best") or {}
+    record_equity_snapshot(
+        account,
+        state,
+        mode=(scan.get("mode") or {}).get("mode"),
+        best=best,
+        action=decision.get("action"),
+        reason=decision.get("reason") or (decision.get("risk") or {}).get("reason"),
+    )
+    record_event("info", "growth", "完成增长模式扫描", {"decision": decision, "result": result})
     return {"status": "growth_checked", "decision": decision, "results": [result]}
 
 
@@ -60,6 +75,7 @@ def main() -> None:
             print(run_once(), flush=True)
         except Exception as exc:
             save_state({"last_error": str(exc), "bot_status": "paused"})
+            record_event("error", "runner", str(exc))
             print({"status": "error", "error": str(exc)}, flush=True)
         time.sleep(interval_seconds)
 

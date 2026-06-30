@@ -21,6 +21,12 @@ This file tracks local verification for the two-stage futures system.
 - Added tests for crypto-only discovery and automatic small-account mode selection.
 - Added mode-specific intervals and fee/slippage filters for high-frequency growth modes.
 
+## 2026-06-30 React Dashboard
+
+- Added Vite + React + TypeScript dashboard.
+- Added SQLite telemetry for equity snapshots and event logs.
+- Verified `npm run build`, `python -m compileall app`, `pytest -q`, and HTTP smoke tests for `/`, `/api/health/binance`, `/api/equity/snapshots`, `/api/logs`.
+
 ## Current Risk Notes
 
 - Stage 1 live order path supports market entry plus protective stop and take-profit orders.
