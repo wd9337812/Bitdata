@@ -35,6 +35,7 @@ type StatusData = {
 type DecisionsData = {
   growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any };
   stage2_grid: any[];
+  auth_error?: string;
 };
 
 type MarketData = { symbols: any[] };
@@ -139,6 +140,7 @@ function MetricCard({ title, value, sub, tone }: { title: string; value: string;
 
 function App() {
   const [active, setActive] = useState("overview");
+  const [actionError, setActionError] = useState("");
   const data = useData();
   const status = data.status;
   const candidates = data.decisions?.growth_scan?.candidates || [];
@@ -159,21 +161,31 @@ function App() {
   );
 
   async function control(action: string, confirmation = "") {
-    await api("/api/control", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, confirmation }),
-    });
-    await data.refresh();
+    try {
+      await api("/api/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, confirmation }),
+      });
+      setActionError("");
+      await data.refresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function saveConfig(payload: Record<string, any>) {
-    await api("/api/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    await data.refresh();
+    try {
+      await api("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      setActionError("");
+      await data.refresh();
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
@@ -220,7 +232,9 @@ function App() {
           </div>
         </header>
 
-        {data.error && <div className="alert"><AlertTriangle size={18} />{data.error}</div>}
+        {(data.error || actionError || data.decisions?.auth_error) && (
+          <div className="alert"><AlertTriangle size={18} />{data.error || actionError || data.decisions?.auth_error}</div>
+        )}
 
         {active === "overview" && (
           <section className="stack">

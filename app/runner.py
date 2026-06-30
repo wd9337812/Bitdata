@@ -19,6 +19,17 @@ from app.state_store import load_state, save_state
 from app.telemetry import record_equity_snapshot, record_event
 
 
+def synthetic_account(equity: float = 50.0) -> dict:
+    return {"equity": equity, "available_balance": equity, "unrealized_pnl": 0.0, "positions": []}
+
+
+def private_api_error(exc: Exception) -> str:
+    return (
+        "Binance 私有接口鉴权失败，请检查 API Key/Secret、U 本位合约权限、IP 白名单和系统时间。"
+        f" 原始错误：{exc}"
+    )
+
+
 def run_once() -> dict:
     config = load_config()
     state = load_state()
@@ -31,10 +42,17 @@ def run_once() -> dict:
         record_event("info", "runner", "机器人暂停，跳过本轮扫描")
         return {"status": "paused"}
 
-    if config.get("api_key") and config.get("api_secret"):
-        account = summarize_account(client.account())
+    if config.get("dry_run", True):
+        account = synthetic_account()
+        if config.get("api_key") and config.get("api_secret"):
+            record_event("warning", "binance_auth", "模拟交易模式使用 50U 模拟账户，不依赖 Binance 私有接口。")
+    elif config.get("api_key") and config.get("api_secret"):
+        try:
+            account = summarize_account(client.account())
+        except Exception as exc:
+            raise RuntimeError(private_api_error(exc)) from exc
     else:
-        account = {"equity": 50.0, "available_balance": 50.0, "unrealized_pnl": 0.0, "positions": []}
+        raise RuntimeError("实盘模式需要先配置 Binance API Key 和 Secret。")
     state = sync_stage(config, state, account)
 
     if state.get("stage") == "grid":

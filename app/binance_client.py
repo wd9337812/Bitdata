@@ -39,7 +39,8 @@ class BinanceFuturesClient:
 
     def public_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         response = requests.get(self.base_url + path, params=params or {}, timeout=self.timeout)
-        response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(f"Binance API {response.status_code}: {response.text}")
         return response.json()
 
     def signed_request(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
@@ -58,7 +59,8 @@ class BinanceFuturesClient:
             headers=headers,
             timeout=self.timeout,
         )
-        response.raise_for_status()
+        if not response.ok:
+            raise RuntimeError(f"Binance signed API {response.status_code}: {response.text}")
         return response.json()
 
     def exchange_info(self) -> Any:

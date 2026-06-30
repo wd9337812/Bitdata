@@ -60,6 +60,17 @@ def client_from_config(include_secret: bool = True) -> BinanceFuturesClient:
     )
 
 
+def synthetic_account(equity: float = 50.0) -> dict[str, Any]:
+    return {"equity": equity, "available_balance": equity, "unrealized_pnl": 0.0, "positions": []}
+
+
+def private_api_error(exc: Exception) -> str:
+    return (
+        "Binance 私有接口鉴权失败，请检查 API Key/Secret、U 本位合约权限、IP 白名单和系统时间。"
+        f" 原始错误：{exc}"
+    )
+
+
 @app.get("/", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def index() -> str:
     return (APP_DIR / "static" / "index.html").read_text(encoding="utf-8")
@@ -90,7 +101,9 @@ def status() -> dict[str, Any]:
             account_summary = summarize_account(client_from_config().account())
             state = sync_stage(config, state, account_summary)
         except Exception as exc:
-            state = save_state({"last_error": str(exc)})
+            error = private_api_error(exc)
+            record_event("error", "binance_auth", error)
+            state = save_state({"last_error": error})
     return {"config": load_config(include_secret=False), "state": state, "account": account_summary}
 
 
@@ -105,7 +118,12 @@ def equity_snapshot() -> dict[str, Any]:
     state = load_state()
     account_summary = {"equity": None, "available_balance": None, "unrealized_pnl": None, "positions": []}
     if config.get("api_key") and config.get("api_secret"):
-        account_summary = summarize_account(client_from_config().account())
+        try:
+            account_summary = summarize_account(client_from_config().account())
+        except Exception as exc:
+            error = private_api_error(exc)
+            record_event("error", "binance_auth", error)
+            state = save_state({"last_error": error})
     record_equity_snapshot(account_summary, state, action="manual_snapshot", reason="dashboard")
     return {"ok": True}
 
@@ -136,6 +154,19 @@ def control(payload: BotControlPayload) -> dict[str, Any]:
     if action == "start":
         if payload.confirmation != "START_BOT":
             raise HTTPException(status_code=400, detail="Use confirmation START_BOT.")
+        config = load_config()
+        live_mode = (
+            not config.get("dry_run", True)
+            and config.get("live_trading_enabled") is True
+            and config.get("live_trading_confirmation") == "ENABLE_LIVE_TRADING"
+        )
+        if live_mode:
+            try:
+                client_from_config().account()
+            except Exception as exc:
+                error = private_api_error(exc)
+                record_event("error", "binance_auth", error)
+                raise HTTPException(status_code=400, detail=error) from exc
         record_event("warning", "control", "用户启动机器人")
         return {"state": save_state({"bot_status": "running", "last_error": ""})}
     if action == "pause":
@@ -201,12 +232,22 @@ def api_decisions() -> dict[str, Any]:
     state = load_state()
     client = client_from_config()
     account_summary = {"equity": None, "available_balance": None, "unrealized_pnl": None, "positions": []}
+    auth_error = ""
     if config.get("api_key") and config.get("api_secret"):
-        account_summary = summarize_account(client.account())
-        state = sync_stage(config, state, account_summary)
+        try:
+            account_summary = summarize_account(client.account())
+            state = sync_stage(config, state, account_summary)
+        except Exception as exc:
+            auth_error = private_api_error(exc)
+            record_event("error", "binance_auth", auth_error)
+            state = save_state({"last_error": auth_error})
+            if config.get("dry_run", True):
+                account_summary = synthetic_account()
+            else:
+                raise HTTPException(status_code=400, detail=auth_error) from exc
     else:
         # Dry-run decision preview uses a configurable synthetic 50U account.
-        account_summary = {"equity": 50.0, "available_balance": 50.0, "unrealized_pnl": 0.0, "positions": []}
+        account_summary = synthetic_account()
 
     stage1_decisions = []
     best_growth = build_best_growth_decision(client, config, state, account_summary)
@@ -224,6 +265,7 @@ def api_decisions() -> dict[str, Any]:
     return {
         "state": state,
         "account": account_summary,
+        "auth_error": auth_error,
         "stage1": stage1_decisions,
         "growth_scan": best_growth.get("scan"),
         "stage2_grid": grid_decisions,
@@ -274,11 +316,18 @@ def api_execute_stage1(symbol: str | None = None) -> dict[str, Any]:
     config = load_config()
     state = load_state()
     client = client_from_config()
-    if config.get("api_key") and config.get("api_secret"):
-        account_summary = summarize_account(client.account())
-        state = sync_stage(config, state, account_summary)
+    if config.get("dry_run", True):
+        account_summary = synthetic_account()
+    elif config.get("api_key") and config.get("api_secret"):
+        try:
+            account_summary = summarize_account(client.account())
+            state = sync_stage(config, state, account_summary)
+        except Exception as exc:
+            error = private_api_error(exc)
+            record_event("error", "binance_auth", error)
+            raise HTTPException(status_code=400, detail=error) from exc
     else:
-        account_summary = {"equity": 50.0, "available_balance": 50.0, "unrealized_pnl": 0.0, "positions": []}
+        raise HTTPException(status_code=400, detail="实盘模式需要先配置 Binance API Key 和 Secret。")
     if symbol:
         bars = client.klines(symbol.upper(), config["interval"], int(config["limit"]))
         decision = build_stage1_decision(symbol.upper(), bars, config, state, account_summary)
@@ -294,11 +343,18 @@ def api_execute_grid(symbol: str) -> dict[str, Any]:
     if state.get("stage") != "grid":
         raise HTTPException(status_code=400, detail="Grid execution requires grid stage.")
     client = client_from_config()
-    if config.get("api_key") and config.get("api_secret"):
-        account_summary = summarize_account(client.account())
-        state = sync_stage(config, state, account_summary)
+    if config.get("dry_run", True):
+        account_summary = synthetic_account(10000.0)
+    elif config.get("api_key") and config.get("api_secret"):
+        try:
+            account_summary = summarize_account(client.account())
+            state = sync_stage(config, state, account_summary)
+        except Exception as exc:
+            error = private_api_error(exc)
+            record_event("error", "binance_auth", error)
+            raise HTTPException(status_code=400, detail=error) from exc
     else:
-        account_summary = {"equity": 10000.0, "available_balance": 10000.0, "unrealized_pnl": 0.0, "positions": []}
+        raise HTTPException(status_code=400, detail="实盘模式需要先配置 Binance API Key 和 Secret。")
     bars = client.klines(symbol.upper(), config["interval"], int(config["limit"]))
     plan = build_grid_decisions(config, account_summary, {symbol.upper(): bars})[0]
     position_amount = 0.0
