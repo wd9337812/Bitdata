@@ -16,7 +16,7 @@ from app.trading_engine import (
     sync_stage,
 )
 from app.state_store import load_state, save_state
-from app.telemetry import record_equity_snapshot, record_event
+from app.telemetry import record_equity_snapshot, record_event, record_strategy_run
 
 
 def synthetic_account(equity: float = 50.0) -> dict:
@@ -64,13 +64,21 @@ def run_once() -> dict:
             for position in account.get("positions", []):
                 if position.get("symbol") == symbol.upper():
                     position_amount = float(position.get("positionAmt", 0))
-            results.append(execute_grid_orders(client, plan, config, position_amount=position_amount))
+            result = execute_grid_orders(client, plan, config, position_amount=position_amount)
+            results.append(result)
+            record_strategy_run(
+                state,
+                account,
+                {"symbol": symbol.upper(), "action": plan.get("status"), "reason": plan.get("reason"), "signal": {}, "scan": {}, "candidate": plan},
+                result,
+            )
         record_equity_snapshot(account, state, mode="grid", action="grid_checked", reason="grid_loop")
         record_event("info", "grid", "完成网格检查", {"results": results})
         return {"status": "grid_checked", "results": results}
 
     decision = build_best_growth_decision(client, config, state, account)
     result = execute_stage1_market_order(client, decision, config)
+    record_strategy_run(state, account, decision, result)
     scan = decision.get("scan") or {}
     best = decision.get("candidate") or scan.get("best") or {}
     record_equity_snapshot(

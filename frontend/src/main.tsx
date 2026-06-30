@@ -141,6 +141,7 @@ function MetricCard({ title, value, sub, tone }: { title: string; value: string;
 function App() {
   const [active, setActive] = useState("overview");
   const [actionError, setActionError] = useState("");
+  const [actionNotice, setActionNotice] = useState("");
   const data = useData();
   const status = data.status;
   const candidates = data.decisions?.growth_scan?.candidates || [];
@@ -168,6 +169,7 @@ function App() {
         body: JSON.stringify({ action, confirmation }),
       });
       setActionError("");
+      setActionNotice("");
       await data.refresh();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : String(err));
@@ -182,8 +184,21 @@ function App() {
         body: JSON.stringify(payload),
       });
       setActionError("");
+      setActionNotice("配置已保存。");
       await data.refresh();
     } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function testBinanceApi() {
+    try {
+      const result = await api<any>("/api/config/test-binance", { method: "POST" });
+      setActionError("");
+      setActionNotice(`Binance API 测试通过，账户权益 ${fmt(result.account?.equity, 4)} U。`);
+      await data.refresh();
+    } catch (err) {
+      setActionNotice("");
       setActionError(err instanceof Error ? err.message : String(err));
     }
   }
@@ -235,6 +250,7 @@ function App() {
         {(data.error || actionError || data.decisions?.auth_error) && (
           <div className="alert"><AlertTriangle size={18} />{data.error || actionError || data.decisions?.auth_error}</div>
         )}
+        {actionNotice && <div className="notice">{actionNotice}</div>}
 
         {active === "overview" && (
           <section className="stack">
@@ -297,7 +313,7 @@ function App() {
         )}
 
         {active === "risk" && <RiskPanel config={config} state={state} account={account} />}
-        {active === "config" && <ConfigPanel config={config} onSave={saveConfig} />}
+        {active === "config" && <ConfigPanel config={config} onSave={saveConfig} onTestApi={testBinanceApi} />}
         {active === "logs" && <LogsPanel rows={data.logs} />}
       </main>
     </div>
@@ -456,7 +472,7 @@ function SymbolMultiPicker({ value, onChange }: { value: any; onChange: (symbols
   );
 }
 
-function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) => Promise<void> }) {
+function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payload: any) => Promise<void>; onTestApi: () => Promise<void> }) {
   const [form, setForm] = useState<Record<string, any>>(config);
   useEffect(() => setForm(config), [config]);
   const update = (key: string, value: any) => setForm((prev) => ({ ...prev, [key]: value }));
@@ -466,9 +482,12 @@ function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) =
   const text = (key: string, label: string, hint?: string) => (
     <label>{label}<input value={Array.isArray(form[key]) ? form[key].join(",") : form[key] ?? ""} onChange={(event) => update(key, event.target.value)} />{hint && <small>{hint}</small>}</label>
   );
-  const password = (key: string, label: string, hint?: string) => (
-    <label>{label}<input type="password" autoComplete="new-password" value={form[key] ?? ""} onChange={(event) => update(key, event.target.value)} />{hint && <small>{hint}</small>}</label>
-  );
+  const password = (key: string, label: string, hint?: string) => {
+    const saved = form[key] === "********";
+    return (
+      <label>{label}<input type="password" autoComplete="new-password" placeholder={saved ? "已保存，留空表示不修改" : ""} value={saved ? "" : form[key] ?? ""} onChange={(event) => update(key, event.target.value)} />{hint && <small>{hint}</small>}</label>
+    );
+  };
   const select = (key: string, label: string, options: string[][], hint?: string) => (
     <label>{label}<select value={form[key] ?? ""} onChange={(event) => update(key, event.target.value)}>{options.map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select>{hint && <small>{hint}</small>}</label>
   );
@@ -515,8 +534,8 @@ function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) =
             <strong>Binance API 配置</strong>
             <small>只需要开启“允许读取”和“U 本位合约交易/合约交易”。不要开启提现、万向划转、现货杠杆、预测交易。建议绑定 VPS IP：203.248.94.70。保存后页面只显示打码 Key，Secret 不会明文回显。</small>
           </div>
-          <div className="field-wide credential-field">{text("api_key", "Binance API Key", "保存后会自动打码显示；如果不修改，保持打码值即可")}</div>
-          <div className="field-wide credential-field">{password("api_secret", "Binance API Secret", "第一次配置时填写完整 Secret；保存后显示 ********")}</div>
+          <div className="field-wide credential-field">{text("api_key", "Binance API Key", "保存后会自动打码显示；如果看到打码值且不想修改，保持原样即可")}</div>
+          <div className="field-wide credential-field">{password("api_secret", "Binance API Secret", "第一次配置时填写完整 Secret；已经保存过时留空表示不修改")}</div>
           <div className="field-wide credential-field">{text("binance_base_url", "Binance 合约接口地址", "默认 https://fapi.binance.com，一般不用改")}</div>
           {toggle("allow_short", "允许做空", "不建议新手开启")}
           {text("live_trading_confirmation", "实盘确认短语", "必须填写 ENABLE_LIVE_TRADING")}
@@ -526,7 +545,10 @@ function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) =
           {number("tournament_max_symbol_margin_pct", "锦标赛保证金上限%")}
         </div>
       </details>
-      <button className="primary" onClick={() => onSave(form)}>保存配置</button>
+      <div className="button-row">
+        <button className="primary" onClick={() => onSave(form)}>保存配置</button>
+        <button className="secondary" onClick={onTestApi}>测试 Binance API</button>
+      </div>
     </section>
   );
 }

@@ -47,6 +47,28 @@ def connect() -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts TEXT NOT NULL,
+            stage TEXT,
+            mode TEXT,
+            symbol TEXT,
+            action TEXT,
+            result_mode TEXT,
+            reason TEXT,
+            score REAL,
+            signal TEXT,
+            entry REAL,
+            stop REAL,
+            take_profit REAL,
+            quantity REAL,
+            equity REAL,
+            payload TEXT
+        )
+        """
+    )
     conn.commit()
     return conn
 
@@ -98,6 +120,47 @@ def record_event(level: str, category: str, message: str, payload: dict[str, Any
         conn.commit()
 
 
+def record_strategy_run(
+    state: dict[str, Any],
+    account: dict[str, Any],
+    decision: dict[str, Any],
+    result: dict[str, Any] | None = None,
+) -> None:
+    result = result or {}
+    scan = decision.get("scan") or {}
+    mode = decision.get("mode") or (scan.get("mode") or {}).get("mode")
+    candidate = decision.get("candidate") or scan.get("best") or {}
+    signal = decision.get("signal") or candidate.get("signal") or {}
+    symbol = decision.get("symbol") or candidate.get("symbol")
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO strategy_runs (
+                ts, stage, mode, symbol, action, result_mode, reason, score,
+                signal, entry, stop, take_profit, quantity, equity, payload
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                now_iso(),
+                state.get("stage"),
+                mode,
+                symbol,
+                decision.get("action"),
+                result.get("mode"),
+                decision.get("reason") or (decision.get("risk") or {}).get("reason") or result.get("message"),
+                candidate.get("score"),
+                signal.get("signal"),
+                signal.get("last_price"),
+                signal.get("stop"),
+                signal.get("take_profit"),
+                decision.get("quantity"),
+                account.get("equity"),
+                json.dumps({"decision": decision, "result": result}, ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+
+
 def list_equity_snapshots(limit: int = 500) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
@@ -105,6 +168,20 @@ def list_equity_snapshots(limit: int = 500) -> list[dict[str, Any]]:
             (limit,),
         ).fetchall()
     return [dict(row) for row in reversed(rows)]
+
+
+def list_strategy_runs(limit: int = 200) -> list[dict[str, Any]]:
+    with connect() as conn:
+        rows = conn.execute("SELECT * FROM strategy_runs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    runs = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["payload"] = json.loads(item.get("payload") or "{}")
+        except json.JSONDecodeError:
+            item["payload"] = {}
+        runs.append(item)
+    return runs
 
 
 def list_events(limit: int = 200, category: str | None = None) -> list[dict[str, Any]]:

@@ -82,9 +82,18 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
 
 def save_config(payload: dict[str, Any]) -> dict[str, Any]:
     current = load_config(include_secret=True)
-    if payload.get("api_secret") == "********":
+    if "api_key" in payload and isinstance(payload.get("api_key"), str):
+        payload["api_key"] = payload["api_key"].strip()
+    if "api_secret" in payload and isinstance(payload.get("api_secret"), str):
+        payload["api_secret"] = payload["api_secret"].strip()
+    if "binance_base_url" in payload and isinstance(payload.get("binance_base_url"), str):
+        payload["binance_base_url"] = payload["binance_base_url"].strip()
+    if payload.get("api_secret") in {"", "********"} and current.get("api_secret"):
         payload = {key: value for key, value in payload.items() if key != "api_secret"}
-    if "..." in str(payload.get("api_key", "")) or payload.get("api_key") == "****":
+    if (
+        ("..." in str(payload.get("api_key", "")) or payload.get("api_key") in {"", "****"})
+        and current.get("api_key")
+    ):
         payload = {key: value for key, value in payload.items() if key != "api_key"}
     current.update(payload)
     path = config_path()

@@ -16,7 +16,7 @@ from app.config_store import load_config, save_config
 from app.models import BotControlPayload, ExecutePayload, TradingConfig
 from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
-from app.telemetry import heartbeat, list_equity_snapshots, list_events, record_equity_snapshot, record_event
+from app.telemetry import heartbeat, list_equity_snapshots, list_events, list_strategy_runs, record_equity_snapshot, record_event
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
@@ -91,6 +91,20 @@ def post_config(payload: TradingConfig) -> dict[str, Any]:
     return save_config(payload.model_dump())
 
 
+@app.post("/api/config/test-binance", dependencies=[Depends(require_auth)])
+def test_binance_config() -> dict[str, Any]:
+    config = load_config()
+    if not config.get("api_key") or not config.get("api_secret"):
+        raise HTTPException(status_code=400, detail="请先填写 Binance API Key 和 Secret 并保存。")
+    try:
+        account = summarize_account(client_from_config().account())
+        return {"ok": True, "account": account}
+    except Exception as exc:
+        error = private_api_error(exc)
+        record_event("error", "binance_auth", error)
+        raise HTTPException(status_code=400, detail=error) from exc
+
+
 @app.get("/api/status", dependencies=[Depends(require_auth)])
 def status() -> dict[str, Any]:
     config = load_config()
@@ -131,6 +145,11 @@ def equity_snapshot() -> dict[str, Any]:
 @app.get("/api/logs", dependencies=[Depends(require_auth)])
 def logs(limit: int = 200, category: str | None = None) -> dict[str, Any]:
     return {"events": list_events(limit, category)}
+
+
+@app.get("/api/strategy-runs", dependencies=[Depends(require_auth)])
+def strategy_runs(limit: int = 200) -> dict[str, Any]:
+    return {"runs": list_strategy_runs(limit)}
 
 
 @app.get("/api/runner/heartbeat", dependencies=[Depends(require_auth)])
