@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import {
   Activity,
   AlertTriangle,
-  BarChart3,
   Bot,
   CandlestickChart,
   FileText,
@@ -12,7 +11,7 @@ import {
   Settings,
   Shield,
   Square,
-  Wallet,
+  Zap,
 } from "lucide-react";
 import {
   CartesianGrid,
@@ -47,8 +46,22 @@ const menu = [
   { id: "scan", label: "多币种扫描", icon: CandlestickChart },
   { id: "pnl", label: "收益曲线", icon: LineChart },
   { id: "risk", label: "风控中心", icon: Shield },
-  { id: "config", label: "配置", icon: Settings },
-  { id: "logs", label: "日志", icon: FileText },
+  { id: "config", label: "配置中心", icon: Settings },
+  { id: "logs", label: "系统日志", icon: FileText },
+];
+
+const intervalOptions = [
+  ["5m", "5分钟"],
+  ["15m", "15分钟"],
+  ["1h", "1小时"],
+  ["4h", "4小时"],
+];
+
+const modeOptions = [
+  ["conservative", "稳健：4小时，信号少，回撤控制优先"],
+  ["balanced", "均衡：1小时，信号和稳定性折中"],
+  ["attack", "进攻：15分钟，小资金冲刺模式"],
+  ["tournament", "锦标赛：5分钟，高风险机会模式"],
 ];
 
 function useData() {
@@ -75,8 +88,7 @@ function useData() {
       setLogs(logsRes.events || []);
       setHealth(healthRes);
       if (!light) {
-        const decisionsRes = await api<DecisionsData>("/api/decisions");
-        setDecisions(decisionsRes);
+        setDecisions(await api<DecisionsData>("/api/decisions"));
       }
       setError("");
     } catch (err) {
@@ -120,7 +132,7 @@ function App() {
   const chartData = useMemo(
     () =>
       data.snapshots.map((item) => ({
-        time: new Date(item.ts).toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit", month: "2-digit", day: "2-digit" }),
+        time: new Date(item.ts).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }),
         equity: item.equity,
         available: item.available_balance,
         unrealized: item.unrealized_pnl,
@@ -150,10 +162,10 @@ function App() {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <Bot size={28} />
+          <div className="brand-mark"><Zap size={24} /></div>
           <div>
             <strong>Bitdata</strong>
-            <span>合约策略控制台</span>
+            <span>智能合约策略控制台</span>
           </div>
         </div>
         <nav>
@@ -167,13 +179,21 @@ function App() {
             );
           })}
         </nav>
+        <div className="sidebar-footer">
+          <Bot size={16} />
+          <span>{config.dry_run ? "模拟交易中" : "实盘模式已开启"}</span>
+        </div>
       </aside>
 
       <main className="main">
         <header className="topbar">
           <div>
+            <div className="eyebrow">LIVE OPS PANEL</div>
             <h1>{menu.find((item) => item.id === active)?.label}</h1>
-            <p>当前模式：{modeLabel[mode.mode] || mode.mode || modeLabel[config.growth_mode] || "-"} · Binance：{data.health?.ok ? "正常" : "异常"}</p>
+            <p>
+              当前模式：{modeLabel[mode.mode] || modeLabel[config.growth_mode] || "-"} · 周期：{mode.interval || "-"} · Binance：
+              {data.health?.ok ? "正常" : "异常"}
+            </p>
           </div>
           <div className="top-actions">
             <button className="secondary" onClick={() => data.refresh()}>刷新</button>
@@ -187,20 +207,22 @@ function App() {
         {active === "overview" && (
           <section className="stack">
             <div className="metrics">
-              <MetricCard title="账户权益" value={`${fmt(account.equity, 4)} U`} sub={account.equity ? "来自 Binance 账户" : "未配置 API，显示为空"} />
+              <MetricCard title="账户权益" value={`${fmt(account.equity, 4)} U`} sub={account.equity ? "来自 Binance 账户" : "未配置 API"} />
               <MetricCard title="可用余额" value={`${fmt(account.available_balance, 4)} U`} />
               <MetricCard title="未实现盈亏" value={`${fmt(account.unrealized_pnl, 4)} U`} tone={Number(account.unrealized_pnl) >= 0 ? "positive" : "negative"} />
               <MetricCard title="机器人状态" value={statusLabel[state.bot_status] || "-"} sub={stageLabel[state.stage] || "-"} />
-              <MetricCard title="实盘开关" value={config.dry_run ? "模拟交易" : "实盘模式"} tone={config.dry_run ? "" : "negative"} />
-              <MetricCard title="Binance API" value={data.health?.ok ? "正常" : "异常"} sub={data.health?.ok ? "公开接口 200" : data.health?.error} />
+              <MetricCard title="交易模式" value={config.dry_run ? "模拟交易" : "实盘模式"} tone={config.dry_run ? "" : "negative"} />
+              <MetricCard title="Binance API" value={data.health?.ok ? "正常" : "异常"} sub={data.health?.ok ? "公开接口可访问" : data.health?.error} />
             </div>
-            <div className="panel">
-              <h2>最高分候选</h2>
-              <CandidateTable rows={candidates.slice(0, 5)} compact />
-            </div>
-            <div className="panel">
-              <h2>市场行情</h2>
-              <MarketTable rows={data.market?.symbols || []} />
+            <div className="grid-two">
+              <div className="panel">
+                <h2>最高分候选</h2>
+                <CandidateTable rows={candidates.slice(0, 5)} compact />
+              </div>
+              <div className="panel">
+                <h2>市场行情</h2>
+                <MarketTable rows={data.market?.symbols || []} />
+              </div>
             </div>
           </section>
         )}
@@ -210,7 +232,7 @@ function App() {
             <div className="panel-head">
               <div>
                 <h2>候选币排名</h2>
-                <p>只执行最高分且通过过滤的信号。当前周期：{mode.interval || "-"}，回测窗口：{mode.recent_days || "-"} 天。</p>
+                <p>系统只会执行最高分且通过过滤的信号。当前回测窗口：{mode.recent_days || "-"} 天。</p>
               </div>
             </div>
             <CandidateTable rows={candidates} />
@@ -228,14 +250,14 @@ function App() {
               <h2>权益与盈亏曲线</h2>
               <ResponsiveContainer width="100%" height={360}>
                 <ReLineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="time" minTickGap={32} />
-                  <YAxis />
-                  <Tooltip />
+                  <CartesianGrid strokeDasharray="3 3" stroke="#14345a" />
+                  <XAxis dataKey="time" stroke="#91a7c4" minTickGap={32} />
+                  <YAxis stroke="#91a7c4" />
+                  <Tooltip contentStyle={{ background: "#07111f", border: "1px solid #22d3ee", color: "#e5f6ff" }} />
                   <Legend />
-                  <Line type="monotone" dataKey="equity" name="账户权益" stroke="#2563eb" dot={false} />
-                  <Line type="monotone" dataKey="available" name="可用余额" stroke="#16a34a" dot={false} />
-                  <Line type="monotone" dataKey="unrealized" name="未实现盈亏" stroke="#dc2626" dot={false} />
+                  <Line type="monotone" dataKey="equity" name="账户权益" stroke="#38bdf8" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="available" name="可用余额" stroke="#22c55e" strokeWidth={2} dot={false} />
+                  <Line type="monotone" dataKey="unrealized" name="未实现盈亏" stroke="#f97316" strokeWidth={2} dot={false} />
                 </ReLineChart>
               </ResponsiveContainer>
             </div>
@@ -273,9 +295,9 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
           {rows.map((row, index) => (
             <tr key={`${row.symbol}-${index}`}>
               <td><span className={row.passed ? "pill ok" : "pill"}>{row.passed ? "通过" : "等待"}</span></td>
-              <td>{row.symbol}</td>
+              <td className="symbol">{row.symbol}</td>
               <td>{modeLabel[row.mode] || row.mode}</td>
-              {!compact && <td>{row.strategy}</td>}
+              {!compact && <td>{strategyName(row.strategy)}</td>}
               <td>{fmt(row.score, 2)}</td>
               <td>{row.signal?.signal === "LONG" ? "做多" : "等待"}</td>
               {!compact && <td>{fmt(row.recent?.win_rate, 1)}%</td>}
@@ -291,6 +313,15 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
   );
 }
 
+function strategyName(value: string) {
+  const names: Record<string, string> = {
+    default: "趋势回踩",
+    attack: "进攻动量",
+    breakout: "突破",
+  };
+  return names[value] || value || "-";
+}
+
 function MarketTable({ rows }: { rows: any[] }) {
   return (
     <div className="table-wrap">
@@ -299,7 +330,7 @@ function MarketTable({ rows }: { rows: any[] }) {
         <tbody>
           {rows.map((row) => (
             <tr key={row.symbol}>
-              <td>{row.symbol}</td>
+              <td className="symbol">{row.symbol}</td>
               <td>{fmt(row.last, 5)}</td>
               <td className={Number(row.change_pct) >= 0 ? "positive-text" : "negative-text"}>{fmt(row.change_pct, 2)}%</td>
               <td>{fmt(row.volume_usdt_b, 3)}B</td>
@@ -335,37 +366,43 @@ function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) =
   const [form, setForm] = useState<Record<string, any>>(config);
   useEffect(() => setForm(config), [config]);
   const update = (key: string, value: any) => setForm((prev) => ({ ...prev, [key]: value }));
-  const number = (key: string, label: string) => (
-    <label>{label}<input type="number" value={form[key] ?? ""} onChange={(event) => update(key, Number(event.target.value))} /></label>
+  const number = (key: string, label: string, hint?: string) => (
+    <label>{label}<input type="number" value={form[key] ?? ""} onChange={(event) => update(key, Number(event.target.value))} />{hint && <small>{hint}</small>}</label>
   );
-  const text = (key: string, label: string) => (
-    <label>{label}<input value={Array.isArray(form[key]) ? form[key].join(",") : form[key] ?? ""} onChange={(event) => update(key, key.endsWith("symbols") || key === "symbols" ? event.target.value.split(",").map((item) => item.trim().toUpperCase()).filter(Boolean) : event.target.value)} /></label>
+  const text = (key: string, label: string, hint?: string) => (
+    <label>{label}<input value={Array.isArray(form[key]) ? form[key].join(",") : form[key] ?? ""} onChange={(event) => update(key, key.endsWith("symbols") || key === "symbols" ? event.target.value.split(",").map((item) => item.trim().toUpperCase()).filter(Boolean) : event.target.value)} />{hint && <small>{hint}</small>}</label>
   );
-  const check = (key: string, label: string) => (
-    <label className="check"><input type="checkbox" checked={Boolean(form[key])} onChange={(event) => update(key, event.target.checked)} />{label}</label>
+  const select = (key: string, label: string, options: string[][], hint?: string) => (
+    <label>{label}<select value={form[key] ?? ""} onChange={(event) => update(key, event.target.value)}>{options.map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select>{hint && <small>{hint}</small>}</label>
+  );
+  const toggle = (key: string, label: string, hint?: string) => (
+    <label className="switch-row">
+      <span><strong>{label}</strong>{hint && <small>{hint}</small>}</span>
+      <input type="checkbox" checked={Boolean(form[key])} onChange={(event) => update(key, event.target.checked)} />
+    </label>
   );
   return (
     <section className="stack">
       <div className="panel">
         <h2>基础配置</h2>
         <div className="form-grid">
-          {text("growth_mode", "增长模式")}
-          {text("stage1_symbols", "手动候选币")}
-          {number("max_scan_symbols", "最大扫描币种")}
-          {number("min_24h_volume_usdt", "最低24h成交额")}
-          {check("auto_discover_symbols", "自动发现加密币")}
-          {check("auto_risk_by_equity", "按权益自动切换风险")}
-          {check("dry_run", "模拟交易")}
-          {check("live_trading_enabled", "允许实盘交易")}
+          {select("growth_mode", "增长模式", modeOptions, "新手建议先用均衡或模拟观察")}
+          {text("stage1_symbols", "手动候选币", "逗号分隔，例如 SOLUSDT,AAVEUSDT")}
+          {number("max_scan_symbols", "最大扫描币种", "2GB VPS 建议 10-15")}
+          {number("min_24h_volume_usdt", "最低 24h 成交额", "过滤流动性太差的币")}
+          {toggle("auto_discover_symbols", "自动发现加密币", "只纳入 Binance 永续币")}
+          {toggle("auto_risk_by_equity", "按权益自动切换风险", "50U 自动锦标赛，100U 后进攻")}
+          {toggle("dry_run", "模拟交易", "开启时不会真实下单")}
+          {toggle("live_trading_enabled", "允许实盘交易", "还需要确认短语才会实盘")}
         </div>
       </div>
       <details className="panel">
         <summary>进阶参数</summary>
         <div className="form-grid">
-          {text("conservative_interval", "稳健周期")}
-          {text("balanced_interval", "均衡周期")}
-          {text("attack_interval", "进攻周期")}
-          {text("tournament_interval", "锦标赛周期")}
+          {select("conservative_interval", "稳健周期", intervalOptions)}
+          {select("balanced_interval", "均衡周期", intervalOptions)}
+          {select("attack_interval", "进攻周期", intervalOptions)}
+          {select("tournament_interval", "锦标赛周期", intervalOptions)}
           {number("risk_per_trade_pct", "稳健风险%")}
           {number("attack_risk_per_trade_pct", "进攻风险%")}
           {number("tournament_risk_per_trade_pct", "锦标赛风险%")}
@@ -377,8 +414,8 @@ function ConfigPanel({ config, onSave }: { config: any; onSave: (payload: any) =
       <details className="panel danger-zone">
         <summary>危险配置</summary>
         <div className="form-grid">
-          {check("allow_short", "允许做空")}
-          {text("live_trading_confirmation", "实盘确认短语")}
+          {toggle("allow_short", "允许做空", "不建议新手开启")}
+          {text("live_trading_confirmation", "实盘确认短语", "必须填写 ENABLE_LIVE_TRADING")}
           {number("max_drawdown_pct", "最大回撤%")}
           {number("tournament_stop_equity", "锦标赛停止权益")}
           {number("tournament_max_leverage", "锦标赛最大杠杆")}
