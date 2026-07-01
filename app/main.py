@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import time
 from pathlib import Path
 from typing import Any
 
@@ -160,8 +161,18 @@ def runner_heartbeat() -> dict[str, Any]:
 @app.get("/api/health/binance", dependencies=[Depends(require_auth)])
 def binance_health() -> dict[str, Any]:
     try:
-        data = client_from_config().public_get("/fapi/v1/time")
-        return {"ok": True, "serverTime": data.get("serverTime")}
+        client = client_from_config()
+        data = client.server_time()
+        server_time = int(data.get("serverTime", 0))
+        local_time = int(time.time() * 1000)
+        offset_ms = local_time - server_time
+        return {
+            "ok": abs(offset_ms) < 3000,
+            "serverTime": server_time,
+            "localTime": local_time,
+            "offsetMs": offset_ms,
+            "warning": "VPS 时间偏差过大，请检查 chrony/NTP。" if abs(offset_ms) >= 3000 else "",
+        }
     except Exception as exc:
         record_event("error", "binance", str(exc))
         return {"ok": False, "error": str(exc)}
@@ -181,8 +192,14 @@ def control(payload: BotControlPayload) -> dict[str, Any]:
         )
         if live_mode:
             try:
-                client_from_config().account()
+                client = client_from_config()
+                offset_ms = client.time_offset_ms()
+                if abs(offset_ms) >= 3000:
+                    raise HTTPException(status_code=400, detail=f"VPS 时间偏差过大：{offset_ms}ms，请先同步时间。")
+                client.account()
             except Exception as exc:
+                if isinstance(exc, HTTPException):
+                    raise exc
                 error = private_api_error(exc)
                 record_event("error", "binance_auth", error)
                 raise HTTPException(status_code=400, detail=error) from exc

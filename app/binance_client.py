@@ -47,6 +47,7 @@ class BinanceFuturesClient:
         if not self.api_key or not self.api_secret:
             raise ValueError("Binance API key and secret are required for signed requests.")
         payload = dict(params or {})
+        payload.setdefault("recvWindow", 10_000)
         payload["timestamp"] = int(time.time() * 1000)
         query = urlencode(payload, doseq=True)
         signature = hmac.new(self.api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
@@ -65,6 +66,14 @@ class BinanceFuturesClient:
 
     def exchange_info(self) -> Any:
         return self.public_get("/fapi/v1/exchangeInfo")
+
+    def server_time(self) -> Any:
+        return self.public_get("/fapi/v1/time")
+
+    def time_offset_ms(self) -> int:
+        local_time = int(time.time() * 1000)
+        server_time = int(self.server_time().get("serverTime", 0))
+        return local_time - server_time
 
     def klines(self, symbol: str, interval: str = "4h", limit: int = 1000) -> list[list[Any]]:
         return self.public_get("/fapi/v1/klines", {"symbol": symbol.upper(), "interval": interval, "limit": limit})

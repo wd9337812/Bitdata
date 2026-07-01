@@ -264,7 +264,11 @@ function App() {
               <MetricCard title="未实现盈亏" value={`${fmt(account.unrealized_pnl, 4)} U`} tone={Number(account.unrealized_pnl) >= 0 ? "positive" : "negative"} />
               <MetricCard title="机器人状态" value={statusLabel[state.bot_status] || "-"} sub={stageLabel[state.stage] || "-"} />
               <MetricCard title="交易模式" value={config.dry_run ? "模拟交易" : "实盘模式"} tone={config.dry_run ? "" : "negative"} />
-              <MetricCard title="Binance API" value={data.health?.ok ? "正常" : "异常"} sub={data.health?.ok ? "公开接口可访问" : data.health?.error} />
+              <MetricCard
+                title="Binance API"
+                value={data.health?.ok ? "正常" : "异常"}
+                sub={data.health?.offsetMs !== undefined ? `时间偏差 ${fmt(data.health.offsetMs, 0)} ms` : data.health?.error}
+              />
             </div>
             <SignalExplain best={best} />
             <div className="grid-two">

@@ -21,3 +21,28 @@ def test_klines_history_returns_sorted_deduplicated_rows():
     opens = [row[0] for row in rows]
     assert opens == sorted(set(opens))
     assert len(rows) > 100
+
+
+def test_signed_request_adds_default_recv_window(monkeypatch):
+    captured = {}
+
+    class FakeResponse:
+        ok = True
+
+        def json(self):
+            return {"ok": True}
+
+    def fake_request(method, url, params=None, headers=None, timeout=None):
+        captured["params"] = params
+        captured["headers"] = headers
+        return FakeResponse()
+
+    monkeypatch.setattr("app.binance_client.requests.request", fake_request)
+
+    client = BinanceFuturesClient(api_key="key", api_secret="secret")
+    client.signed_request("GET", "/fapi/v2/account")
+
+    assert captured["params"]["recvWindow"] == 10_000
+    assert "timestamp" in captured["params"]
+    assert "signature" in captured["params"]
+    assert captured["headers"]["X-MBX-APIKEY"] == "key"

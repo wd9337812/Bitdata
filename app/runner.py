@@ -42,6 +42,11 @@ def private_api_error(exc: Exception) -> str:
     )
 
 
+def is_timestamp_error(exc: Exception) -> bool:
+    message = str(exc)
+    return "-1021" in message or "recvWindow" in message or "Timestamp for this request" in message
+
+
 def run_once() -> dict:
     config = load_config()
     state = load_state()
@@ -121,9 +126,14 @@ def main() -> None:
             interval_seconds = int(result.get("loop_seconds") or interval_seconds)
             print(result, flush=True)
         except Exception as exc:
-            save_state({"last_error": str(exc), "bot_status": "paused"})
-            record_event("error", "runner", str(exc))
-            print({"status": "error", "error": str(exc)}, flush=True)
+            if is_timestamp_error(exc):
+                save_state({"last_error": str(exc)})
+                record_event("warning", "runner_time_sync", str(exc))
+                print({"status": "time_sync_retry", "error": str(exc)}, flush=True)
+            else:
+                save_state({"last_error": str(exc), "bot_status": "paused"})
+                record_event("error", "runner", str(exc))
+                print({"status": "error", "error": str(exc)}, flush=True)
         time.sleep(interval_seconds)
 
 
