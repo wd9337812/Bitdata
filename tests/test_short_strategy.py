@@ -75,6 +75,26 @@ class FakeFiltersClient:
         self.orders.append(("TAKE_PROFIT", side, stop_price, position_side))
         return {"side": side, "stopPrice": stop_price, "positionSide": position_side}
 
+    def place_algo_order(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        trigger_price: float,
+        close_position: bool = True,
+        quantity: float | None = None,
+        position_side: str | None = None,
+        working_type: str = "MARK_PRICE",
+    ):
+        self.orders.append((order_type, side, trigger_price, position_side))
+        return {
+            "side": side,
+            "orderType": order_type,
+            "triggerPrice": trigger_price,
+            "positionSide": position_side,
+            "closePosition": close_position,
+        }
+
 
 def test_execute_short_uses_sell_entry_and_buy_protection():
     client = FakeFiltersClient()
@@ -95,5 +115,31 @@ def test_execute_short_uses_sell_entry_and_buy_protection():
 
     assert result["mode"] == "live"
     assert ("MARKET", "SELL", 1.0, "SHORT") in client.orders
-    assert any(order[0] == "STOP" and order[1] == "BUY" and order[3] == "SHORT" for order in client.orders)
-    assert any(order[0] == "TAKE_PROFIT" and order[1] == "BUY" and order[3] == "SHORT" for order in client.orders)
+    assert any(order[0] == "STOP_MARKET" and order[1] == "BUY" and order[3] == "SHORT" for order in client.orders)
+    assert any(order[0] == "TAKE_PROFIT_MARKET" and order[1] == "BUY" and order[3] == "SHORT" for order in client.orders)
+
+
+def test_execute_closes_entry_when_protection_fails():
+    class FailingProtectionClient(FakeFiltersClient):
+        def place_algo_order(self, *args, **kwargs):
+            raise RuntimeError("protection failed")
+
+    client = FailingProtectionClient()
+    decision = {
+        "symbol": "TESTUSDT",
+        "action": "OPEN_SHORT",
+        "direction": "SHORT",
+        "quantity": 1.0,
+        "leverage": 3,
+        "signal": {"last_price": 100.0, "stop": 102.0, "take_profit": 96.0},
+    }
+
+    result = execute_stage1_market_order(
+        client,
+        decision,
+        {"dry_run": False, "live_trading_enabled": True, "live_trading_confirmation": "ENABLE_LIVE_TRADING"},
+    )
+
+    assert result["mode"] == "protection_failed_closed"
+    assert ("MARKET", "SELL", 1.0, "SHORT") in client.orders
+    assert ("MARKET", "BUY", 1.0, "SHORT") in client.orders

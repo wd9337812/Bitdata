@@ -120,6 +120,10 @@ class BinanceFuturesClient:
         params = {"symbol": symbol.upper()} if symbol else {}
         return self.signed_request("GET", "/fapi/v1/openOrders", params)
 
+    def open_algo_orders(self, symbol: str | None = None) -> Any:
+        params = {"symbol": symbol.upper()} if symbol else {}
+        return self.signed_request("GET", "/fapi/v1/openAlgoOrders", params)
+
     def position_side_dual(self) -> Any:
         return self.signed_request("GET", "/fapi/v1/positionSide/dual")
 
@@ -188,6 +192,33 @@ class BinanceFuturesClient:
         if position_side:
             params["positionSide"] = position_side.upper()
         return self.signed_request("POST", "/fapi/v1/order", params)
+
+    def place_algo_order(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        trigger_price: float,
+        close_position: bool = True,
+        quantity: float | None = None,
+        position_side: str | None = None,
+        working_type: str = "MARK_PRICE",
+    ) -> Any:
+        params = {
+            "algoType": "CONDITIONAL",
+            "symbol": symbol.upper(),
+            "side": side.upper(),
+            "type": order_type.upper(),
+            "triggerPrice": trigger_price,
+            "workingType": working_type,
+        }
+        if close_position:
+            params["closePosition"] = "true"
+        elif quantity is not None:
+            params["quantity"] = quantity
+        if position_side:
+            params["positionSide"] = position_side.upper()
+        return self.signed_request("POST", "/fapi/v1/algoOrder", params)
 
     def place_limit_order(
         self,

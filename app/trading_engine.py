@@ -176,8 +176,34 @@ def execute_stage1_market_order(
     except Exception:
         position_side = None
     entry_order = client.place_market_order(symbol=symbol, side=entry_side, quantity=quantity, position_side=position_side)
-    stop_order = client.place_stop_market(symbol=symbol, side=close_side, stop_price=stop, position_side=position_side)
-    take_profit_order = client.place_take_profit_market(symbol=symbol, side=close_side, stop_price=take_profit, position_side=position_side)
+    try:
+        stop_order = client.place_algo_order(
+            symbol=symbol,
+            side=close_side,
+            order_type="STOP_MARKET",
+            trigger_price=stop,
+            position_side=position_side,
+        )
+        take_profit_order = client.place_algo_order(
+            symbol=symbol,
+            side=close_side,
+            order_type="TAKE_PROFIT_MARKET",
+            trigger_price=take_profit,
+            position_side=position_side,
+        )
+    except Exception as exc:
+        close_order = client.place_market_order(
+            symbol=symbol,
+            side=close_side,
+            quantity=quantity,
+            position_side=position_side,
+        )
+        return {
+            "mode": "protection_failed_closed",
+            "entry_order": entry_order,
+            "close_order": close_order,
+            "error": str(exc),
+        }
     return {
         "mode": "live",
         "entry_order": entry_order,
