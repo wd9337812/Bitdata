@@ -303,3 +303,86 @@ def test_small_trade_pool_reduces_risk(monkeypatch):
     assert best["passed"] is True
     assert best["symbol_pool"] == "small_trade"
     assert best["risk_pct"] == 7.5
+
+
+def test_depth_checks_are_rate_limited(monkeypatch):
+    class FakeScanClient:
+        def __init__(self):
+            self.depth_calls = 0
+
+        def ticker_24h(self, symbols=None):
+            return [
+                {"symbol": symbol, "lastPrice": "10", "quoteVolume": "50000000", "priceChangePercent": "5"}
+                for symbol in ["AAAUSDT", "BBBUSDT", "CCCUSDT"]
+            ]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 10, 10.4, 9.8, 10, 1000] for i in range(200)]
+
+        def depth(self, symbol, limit=5):
+            self.depth_calls += 1
+            return {"bids": [["9.999", "1000"]], "asks": [["10.001", "1000"]]}
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["AAAUSDT", "BBBUSDT", "CCCUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 10.0,
+            "atr": 0.1,
+            "stop": 9.8,
+            "take_profit": 10.5,
+            "expected_profit_pct": 5.0,
+            "trend": True,
+            "volatility_ok": True,
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG": {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 8,
+            "wins": 4,
+            "win_rate": 50.0,
+            "net_pct": 2.0,
+            "profit_factor": 1.3,
+        },
+    )
+
+    client = FakeScanClient()
+    result = scan_growth_candidates(
+        client,
+        {
+            "growth_mode": "tournament",
+            "auto_risk_by_equity": False,
+            "tournament_interval": "5m",
+            "tournament_recent_days": 5,
+            "tournament_risk_per_trade_pct": 15,
+            "tournament_max_leverage": 5,
+            "tournament_max_symbol_margin_pct": 90,
+            "allow_short": False,
+            "min_expected_profit_cost_ratio": 2,
+            "estimated_slippage_pct": 0.04,
+            "min_expected_profit_pct": 0.35,
+            "standard_min_score": 50,
+            "symbol_trade_score": 75,
+            "symbol_small_trade_score": 65,
+            "symbol_observe_score": 50,
+            "min_simulated_trades": 5,
+            "quality_backtest_days": [3, 5],
+            "min_depth_notional_usdt": 5_000,
+            "depth_check_top_symbols": 1,
+        },
+        {"equity": 50},
+    )
+
+    assert client.depth_calls == 1
+    assert sum(1 for candidate in result["candidates"] if candidate["depth_checked"]) == 1
+    assert sum(1 for candidate in result["candidates"] if candidate["passed"]) == 1

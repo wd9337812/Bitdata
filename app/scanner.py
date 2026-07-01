@@ -292,6 +292,15 @@ def _depth_metrics(client: BinanceFuturesClient, symbol: str) -> dict[str, float
         return {"available": False, "spread_pct": 999.0, "depth_notional": 0.0, "reason": str(exc)}
 
 
+def _unchecked_depth_metrics() -> dict[str, float | bool | str]:
+    return {
+        "available": False,
+        "spread_pct": 999.0,
+        "depth_notional": 0.0,
+        "reason": "depth_not_checked",
+    }
+
+
 def _score_volume(quote_volume: float) -> float:
     if quote_volume <= 30_000_000:
         return max(0.0, quote_volume / 30_000_000 * 8)
@@ -704,14 +713,16 @@ def scan_growth_candidates(
     cost_pct = fee_pct + slippage_pct
     quality_days = sorted({
         int(day)
-        for day in config.get("quality_backtest_days", [3, 5, 10])
+        for day in config.get("quality_backtest_days", [3, 5])
         if int(day) > 0
     } | {int(mode["recent_days"])})
+    max_depth_checks = int(config.get("depth_check_top_symbols", 8))
+    depth_checks = 0
+    depth_by_symbol: dict[str, dict[str, Any]] = {}
 
     for symbol in symbols:
         try:
             bars = client.klines_history(symbol, mode["interval"], max(quality_days))
-            depth = _depth_metrics(client, symbol)
             directions = ["LONG", "SHORT"] if config.get("allow_short", False) else ["LONG"]
             for direction in directions:
                 signal = latest_strategy_signal(symbol, bars, mode["strategy"], direction=direction)
@@ -724,7 +735,6 @@ def scan_growth_candidates(
                 last_price = float(signal.get("last_price") or ticker.get("lastPrice", 0))
                 expected_profit_pct = float(signal.get("expected_profit_pct") or 0)
                 cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
-                quality = score_symbol_quality(symbol, bars, ticker, signal, backtests, depth, config)
 
                 if direction == "SHORT":
                     min_trades = int(config.get("short_min_recent_trades", 5))
@@ -737,6 +747,20 @@ def scan_growth_candidates(
                     min_net_pct = 0.0
                     risk_pct = float(mode["risk_pct"])
 
+                current_score = _current_signal_score(signal, direction, cost_ratio, recent)
+                should_check_depth = (
+                    max_depth_checks > 0
+                    and depth_checks < max_depth_checks
+                    and (
+                        signal.get("signal") == direction
+                        or current_score >= float(config.get("preemptive_min_score", 72.0)) * 0.75
+                    )
+                )
+                if should_check_depth and symbol not in depth_by_symbol:
+                    depth_by_symbol[symbol] = _depth_metrics(client, symbol)
+                    depth_checks += 1
+                depth = depth_by_symbol.get(symbol, _unchecked_depth_metrics())
+                quality = score_symbol_quality(symbol, bars, ticker, signal, backtests, depth, config)
                 history_passed = (
                     recent["trades"] >= min_trades
                     and recent["profit_factor"] >= min_pf
@@ -832,6 +856,7 @@ def scan_growth_candidates(
                         "entry_type_label": signal.get("entry_type_label", "标准信号" if entry_type == "standard" else "观察"),
                         "symbol_quality": quality,
                         "symbol_pool": quality["pool"],
+                        "depth_checked": depth.get("reason") != "depth_not_checked",
                         "simulation_passed": quality["simulation"]["passed"],
                         "current_score": round(current_score, 2),
                         "signal": signal,
