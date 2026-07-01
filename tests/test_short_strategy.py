@@ -60,17 +60,20 @@ class FakeFiltersClient:
     def set_leverage(self, symbol: str, leverage: int):
         self.orders.append(("LEVERAGE", symbol, float(leverage)))
 
-    def place_market_order(self, symbol: str, side: str, quantity: float, reduce_only: bool = False):
-        self.orders.append(("MARKET", side, quantity))
-        return {"side": side, "quantity": quantity}
+    def position_side_dual(self):
+        return {"dualSidePosition": True}
 
-    def place_stop_market(self, symbol: str, side: str, stop_price: float, close_position: bool = True):
-        self.orders.append(("STOP", side, stop_price))
-        return {"side": side, "stopPrice": stop_price}
+    def place_market_order(self, symbol: str, side: str, quantity: float, reduce_only: bool = False, position_side: str | None = None):
+        self.orders.append(("MARKET", side, quantity, position_side))
+        return {"side": side, "quantity": quantity, "positionSide": position_side}
 
-    def place_take_profit_market(self, symbol: str, side: str, stop_price: float, close_position: bool = True):
-        self.orders.append(("TAKE_PROFIT", side, stop_price))
-        return {"side": side, "stopPrice": stop_price}
+    def place_stop_market(self, symbol: str, side: str, stop_price: float, close_position: bool = True, position_side: str | None = None):
+        self.orders.append(("STOP", side, stop_price, position_side))
+        return {"side": side, "stopPrice": stop_price, "positionSide": position_side}
+
+    def place_take_profit_market(self, symbol: str, side: str, stop_price: float, close_position: bool = True, position_side: str | None = None):
+        self.orders.append(("TAKE_PROFIT", side, stop_price, position_side))
+        return {"side": side, "stopPrice": stop_price, "positionSide": position_side}
 
 
 def test_execute_short_uses_sell_entry_and_buy_protection():
@@ -91,6 +94,6 @@ def test_execute_short_uses_sell_entry_and_buy_protection():
     )
 
     assert result["mode"] == "live"
-    assert ("MARKET", "SELL", 1.0) in client.orders
-    assert any(order[0] == "STOP" and order[1] == "BUY" for order in client.orders)
-    assert any(order[0] == "TAKE_PROFIT" and order[1] == "BUY" for order in client.orders)
+    assert ("MARKET", "SELL", 1.0, "SHORT") in client.orders
+    assert any(order[0] == "STOP" and order[1] == "BUY" and order[3] == "SHORT" for order in client.orders)
+    assert any(order[0] == "TAKE_PROFIT" and order[1] == "BUY" and order[3] == "SHORT" for order in client.orders)

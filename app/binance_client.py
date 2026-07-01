@@ -120,23 +120,43 @@ class BinanceFuturesClient:
         params = {"symbol": symbol.upper()} if symbol else {}
         return self.signed_request("GET", "/fapi/v1/openOrders", params)
 
+    def position_side_dual(self) -> Any:
+        return self.signed_request("GET", "/fapi/v1/positionSide/dual")
+
     def cancel_all_open_orders(self, symbol: str) -> Any:
         return self.signed_request("DELETE", "/fapi/v1/allOpenOrders", {"symbol": symbol.upper()})
 
     def set_leverage(self, symbol: str, leverage: int) -> Any:
         return self.signed_request("POST", "/fapi/v1/leverage", {"symbol": symbol.upper(), "leverage": leverage})
 
-    def place_market_order(self, symbol: str, side: str, quantity: float, reduce_only: bool = False) -> Any:
+    def place_market_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        reduce_only: bool = False,
+        position_side: str | None = None,
+    ) -> Any:
         params = {
             "symbol": symbol.upper(),
             "side": side.upper(),
             "type": "MARKET",
             "quantity": quantity,
-            "reduceOnly": "true" if reduce_only else "false",
         }
+        if reduce_only:
+            params["reduceOnly"] = "true"
+        if position_side:
+            params["positionSide"] = position_side.upper()
         return self.signed_request("POST", "/fapi/v1/order", params)
 
-    def place_stop_market(self, symbol: str, side: str, stop_price: float, close_position: bool = True) -> Any:
+    def place_stop_market(
+        self,
+        symbol: str,
+        side: str,
+        stop_price: float,
+        close_position: bool = True,
+        position_side: str | None = None,
+    ) -> Any:
         params = {
             "symbol": symbol.upper(),
             "side": side.upper(),
@@ -145,9 +165,18 @@ class BinanceFuturesClient:
             "workingType": "MARK_PRICE",
             "closePosition": "true" if close_position else "false",
         }
+        if position_side:
+            params["positionSide"] = position_side.upper()
         return self.signed_request("POST", "/fapi/v1/order", params)
 
-    def place_take_profit_market(self, symbol: str, side: str, stop_price: float, close_position: bool = True) -> Any:
+    def place_take_profit_market(
+        self,
+        symbol: str,
+        side: str,
+        stop_price: float,
+        close_position: bool = True,
+        position_side: str | None = None,
+    ) -> Any:
         params = {
             "symbol": symbol.upper(),
             "side": side.upper(),
@@ -156,9 +185,19 @@ class BinanceFuturesClient:
             "workingType": "MARK_PRICE",
             "closePosition": "true" if close_position else "false",
         }
+        if position_side:
+            params["positionSide"] = position_side.upper()
         return self.signed_request("POST", "/fapi/v1/order", params)
 
-    def place_limit_order(self, symbol: str, side: str, quantity: float, price: float, reduce_only: bool = False) -> Any:
+    def place_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        reduce_only: bool = False,
+        position_side: str | None = None,
+    ) -> Any:
         params = {
             "symbol": symbol.upper(),
             "side": side.upper(),
@@ -166,6 +205,9 @@ class BinanceFuturesClient:
             "timeInForce": "GTC",
             "quantity": quantity,
             "price": price,
-            "reduceOnly": "true" if reduce_only else "false",
         }
+        if reduce_only:
+            params["reduceOnly"] = "true"
+        if position_side:
+            params["positionSide"] = position_side.upper()
         return self.signed_request("POST", "/fapi/v1/order", params)

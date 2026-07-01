@@ -168,9 +168,16 @@ def execute_stage1_market_order(
         return {"mode": "dry_run", "order": order}
     leverage = max(1, min(50, int(float(decision.get("leverage", config.get("stage1_max_leverage", 2))))))
     client.set_leverage(symbol, leverage)
-    entry_order = client.place_market_order(symbol=symbol, side=entry_side, quantity=quantity)
-    stop_order = client.place_stop_market(symbol=symbol, side=close_side, stop_price=stop)
-    take_profit_order = client.place_take_profit_market(symbol=symbol, side=close_side, stop_price=take_profit)
+    position_side = None
+    try:
+        if client.position_side_dual().get("dualSidePosition") is True:
+            position_side = direction
+            order["position_side"] = position_side
+    except Exception:
+        position_side = None
+    entry_order = client.place_market_order(symbol=symbol, side=entry_side, quantity=quantity, position_side=position_side)
+    stop_order = client.place_stop_market(symbol=symbol, side=close_side, stop_price=stop, position_side=position_side)
+    take_profit_order = client.place_take_profit_market(symbol=symbol, side=close_side, stop_price=take_profit, position_side=position_side)
     return {
         "mode": "live",
         "entry_order": entry_order,
