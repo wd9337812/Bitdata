@@ -8,7 +8,7 @@ from app.grid import build_grid_orders, build_grid_plan
 from app.risk import assess_new_position, current_stage, live_trading_allowed, position_size_from_risk
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates
 from app.state_store import save_state
-from app.strategy import StrategyParams, latest_signal
+from app.strategy import StrategyParams
 
 
 def summarize_account(account: dict[str, Any] | None) -> dict[str, Any]:
@@ -56,9 +56,10 @@ def build_stage1_decision(
             "leverage": scan_candidate.get("leverage", active_mode["leverage"]),
             "margin_pct": scan_candidate.get("margin_pct", active_mode["margin_pct"]),
         }
-    signal = latest_strategy_signal(symbol, bars, active_mode["strategy"]) if active_mode["strategy"] != "default" else latest_signal(symbol, bars, StrategyParams())
+    direction = str((scan_candidate or {}).get("direction", "LONG")).upper()
+    signal = latest_strategy_signal(symbol, bars, active_mode["strategy"], StrategyParams(), direction=direction)
     equity = account_summary.get("equity")
-    if signal.get("signal") != "LONG":
+    if signal.get("signal") not in {"LONG", "SHORT"} or signal.get("signal") != direction:
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "no_signal"}}
     if equity is None:
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "account_unavailable"}}
@@ -90,7 +91,8 @@ def build_stage1_decision(
     quantity = min(quantity, max_qty)
     return {
         "symbol": symbol,
-        "action": "OPEN_LONG" if risk.allowed and quantity > 0 else "WAIT",
+        "action": f"OPEN_{direction}" if risk.allowed and quantity > 0 else "WAIT",
+        "direction": direction,
         "signal": signal,
         "risk": risk.__dict__,
         "quantity": quantity,
@@ -139,7 +141,7 @@ def execute_stage1_market_order(
     decision: dict[str, Any],
     config: dict[str, Any],
 ) -> dict[str, Any]:
-    if decision.get("action") != "OPEN_LONG":
+    if decision.get("action") not in {"OPEN_LONG", "OPEN_SHORT"}:
         return {"mode": "none", "message": "No executable decision."}
     filters = ExchangeFilters(client.exchange_info())
     symbol = decision["symbol"]
@@ -148,9 +150,13 @@ def execute_stage1_market_order(
     take_profit = filters.price(symbol, float(decision["signal"]["take_profit"]))
     notional = quantity * float(decision["signal"]["last_price"])
     min_notional = filters.min_notional(symbol)
+    direction = str(decision.get("direction") or decision.get("signal", {}).get("signal") or "LONG").upper()
+    entry_side = "SELL" if direction == "SHORT" else "BUY"
+    close_side = "BUY" if direction == "SHORT" else "SELL"
     order = {
         "symbol": symbol,
-        "side": "BUY",
+        "side": entry_side,
+        "direction": direction,
         "quantity": quantity,
         "stop": stop,
         "take_profit": take_profit,
@@ -162,9 +168,9 @@ def execute_stage1_market_order(
         return {"mode": "dry_run", "order": order}
     leverage = max(1, min(50, int(float(decision.get("leverage", config.get("stage1_max_leverage", 2))))))
     client.set_leverage(symbol, leverage)
-    entry_order = client.place_market_order(symbol=symbol, side="BUY", quantity=quantity)
-    stop_order = client.place_stop_market(symbol=symbol, side="SELL", stop_price=stop)
-    take_profit_order = client.place_take_profit_market(symbol=symbol, side="SELL", stop_price=take_profit)
+    entry_order = client.place_market_order(symbol=symbol, side=entry_side, quantity=quantity)
+    stop_order = client.place_stop_market(symbol=symbol, side=close_side, stop_price=stop)
+    take_profit_order = client.place_take_profit_market(symbol=symbol, side=close_side, stop_price=take_profit)
     return {
         "mode": "live",
         "entry_order": entry_order,

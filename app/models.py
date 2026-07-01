@@ -47,7 +47,11 @@ class TradingConfig(BaseModel):
     min_expected_profit_cost_ratio: float = Field(default=3.0, ge=0, le=20)
     estimated_slippage_pct: float = Field(default=0.04, ge=0, le=5)
     min_expected_profit_pct: float = Field(default=0.35, ge=0, le=20)
-    allow_short: bool = False
+    allow_short: bool = True
+    short_risk_multiplier: float = Field(default=0.5, ge=0.1, le=1)
+    short_min_recent_trades: int = Field(default=5, ge=0, le=50)
+    short_min_profit_factor: float = Field(default=1.3, ge=0, le=10)
+    short_min_net_pct: float = Field(default=1.0, ge=-50, le=100)
     grid_enabled: bool = True
     grid_min_levels: int = Field(default=20, ge=5, le=200)
     grid_max_levels: int = Field(default=80, ge=5, le=300)

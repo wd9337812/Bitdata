@@ -363,7 +363,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               <td>{modeLabel[row.mode] || row.mode}</td>
               {!compact && <td>{strategyName(row.strategy)}</td>}
               <td>{fmt(row.score, 2)}</td>
-              <td>{row.signal?.signal === "LONG" ? "做多" : "等待"}</td>
+              <td>{signalLabel(row.signal?.signal || row.direction)}</td>
               {!compact && <td>{fmt(row.recent?.win_rate, 1)}%</td>}
               {!compact && <td>{fmt(row.recent?.net_pct, 2)}%</td>}
               <td>{fmt(row.recent?.profit_factor, 2)}</td>
@@ -384,6 +384,12 @@ function strategyName(value: string) {
     breakout: "突破",
   };
   return names[value] || value || "-";
+}
+
+function signalLabel(value: string) {
+  if (value === "LONG") return "做多";
+  if (value === "SHORT") return "做空";
+  return "等待";
 }
 
 function MarketTable({ rows }: { rows: any[] }) {
@@ -541,6 +547,11 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("estimated_slippage_pct", "估算滑点%")}
           {number("min_expected_profit_cost_ratio", "最低收益/成本比")}
           {number("min_profit_factor", "最低 PF")}
+          {toggle("allow_short", "自动评估做空", "开启后系统会同时回测做多和做空，只执行数据评分最高且通过风控的一边")}
+          {number("short_risk_multiplier", "做空风险折扣", "默认 0.5，表示做空单笔风险为当前模式的一半")}
+          {number("short_min_recent_trades", "做空最少样本", "默认 5，样本太少不允许实盘做空")}
+          {number("short_min_profit_factor", "做空最低 PF", "默认 1.3，比做多更严格")}
+          {number("short_min_net_pct", "做空最低净收益%", "默认 1%，扣除手续费后仍需有利润")}
         </div>
       </details>
       <details className="panel danger-zone">
@@ -553,7 +564,6 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           <div className="field-wide credential-field">{text("api_key", "Binance API Key", "保存后会自动打码显示；如果看到打码值且不想修改，保持原样即可")}</div>
           <div className="field-wide credential-field">{password("api_secret", "Binance API Secret", "第一次配置时填写完整 Secret；已经保存过时留空表示不修改")}</div>
           <div className="field-wide credential-field">{text("binance_base_url", "Binance 合约接口地址", "默认 https://fapi.binance.com，一般不用改")}</div>
-          {toggle("allow_short", "允许做空", "不建议新手开启")}
           {text("live_trading_confirmation", "实盘确认短语", "必须填写 ENABLE_LIVE_TRADING")}
           {number("max_drawdown_pct", "最大回撤%")}
           {number("tournament_stop_equity", "锦标赛停止权益")}
