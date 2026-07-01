@@ -119,6 +119,9 @@ class BinanceFuturesClient:
             data = [item for item in data if item["symbol"] in allowed]
         return data
 
+    def depth(self, symbol: str, limit: int = 5) -> Any:
+        return self.public_get("/fapi/v1/depth", {"symbol": symbol.upper(), "limit": limit})
+
     def account(self) -> Any:
         return self.signed_request("GET", "/fapi/v2/account")
 

@@ -149,3 +149,151 @@ def test_scan_promotes_high_score_near_trigger_to_preemptive(monkeypatch):
     assert best["entry_type"] in {"preemptive", "momentum"}
     assert best["signal"]["signal"] == "LONG"
     assert best["risk_pct"] < 15
+
+
+def test_scan_blocks_signal_when_symbol_quality_fails(monkeypatch):
+    class FakeScanClient:
+        def ticker_24h(self, symbols=None):
+            return [{"symbol": "ZBTUSDT", "lastPrice": "0.15", "quoteVolume": "1000000", "priceChangePercent": "35"}]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 0.15, 0.16, 0.14, 0.15, 100] for i in range(200)]
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["ZBTUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 0.15,
+            "atr": 0.002,
+            "stop": 0.145,
+            "take_profit": 0.16,
+            "expected_profit_pct": 6.0,
+            "trend": True,
+            "volatility_ok": True,
+            "entry_type": "standard",
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG": {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 1,
+            "wins": 1,
+            "win_rate": 100.0,
+            "net_pct": 0.3,
+            "profit_factor": 999,
+        },
+    )
+
+    result = scan_growth_candidates(
+        FakeScanClient(),
+        {
+            "growth_mode": "tournament",
+            "auto_risk_by_equity": False,
+            "tournament_interval": "5m",
+            "tournament_recent_days": 5,
+            "tournament_risk_per_trade_pct": 15,
+            "tournament_max_leverage": 5,
+            "tournament_max_symbol_margin_pct": 90,
+            "allow_short": False,
+            "min_expected_profit_cost_ratio": 2,
+            "estimated_slippage_pct": 0.04,
+            "min_expected_profit_pct": 0.35,
+            "standard_min_score": 50,
+            "symbol_trade_score": 75,
+            "symbol_small_trade_score": 65,
+            "symbol_observe_score": 50,
+            "min_simulated_trades": 5,
+            "quality_backtest_days": [3, 5, 10],
+        },
+        {"equity": 50},
+    )
+
+    best = result["candidates"][0]
+    assert best["signal"]["signal"] == "LONG"
+    assert best["passed"] is False
+    assert best["symbol_quality"]["allowed"] is False
+    assert "币种质量未达实盘准入" in best["decision_reason"]
+
+
+def test_small_trade_pool_reduces_risk(monkeypatch):
+    class FakeScanClient:
+        def ticker_24h(self, symbols=None):
+            return [{"symbol": "TESTUSDT", "lastPrice": "10", "quoteVolume": "50000000", "priceChangePercent": "5"}]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 10, 10.4, 9.8, 10, 1000] for i in range(200)]
+
+        def depth(self, symbol, limit=5):
+            return {"bids": [["9.999", "1000"]], "asks": [["10.001", "1000"]]}
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["TESTUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 10.0,
+            "atr": 0.1,
+            "stop": 9.8,
+            "take_profit": 10.5,
+            "expected_profit_pct": 5.0,
+            "trend": True,
+            "volatility_ok": True,
+            "entry_type": "standard",
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG": {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 8,
+            "wins": 4,
+            "win_rate": 50.0,
+            "net_pct": 2.0,
+            "profit_factor": 1.3,
+        },
+    )
+
+    result = scan_growth_candidates(
+        FakeScanClient(),
+        {
+            "growth_mode": "tournament",
+            "auto_risk_by_equity": False,
+            "tournament_interval": "5m",
+            "tournament_recent_days": 5,
+            "tournament_risk_per_trade_pct": 15,
+            "tournament_max_leverage": 5,
+            "tournament_max_symbol_margin_pct": 90,
+            "allow_short": False,
+            "min_expected_profit_cost_ratio": 2,
+            "estimated_slippage_pct": 0.04,
+            "min_expected_profit_pct": 0.35,
+            "standard_min_score": 50,
+            "symbol_trade_score": 90,
+            "symbol_small_trade_score": 50,
+            "symbol_observe_score": 40,
+            "small_trade_risk_multiplier": 0.5,
+            "quality_backtest_days": [3, 5, 10],
+        },
+        {"equity": 50},
+    )
+
+    best = result["candidates"][0]
+    assert best["passed"] is True
+    assert best["symbol_pool"] == "small_trade"
+    assert best["risk_pct"] == 7.5

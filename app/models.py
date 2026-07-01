@@ -8,8 +8,23 @@ class TradingConfig(BaseModel):
     stage1_symbols: list[str] = Field(default_factory=lambda: ["SOLUSDT", "LABUSDT", "SUIUSDT", "AAVEUSDT", "WLDUSDT"])
     stage2_symbols: list[str] = Field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
     auto_discover_symbols: bool = True
-    max_scan_symbols: int = Field(default=15, ge=1, le=120)
-    min_24h_volume_usdt: float = Field(default=100_000_000, ge=0)
+    max_scan_symbols: int = Field(default=30, ge=1, le=120)
+    min_24h_volume_usdt: float = Field(default=30_000_000, ge=0)
+    max_observation_symbols: int = Field(default=50, ge=1, le=150)
+    max_trade_pool_symbols: int = Field(default=15, ge=1, le=50)
+    symbol_trade_score: float = Field(default=75.0, ge=0, le=100)
+    symbol_small_trade_score: float = Field(default=65.0, ge=0, le=100)
+    symbol_observe_score: float = Field(default=50.0, ge=0, le=100)
+    min_simulated_trades: int = Field(default=5, ge=0, le=100)
+    min_simulated_win_rate: float = Field(default=45.0, ge=0, le=100)
+    min_simulated_profit_factor: float = Field(default=1.25, ge=0, le=20)
+    min_simulated_net_pct: float = Field(default=1.5, ge=-100, le=500)
+    new_symbol_observation_minutes: int = Field(default=30, ge=0, le=1440)
+    small_trade_risk_multiplier: float = Field(default=0.5, ge=0.05, le=1)
+    max_spread_pct: float = Field(default=0.08, ge=0, le=5)
+    min_depth_notional_usdt: float = Field(default=20_000, ge=0)
+    volume_spike_ratio: float = Field(default=1.8, ge=0, le=20)
+    quality_backtest_days: list[int] = Field(default_factory=lambda: [3, 5, 10])
     interval: str = "4h"
     conservative_interval: str = "4h"
     balanced_interval: str = "1h"

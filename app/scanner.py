@@ -109,7 +109,8 @@ def discover_coin_symbols(client: BinanceFuturesClient, config: dict[str, Any]) 
     for symbol in manual + [symbol for symbol, _ in ranked]:
         if symbol in coin_symbols and symbol not in merged:
             merged.append(symbol)
-    return merged[: int(config.get("max_scan_symbols", 30))]
+    limit = int(config.get("max_observation_symbols", config.get("max_scan_symbols", 30)))
+    return merged[:limit]
 
 
 def latest_strategy_signal(
@@ -255,6 +256,179 @@ def _current_signal_score(signal: dict[str, Any], direction: str, cost_ratio: fl
     score += min(max(cost_ratio, 0), 8) * 2.5
     score += min(float(recent.get("profit_factor", 0)), 5) * 3
     return score
+
+
+def _volume_spike_ratio(bars: list[list[Any]], lookback: int = 20) -> float:
+    if len(bars) < lookback + 1:
+        return 1.0
+    current = float(bars[-1][5] or 0) * float(bars[-1][4] or 0)
+    history = [
+        float(bar[5] or 0) * float(bar[4] or 0)
+        for bar in bars[-lookback - 1:-1]
+    ]
+    average = sum(history) / len(history) if history else 0
+    return current / average if average > 0 else 1.0
+
+
+def _depth_metrics(client: BinanceFuturesClient, symbol: str) -> dict[str, float | bool | str]:
+    try:
+        depth = client.depth(symbol, limit=5)
+        bids = depth.get("bids", [])
+        asks = depth.get("asks", [])
+        if not bids or not asks:
+            return {"available": False, "spread_pct": 999.0, "depth_notional": 0.0, "reason": "no_depth"}
+        bid = float(bids[0][0])
+        ask = float(asks[0][0])
+        mid = (bid + ask) / 2
+        spread_pct = (ask - bid) / mid * 100 if mid else 999.0
+        bid_notional = sum(float(price) * float(qty) for price, qty in bids[:5])
+        ask_notional = sum(float(price) * float(qty) for price, qty in asks[:5])
+        return {
+            "available": True,
+            "spread_pct": spread_pct,
+            "depth_notional": min(bid_notional, ask_notional),
+        }
+    except Exception as exc:
+        return {"available": False, "spread_pct": 999.0, "depth_notional": 0.0, "reason": str(exc)}
+
+
+def _score_volume(quote_volume: float) -> float:
+    if quote_volume <= 30_000_000:
+        return max(0.0, quote_volume / 30_000_000 * 8)
+    if quote_volume >= 300_000_000:
+        return 15.0
+    return 8.0 + (quote_volume - 30_000_000) / 270_000_000 * 7.0
+
+
+def _score_volatility(atr_pct: float) -> float:
+    if atr_pct <= 0:
+        return 0.0
+    if 0.6 <= atr_pct <= 4.5:
+        return 15.0
+    if atr_pct < 0.6:
+        return max(0.0, atr_pct / 0.6 * 15.0)
+    return max(0.0, 15.0 - (atr_pct - 4.5) * 3.0)
+
+
+def _score_spread_depth(depth: dict[str, Any], config: dict[str, Any]) -> float:
+    max_spread = float(config.get("max_spread_pct", 0.08))
+    min_depth = float(config.get("min_depth_notional_usdt", 20_000))
+    spread = float(depth.get("spread_pct", 999))
+    depth_notional = float(depth.get("depth_notional", 0))
+    spread_score = max(0.0, 8.0 * (1.0 - spread / max(max_spread * 2, 0.0001)))
+    depth_score = min(depth_notional / max(min_depth, 1), 1.0) * 7.0
+    return spread_score + depth_score
+
+
+def _simulation_quality(backtests: dict[int, dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
+    primary = backtests.get(5) or next(iter(backtests.values()), {})
+    trades = int(primary.get("trades", 0))
+    win_rate = float(primary.get("win_rate", 0))
+    profit_factor = float(primary.get("profit_factor", 0))
+    net_pct = float(primary.get("net_pct", 0))
+    passed = (
+        trades >= int(config.get("min_simulated_trades", 5))
+        and win_rate >= float(config.get("min_simulated_win_rate", 45.0))
+        and profit_factor >= float(config.get("min_simulated_profit_factor", 1.25))
+        and net_pct >= float(config.get("min_simulated_net_pct", 1.5))
+    )
+    ten_day = backtests.get(10)
+    if ten_day and float(ten_day.get("net_pct", 0)) < -2.0:
+        passed = False
+    return {
+        "passed": passed,
+        "trades": trades,
+        "win_rate": win_rate,
+        "profit_factor": profit_factor,
+        "net_pct": net_pct,
+        "windows": backtests,
+    }
+
+
+def score_symbol_quality(
+    symbol: str,
+    bars: list[list[Any]],
+    ticker: dict[str, Any],
+    signal: dict[str, Any],
+    backtests: dict[int, dict[str, Any]],
+    depth: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    quote_volume = float(ticker.get("quoteVolume", 0))
+    volume_score = _score_volume(quote_volume)
+    spike = _volume_spike_ratio(bars)
+    spike_score = min(spike / max(float(config.get("volume_spike_ratio", 1.8)), 0.1), 1.0) * 15.0
+    price = float(signal.get("last_price") or ticker.get("lastPrice") or bars[-1][4] or 0)
+    atr_pct = float(signal.get("atr") or 0) / price * 100 if price else 0.0
+    volatility_score = _score_volatility(atr_pct)
+    spread_depth_score = _score_spread_depth(depth, config)
+    simulation = _simulation_quality(backtests, config)
+    bt3 = backtests.get(3, {})
+    bt5 = backtests.get(5, {})
+    bt10 = backtests.get(10, {})
+    bt3_score = 15.0 if float(bt3.get("profit_factor", 0)) >= 1.25 and float(bt3.get("net_pct", 0)) >= 2 else max(0.0, float(bt3.get("net_pct", 0)) * 1.5)
+    bt5_score = 10.0 if float(bt5.get("profit_factor", 0)) >= 1.15 and int(bt5.get("trades", 0)) >= 8 else max(0.0, float(bt5.get("net_pct", 0)) * 0.6)
+    bt10_score = 5.0 if not bt10 or float(bt10.get("net_pct", 0)) >= 0 else 0.0
+    trend_score = 5.0 if signal.get("trend") is True or signal.get("signal") in {"LONG", "SHORT"} else 0.0
+    false_breakout_penalty = 0.0
+    primary = backtests.get(5) or {}
+    if int(primary.get("trades", 0)) < int(config.get("min_simulated_trades", 5)):
+        false_breakout_penalty += 8.0
+    if float(primary.get("win_rate", 0)) < 35 and int(primary.get("trades", 0)) >= 5:
+        false_breakout_penalty += 8.0
+    if atr_pct > 5.5:
+        false_breakout_penalty += 6.0
+    score = (
+        volume_score
+        + spike_score
+        + volatility_score
+        + spread_depth_score
+        + min(bt3_score, 15.0)
+        + min(bt5_score, 10.0)
+        + bt10_score
+        + trend_score
+        - min(false_breakout_penalty, 20.0)
+    )
+    score = max(0.0, min(score, 100.0))
+    trade_score = float(config.get("symbol_trade_score", 75.0))
+    small_score = float(config.get("symbol_small_trade_score", 65.0))
+    observe_score = float(config.get("symbol_observe_score", 50.0))
+    if score >= trade_score and simulation["passed"]:
+        pool = "trade"
+        allowed = True
+    elif score >= small_score and simulation["passed"]:
+        pool = "small_trade"
+        allowed = True
+    elif score >= observe_score:
+        pool = "observe"
+        allowed = False
+    else:
+        pool = "disabled"
+        allowed = False
+    return {
+        "score": round(score, 2),
+        "pool": pool,
+        "allowed": allowed,
+        "components": {
+            "volume": round(volume_score, 2),
+            "volume_spike": round(spike_score, 2),
+            "volatility": round(volatility_score, 2),
+            "spread_depth": round(spread_depth_score, 2),
+            "backtest_3d": round(min(bt3_score, 15.0), 2),
+            "backtest_5d": round(min(bt5_score, 10.0), 2),
+            "backtest_10d": round(bt10_score, 2),
+            "trend": round(trend_score, 2),
+            "false_breakout_penalty": round(false_breakout_penalty, 2),
+        },
+        "simulation": simulation,
+        "market": {
+            "quote_volume": quote_volume,
+            "volume_spike_ratio": round(spike, 3),
+            "atr_pct": round(atr_pct, 3),
+            "spread_pct": round(float(depth.get("spread_pct", 999)), 4),
+            "depth_notional": round(float(depth.get("depth_notional", 0)), 2),
+        },
+    }
 
 
 def backtest_strategy(symbol: str, bars: list[list[Any]], strategy: str, days: int, direction: str = "LONG") -> dict[str, Any]:
@@ -508,6 +682,205 @@ def scan_growth_candidates(
     candidates.sort(key=lambda item: (item.get("passed", False), item.get("score", -999)), reverse=True)
     candidates = [_json_safe(candidate) for candidate in candidates]
     return {"mode": _json_safe(mode), "symbols": symbols, "candidates": candidates[:30], "best": candidates[0] if candidates else None}
+
+
+def scan_growth_candidates(
+    client: BinanceFuturesClient,
+    config: dict[str, Any],
+    account_summary: dict[str, Any],
+) -> dict[str, Any]:
+    equity = account_summary.get("equity")
+    mode = mode_config(config, equity)
+    symbols = discover_coin_symbols(client, config)
+    candidates = []
+    tickers = {item["symbol"]: item for item in client.ticker_24h(symbols)}
+    fee_pct = StrategyParams().taker_fee * 2 * 100
+    slippage_pct = float(config.get("estimated_slippage_pct", 0.04))
+    cost_pct = fee_pct + slippage_pct
+    quality_days = sorted({
+        int(day)
+        for day in config.get("quality_backtest_days", [3, 5, 10])
+        if int(day) > 0
+    } | {int(mode["recent_days"])})
+
+    for symbol in symbols:
+        try:
+            bars = client.klines_history(symbol, mode["interval"], max(quality_days))
+            depth = _depth_metrics(client, symbol)
+            directions = ["LONG", "SHORT"] if config.get("allow_short", False) else ["LONG"]
+            for direction in directions:
+                signal = latest_strategy_signal(symbol, bars, mode["strategy"], direction=direction)
+                backtests = {
+                    day: backtest_strategy(symbol, bars, mode["strategy"], day, direction=direction)
+                    for day in quality_days
+                }
+                recent = backtests[int(mode["recent_days"])]
+                ticker = tickers.get(symbol, {})
+                last_price = float(signal.get("last_price") or ticker.get("lastPrice", 0))
+                expected_profit_pct = float(signal.get("expected_profit_pct") or 0)
+                cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
+                quality = score_symbol_quality(symbol, bars, ticker, signal, backtests, depth, config)
+
+                if direction == "SHORT":
+                    min_trades = int(config.get("short_min_recent_trades", 5))
+                    min_pf = float(config.get("short_min_profit_factor", 1.3))
+                    min_net_pct = float(config.get("short_min_net_pct", 1.0))
+                    risk_pct = float(mode["risk_pct"]) * float(config.get("short_risk_multiplier", 0.5))
+                else:
+                    min_trades = int(mode["min_trades"])
+                    min_pf = float(mode["min_pf"])
+                    min_net_pct = 0.0
+                    risk_pct = float(mode["risk_pct"])
+
+                history_passed = (
+                    recent["trades"] >= min_trades
+                    and recent["profit_factor"] >= min_pf
+                    and recent["net_pct"] > min_net_pct
+                )
+                standard_passed = (
+                    signal.get("signal") == direction
+                    and history_passed
+                    and quality["allowed"]
+                    and expected_profit_pct >= float(config.get("min_expected_profit_pct", 0.35))
+                    and cost_ratio >= float(config.get("min_expected_profit_cost_ratio", 3.0))
+                )
+                current_score = _current_signal_score(signal, direction, cost_ratio, recent)
+                score = 0.0
+                score += min(float(ticker.get("quoteVolume", 0)) / 1_000_000_000, 5) * 0.5
+                score += recent["net_pct"] * 0.15
+                score += min(recent["profit_factor"], 10) * 2
+                score += recent["win_rate"] * 0.05
+                score += current_score
+                score += quality["score"] * 0.25
+                score += 3 if standard_passed else 0
+                score -= 1.5 if direction == "SHORT" else 0
+
+                entry_type = "standard" if standard_passed else "watch"
+                passed = standard_passed and score >= float(config.get("standard_min_score", 85.0))
+                decision_reason = "标准突破信号通过" if passed else "等待触发"
+                if passed and quality["pool"] == "small_trade":
+                    entry_type = "small_standard"
+                    risk_pct *= float(config.get("small_trade_risk_multiplier", 0.5))
+                    decision_reason = "币种质量允许小仓试探"
+                if signal.get("signal") == direction and not quality["allowed"]:
+                    decision_reason = f"币种质量未达实盘准入：{quality['pool']}，评分 {quality['score']}"
+
+                preemptive_enabled = mode["mode"] == "tournament" and config.get("preemptive_entries_enabled", True)
+                if not passed and preemptive_enabled and history_passed and quality["allowed"] and signal.get("signal") == "WAIT":
+                    distance_pct = float(signal.get("distance_to_trigger_pct") or 999)
+                    near_trigger = (
+                        signal.get("trend") is True
+                        and signal.get("volatility_ok") is True
+                        and distance_pct <= float(config.get("preemptive_max_distance_pct", 0.35))
+                    )
+                    strong_momentum = (
+                        signal.get("trend") is True
+                        and signal.get("volatility_ok") is True
+                        and float(signal.get("candle_move_pct") or 0) >= max(0.12, distance_pct)
+                    )
+                    min_preempt_score = float(config.get("preemptive_min_score", 72.0))
+                    if score >= min_preempt_score and (near_trigger or strong_momentum):
+                        entry_type = "momentum" if strong_momentum and not near_trigger else "preemptive"
+                        risk_multiplier = (
+                            float(config.get("short_preemptive_risk_multiplier", 0.33))
+                            if direction == "SHORT"
+                            else float(config.get("preemptive_risk_multiplier", 0.47))
+                        )
+                        if quality["pool"] == "small_trade":
+                            risk_multiplier *= float(config.get("small_trade_risk_multiplier", 0.5))
+                        signal = _promote_wait_signal(signal, direction, entry_type, risk_multiplier)
+                        expected_profit_pct = float(signal.get("expected_profit_pct") or 0)
+                        cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
+                        risk_pct *= risk_multiplier
+                        passed = (
+                            expected_profit_pct >= float(config.get("min_expected_profit_pct", 0.35))
+                            and cost_ratio >= max(1.5, float(config.get("min_expected_profit_cost_ratio", 3.0)) * 0.65)
+                        )
+                        decision_reason = "高分候选接近触发，允许小仓抢跑" if entry_type == "preemptive" else "短线强动量，允许小仓试探"
+                    else:
+                        misses = []
+                        if not history_passed:
+                            misses.append("历史回测不足")
+                        if not quality["allowed"]:
+                            misses.append(f"币种质量未达实盘准入({quality['pool']} {quality['score']})")
+                        if not signal.get("trend"):
+                            misses.append("趋势未成立")
+                        if not signal.get("volatility_ok"):
+                            misses.append("波动不足")
+                        if distance_pct > float(config.get("preemptive_max_distance_pct", 0.35)):
+                            misses.append("距离触发价偏远")
+                        if score < min_preempt_score:
+                            misses.append("综合评分不足")
+                        decision_reason = "、".join(misses) or "等待触发"
+
+                candidates.append(
+                    {
+                        "symbol": symbol,
+                        "direction": direction,
+                        "mode": mode["mode"],
+                        "strategy": mode["strategy"],
+                        "score": round(score, 4),
+                        "passed": passed,
+                        "reason": "passed" if passed else "filters_not_passed",
+                        "decision_reason": decision_reason,
+                        "entry_type": entry_type,
+                        "entry_type_label": signal.get("entry_type_label", "标准信号" if entry_type == "standard" else "观察"),
+                        "symbol_quality": quality,
+                        "symbol_pool": quality["pool"],
+                        "simulation_passed": quality["simulation"]["passed"],
+                        "current_score": round(current_score, 2),
+                        "signal": signal,
+                        "recent": recent,
+                        "backtests": backtests,
+                        "ticker": {
+                            "last": last_price,
+                            "change_pct": float(ticker.get("priceChangePercent", 0)),
+                            "volume_usdt_b": round(float(ticker.get("quoteVolume", 0)) / 1_000_000_000, 3),
+                        },
+                        "cost_ratio": cost_ratio,
+                        "fee_pct": fee_pct,
+                        "estimated_slippage_pct": slippage_pct,
+                        "estimated_cost_pct": cost_pct,
+                        "expected_profit_pct": expected_profit_pct,
+                        "risk_pct": risk_pct,
+                        "base_risk_pct": mode["risk_pct"],
+                        "leverage": mode["leverage"],
+                        "margin_pct": mode["margin_pct"],
+                        "thresholds": {"min_trades": min_trades, "min_pf": min_pf, "min_net_pct": min_net_pct},
+                    }
+                )
+        except Exception as exc:
+            candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})
+
+    candidates.sort(
+        key=lambda item: (
+            item.get("passed", False),
+            item.get("symbol_quality", {}).get("allowed", False),
+            item.get("symbol_quality", {}).get("score", -999),
+            item.get("score", -999),
+        ),
+        reverse=True,
+    )
+    candidates = [_json_safe(candidate) for candidate in candidates]
+    max_candidates = int(config.get("max_scan_symbols", 30))
+    trade_pool = [
+        candidate
+        for candidate in candidates
+        if candidate.get("symbol_quality", {}).get("pool") in {"trade", "small_trade"}
+    ][: int(config.get("max_trade_pool_symbols", 15))]
+    observe_pool = [
+        candidate
+        for candidate in candidates
+        if candidate.get("symbol_quality", {}).get("pool") == "observe"
+    ][:max_candidates]
+    return {
+        "mode": _json_safe(mode),
+        "symbols": symbols,
+        "trade_pool": trade_pool,
+        "observe_pool": observe_pool,
+        "candidates": candidates[:max_candidates],
+        "best": candidates[0] if candidates else None,
+    }
 
 
 def _json_safe(value: Any) -> Any:
