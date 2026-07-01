@@ -393,10 +393,14 @@ def score_symbol_quality(
     trade_score = float(config.get("symbol_trade_score", 75.0))
     small_score = float(config.get("symbol_small_trade_score", 65.0))
     observe_score = float(config.get("symbol_observe_score", 50.0))
-    if score >= trade_score and simulation["passed"]:
+    market_passed = (
+        float(depth.get("spread_pct", 999)) <= float(config.get("max_spread_pct", 0.08))
+        and float(depth.get("depth_notional", 0)) >= float(config.get("min_depth_notional_usdt", 20_000))
+    )
+    if score >= trade_score and simulation["passed"] and market_passed:
         pool = "trade"
         allowed = True
-    elif score >= small_score and simulation["passed"]:
+    elif score >= small_score and simulation["passed"] and market_passed:
         pool = "small_trade"
         allowed = True
     elif score >= observe_score:
@@ -420,6 +424,7 @@ def score_symbol_quality(
             "trend": round(trend_score, 2),
             "false_breakout_penalty": round(false_breakout_penalty, 2),
         },
+        "market_passed": market_passed,
         "simulation": simulation,
         "market": {
             "quote_volume": quote_volume,

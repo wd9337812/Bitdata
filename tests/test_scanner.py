@@ -84,6 +84,9 @@ def test_scan_promotes_high_score_near_trigger_to_preemptive(monkeypatch):
         def klines_history(self, symbol, interval, days):
             return [[i, 10, 11, 9, 10, 1000] for i in range(120)]
 
+        def depth(self, symbol, limit=5):
+            return {"bids": [["9.999", "5000"]], "asks": [["10.001", "5000"]]}
+
     monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["LABUSDT"])
     monkeypatch.setattr(
         scanner,
@@ -140,6 +143,7 @@ def test_scan_promotes_high_score_near_trigger_to_preemptive(monkeypatch):
             "min_expected_profit_cost_ratio": 2,
             "estimated_slippage_pct": 0.04,
             "min_expected_profit_pct": 0.35,
+            "min_depth_notional_usdt": 20_000,
         },
         {"equity": 50},
     )
@@ -213,6 +217,7 @@ def test_scan_blocks_signal_when_symbol_quality_fails(monkeypatch):
             "symbol_observe_score": 50,
             "min_simulated_trades": 5,
             "quality_backtest_days": [3, 5, 10],
+            "min_depth_notional_usdt": 5_000,
         },
         {"equity": 50},
     )
@@ -289,6 +294,7 @@ def test_small_trade_pool_reduces_risk(monkeypatch):
             "symbol_observe_score": 40,
             "small_trade_risk_multiplier": 0.5,
             "quality_backtest_days": [3, 5, 10],
+            "min_depth_notional_usdt": 5_000,
         },
         {"equity": 50},
     )
