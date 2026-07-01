@@ -1,7 +1,15 @@
 export async function api<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, options);
   if (!response.ok) {
-    throw new Error(await response.text());
+    const text = await response.text();
+    let message = text || `请求失败：${response.status}`;
+    try {
+      const data = JSON.parse(text);
+      message = data.detail || data.message || data.error || message;
+    } catch {
+      // Keep the raw response text when the server did not return JSON.
+    }
+    throw new Error(message);
   }
   return response.json() as Promise<T>;
 }

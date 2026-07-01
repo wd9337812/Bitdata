@@ -92,7 +92,7 @@ function useData() {
   const [health, setHealth] = useState<any>(null);
   const [error, setError] = useState("");
 
-  async function refresh(light = false) {
+  async function refresh(light = false, throwOnError = false) {
     try {
       const [statusRes, marketRes, snapshotRes, logsRes, healthRes] = await Promise.all([
         api<StatusData>("/api/status"),
@@ -111,7 +111,11 @@ function useData() {
       }
       setError("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      if (throwOnError) {
+        throw new Error(message);
+      }
     }
   }
 
@@ -161,6 +165,17 @@ function App() {
     [data.snapshots],
   );
 
+  async function handleRefresh() {
+    try {
+      await data.refresh(false, true);
+      setActionError("");
+      setActionNotice("刷新成功，页面数据已更新。");
+    } catch (err) {
+      setActionNotice("");
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function control(action: string, confirmation = "") {
     try {
       await api("/api/control", {
@@ -169,9 +184,10 @@ function App() {
         body: JSON.stringify({ action, confirmation }),
       });
       setActionError("");
-      setActionNotice("");
+      setActionNotice(action === "start" ? "启动成功，机器人已进入运行状态。" : "暂停成功，机器人已停止自动执行。");
       await data.refresh();
     } catch (err) {
+      setActionNotice("");
       setActionError(err instanceof Error ? err.message : String(err));
     }
   }
@@ -241,7 +257,7 @@ function App() {
             </p>
           </div>
           <div className="top-actions">
-            <button className="secondary" onClick={() => data.refresh()}>刷新</button>
+            <button className="secondary" onClick={handleRefresh}>刷新</button>
             <button className="success" onClick={() => control("start", "START_BOT")}><Play size={16} />启动</button>
             <button className="danger" onClick={() => control("pause")}><Square size={16} />暂停</button>
           </div>
