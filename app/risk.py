@@ -54,6 +54,15 @@ def assess_new_position(
         except ValueError:
             return RiskDecision(False, "invalid_cooldown_state")
 
+    symbol_cooldowns = state.get("symbol_cooldowns") or {}
+    symbol_cooldown_until = symbol_cooldowns.get(symbol.upper()) if isinstance(symbol_cooldowns, dict) else None
+    if symbol_cooldown_until:
+        try:
+            if datetime.fromisoformat(symbol_cooldown_until) > datetime.now(timezone.utc):
+                return RiskDecision(False, "symbol_cooldown_active")
+        except ValueError:
+            return RiskDecision(False, "invalid_symbol_cooldown_state")
+
     if int(state.get("consecutive_losses", 0)) >= int(config.get("max_consecutive_losses", 2)):
         return RiskDecision(False, "consecutive_loss_limit")
 

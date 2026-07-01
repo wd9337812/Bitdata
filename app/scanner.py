@@ -146,9 +146,11 @@ def latest_strategy_signal(
         take_mult = 2.2
         min_atr = 0.006
         reason = "short_attack_pullback_or_momentum" if is_short else "attack_pullback_or_momentum"
+        trigger_price = e10[i]
     elif strategy == "breakout":
         trend = close < e20[i] < e50[i] if is_short else close > e20[i] > e50[i]
-        trigger = close < min(lows[max(0, i - 12):i]) if is_short else close > max(highs[max(0, i - 12):i])
+        trigger_price = min(lows[max(0, i - 12):i]) if is_short else max(highs[max(0, i - 12):i])
+        trigger = close < trigger_price if is_short else close > trigger_price
         stop_mult = 1.2
         take_mult = 2.5
         min_atr = 0.006
@@ -160,8 +162,15 @@ def latest_strategy_signal(
         take_mult = params.take_profit_atr
         min_atr = params.min_atr_pct
         reason = "short_trend_pullback_recovered" if is_short else "trend_pullback_recovered"
+        trigger_price = e20[i]
 
     volatility_ok = (atr_value / close) >= min_atr
+    distance_to_trigger_pct = (
+        max(0.0, (close - trigger_price) / close * 100)
+        if is_short
+        else max(0.0, (trigger_price - close) / close * 100)
+    )
+    candle_move_pct = abs(close - closes[i - 1]) / close * 100 if i > 0 and close else 0.0
     if trend and trigger and volatility_ok:
         stop = close + atr_value * stop_mult if is_short else close - atr_value * stop_mult
         take_profit = close - atr_value * take_mult if is_short else close + atr_value * take_mult
@@ -178,6 +187,11 @@ def latest_strategy_signal(
             "take_profit": take_profit,
             "risk_pct": abs(close - stop) / close,
             "expected_profit_pct": abs(take_profit - close) / close * 100,
+            "entry_type": "standard",
+            "entry_type_label": "标准信号",
+            "trigger_price": trigger_price,
+            "distance_to_trigger_pct": 0.0,
+            "candle_move_pct": candle_move_pct,
         }
 
     return {
@@ -193,7 +207,54 @@ def latest_strategy_signal(
         "trend": trend,
         "trigger": trigger,
         "volatility_ok": volatility_ok,
+        "trigger_price": trigger_price,
+        "distance_to_trigger_pct": distance_to_trigger_pct,
+        "candle_move_pct": candle_move_pct,
+        "entry_type": "watch",
+        "entry_type_label": "观察",
     }
+
+
+def _promote_wait_signal(
+    signal: dict[str, Any],
+    direction: str,
+    entry_type: str,
+    risk_multiplier: float,
+) -> dict[str, Any]:
+    close = float(signal["last_price"])
+    atr_value = float(signal["atr"])
+    is_short = direction == "SHORT"
+    stop_mult = 1.05 if entry_type == "momentum" else 1.15
+    take_mult = 2.15 if entry_type == "momentum" else 2.35
+    stop = close + atr_value * stop_mult if is_short else close - atr_value * stop_mult
+    take_profit = close - atr_value * take_mult if is_short else close + atr_value * take_mult
+    return {
+        **signal,
+        "signal": direction,
+        "reason": f"{direction.lower()}_{entry_type}",
+        "stop": stop,
+        "take_profit": take_profit,
+        "risk_pct": abs(close - stop) / close,
+        "expected_profit_pct": abs(take_profit - close) / close * 100,
+        "entry_type": entry_type,
+        "entry_type_label": "强动量" if entry_type == "momentum" else "抢跑试探",
+        "risk_multiplier": risk_multiplier,
+    }
+
+
+def _current_signal_score(signal: dict[str, Any], direction: str, cost_ratio: float, recent: dict[str, Any]) -> float:
+    score = 0.0
+    if signal.get("signal") == direction:
+        score += 55
+    else:
+        score += 15 if signal.get("trend") else 0
+        score += 15 if signal.get("volatility_ok") else 0
+        distance = float(signal.get("distance_to_trigger_pct") or 999)
+        score += max(0.0, 25 - distance * 35)
+        score += min(float(signal.get("candle_move_pct") or 0) * 7, 10)
+    score += min(max(cost_ratio, 0), 8) * 2.5
+    score += min(float(recent.get("profit_factor", 0)), 5) * 3
+    return score
 
 
 def backtest_strategy(symbol: str, bars: list[list[Any]], strategy: str, days: int, direction: str = "LONG") -> dict[str, Any]:
@@ -343,22 +404,72 @@ def scan_growth_candidates(
                     min_pf = float(mode["min_pf"])
                     min_net_pct = 0.0
                     risk_pct = float(mode["risk_pct"])
-                passed = (
-                    signal.get("signal") == direction
-                    and recent["trades"] >= min_trades
+                history_passed = (
+                    recent["trades"] >= min_trades
                     and recent["profit_factor"] >= min_pf
                     and recent["net_pct"] > min_net_pct
+                )
+                standard_passed = (
+                    signal.get("signal") == direction
+                    and history_passed
                     and expected_profit_pct >= float(config.get("min_expected_profit_pct", 0.35))
                     and cost_ratio >= float(config.get("min_expected_profit_cost_ratio", 3.0))
                 )
+                current_score = _current_signal_score(signal, direction, cost_ratio, recent)
                 score = 0.0
                 score += min(float(tickers.get(symbol, {}).get("quoteVolume", 0)) / 1_000_000_000, 5) * 0.5
                 score += recent["net_pct"] * 0.15
                 score += min(recent["profit_factor"], 10) * 2
                 score += recent["win_rate"] * 0.05
-                score += 10 if signal.get("signal") == direction else 0
-                score += 3 if passed else 0
+                score += current_score
+                score += 3 if standard_passed else 0
                 score -= 1.5 if direction == "SHORT" else 0
+                entry_type = "standard" if standard_passed else "watch"
+                passed = standard_passed and score >= float(config.get("standard_min_score", 85.0))
+                decision_reason = "标准突破信号通过" if passed else "等待触发"
+                preemptive_enabled = mode["mode"] == "tournament" and config.get("preemptive_entries_enabled", True)
+                if not passed and preemptive_enabled and history_passed and signal.get("signal") == "WAIT":
+                    distance_pct = float(signal.get("distance_to_trigger_pct") or 999)
+                    near_trigger = (
+                        signal.get("trend") is True
+                        and signal.get("volatility_ok") is True
+                        and distance_pct <= float(config.get("preemptive_max_distance_pct", 0.35))
+                    )
+                    strong_momentum = (
+                        signal.get("trend") is True
+                        and signal.get("volatility_ok") is True
+                        and float(signal.get("candle_move_pct") or 0) >= max(0.12, distance_pct)
+                    )
+                    min_preempt_score = float(config.get("preemptive_min_score", 72.0))
+                    if score >= min_preempt_score and (near_trigger or strong_momentum):
+                        entry_type = "momentum" if strong_momentum and not near_trigger else "preemptive"
+                        risk_multiplier = (
+                            float(config.get("short_preemptive_risk_multiplier", 0.33))
+                            if direction == "SHORT"
+                            else float(config.get("preemptive_risk_multiplier", 0.47))
+                        )
+                        signal = _promote_wait_signal(signal, direction, entry_type, risk_multiplier)
+                        expected_profit_pct = float(signal.get("expected_profit_pct") or 0)
+                        cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
+                        risk_pct *= risk_multiplier
+                        passed = (
+                            expected_profit_pct >= float(config.get("min_expected_profit_pct", 0.35))
+                            and cost_ratio >= max(1.5, float(config.get("min_expected_profit_cost_ratio", 3.0)) * 0.65)
+                        )
+                        decision_reason = "高分候选接近触发，允许小仓抢跑" if entry_type == "preemptive" else "短线强动量，允许小仓试探"
+                    else:
+                        misses = []
+                        if not history_passed:
+                            misses.append("历史回测不足")
+                        if not signal.get("trend"):
+                            misses.append("趋势未成立")
+                        if not signal.get("volatility_ok"):
+                            misses.append("波动不足")
+                        if distance_pct > float(config.get("preemptive_max_distance_pct", 0.35)):
+                            misses.append("距离触发价偏远")
+                        if score < min_preempt_score:
+                            misses.append("综合评分不足")
+                        decision_reason = "、".join(misses) or "等待触发"
                 candidates.append(
                     {
                         "symbol": symbol,
@@ -368,6 +479,10 @@ def scan_growth_candidates(
                         "score": round(score, 4),
                         "passed": passed,
                         "reason": "passed" if passed else "filters_not_passed",
+                        "decision_reason": decision_reason,
+                        "entry_type": entry_type,
+                        "entry_type_label": signal.get("entry_type_label", "标准信号" if entry_type == "standard" else "观察"),
+                        "current_score": round(current_score, 2),
                         "signal": signal,
                         "recent": recent,
                         "ticker": {

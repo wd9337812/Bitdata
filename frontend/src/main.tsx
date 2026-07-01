@@ -26,18 +26,8 @@ import {
 import { api, fmt, modeLabel, stageLabel, statusLabel } from "./lib/api";
 import "./styles.css";
 
-type StatusData = {
-  config: Record<string, any>;
-  state: Record<string, any>;
-  account: Record<string, any>;
-};
-
-type DecisionsData = {
-  growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any };
-  stage2_grid: any[];
-  auth_error?: string;
-};
-
+type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any> };
+type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any }; stage2_grid: any[]; auth_error?: string };
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
@@ -59,9 +49,9 @@ const intervalOptions = [
 ];
 
 const modeOptions = [
-  ["conservative", "稳健：4小时，信号少，回撤控制优先"],
+  ["conservative", "稳健：4小时，信号少，控制回撤优先"],
   ["balanced", "均衡：1小时，信号和稳定性折中"],
-  ["attack", "进攻：15分钟，小资金冲刺模式"],
+  ["attack", "进攻：15分钟，小资金进攻模式"],
   ["tournament", "锦标赛：5分钟，高风险机会模式"],
 ];
 
@@ -79,7 +69,7 @@ const defaultSymbolOptions = [
   "AAVEUSDT",
   "LABUSDT",
   "ENAUSDT",
-  "WIFUSDT",
+  "WLDUSDT",
   "PEPEUSDT",
 ];
 
@@ -106,16 +96,12 @@ function useData() {
       setSnapshots(snapshotRes.snapshots || []);
       setLogs(logsRes.events || []);
       setHealth(healthRes);
-      if (!light) {
-        setDecisions(await api<DecisionsData>("/api/decisions"));
-      }
+      if (!light) setDecisions(await api<DecisionsData>("/api/decisions"));
       setError("");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
-      if (throwOnError) {
-        throw new Error(message);
-      }
+      if (throwOnError) throw new Error(message);
     }
   }
 
@@ -149,6 +135,7 @@ function App() {
   const data = useData();
   const status = data.status;
   const candidates = data.decisions?.growth_scan?.candidates || [];
+  const best = data.decisions?.growth_scan?.best || candidates[0];
   const mode = data.decisions?.growth_scan?.mode || {};
   const account = status?.account || {};
   const state = status?.state || {};
@@ -203,6 +190,7 @@ function App() {
       setActionNotice("配置已保存。");
       await data.refresh();
     } catch (err) {
+      setActionNotice("");
       setActionError(err instanceof Error ? err.message : String(err));
     }
   }
@@ -271,13 +259,14 @@ function App() {
         {active === "overview" && (
           <section className="stack">
             <div className="metrics">
-              <MetricCard title="账户权益" value={`${fmt(account.equity, 4)} U`} sub={account.equity ? "来自 Binance 账户" : "未配置 API"} />
+              <MetricCard title="账户权益" value={`${fmt(account.equity, 4)} U`} sub={account.equity ? "来自 Binance 合约账户" : "未配置 API"} />
               <MetricCard title="可用余额" value={`${fmt(account.available_balance, 4)} U`} />
               <MetricCard title="未实现盈亏" value={`${fmt(account.unrealized_pnl, 4)} U`} tone={Number(account.unrealized_pnl) >= 0 ? "positive" : "negative"} />
               <MetricCard title="机器人状态" value={statusLabel[state.bot_status] || "-"} sub={stageLabel[state.stage] || "-"} />
               <MetricCard title="交易模式" value={config.dry_run ? "模拟交易" : "实盘模式"} tone={config.dry_run ? "" : "negative"} />
               <MetricCard title="Binance API" value={data.health?.ok ? "正常" : "异常"} sub={data.health?.ok ? "公开接口可访问" : data.health?.error} />
             </div>
+            <SignalExplain best={best} />
             <div className="grid-two">
               <div className="panel">
                 <h2>最高分候选</h2>
@@ -296,7 +285,7 @@ function App() {
             <div className="panel-head">
               <div>
                 <h2>候选币排名</h2>
-                <p>系统只会执行最高分且通过过滤的信号。当前回测窗口：{mode.recent_days || "-"} 天。</p>
+                <p>系统会优先执行最高分且通过过滤的信号。当前回测窗口：{mode.recent_days || "-"} 天。</p>
               </div>
             </div>
             <CandidateTable rows={candidates} />
@@ -336,6 +325,27 @@ function App() {
   );
 }
 
+function SignalExplain({ best }: { best?: any }) {
+  if (!best) {
+    return <div className="panel"><h2>当前策略解释</h2><p>还没有扫描结果。</p></div>;
+  }
+  const signal = best.signal || {};
+  return (
+    <div className="panel signal-explain">
+      <h2>当前策略解释</h2>
+      <div className="explain-grid">
+        <div><span>最高候选</span><strong>{best.symbol || "-"}</strong></div>
+        <div><span>方向</span><strong>{signalLabel(best.direction || signal.signal)}</strong></div>
+        <div><span>信号类型</span><strong>{best.entry_type_label || signal.entry_type_label || "观察"}</strong></div>
+        <div><span>综合评分</span><strong>{fmt(best.score, 2)}</strong></div>
+        <div><span>离触发价</span><strong>{fmt(signal.distance_to_trigger_pct, 3)}%</strong></div>
+        <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
+      </div>
+      <p>{best.decision_reason || signal.reason || best.reason || "等待下一轮扫描。"}</p>
+    </div>
+  );
+}
+
 function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: boolean }) {
   return (
     <div className="table-wrap">
@@ -344,46 +354,39 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
           <tr>
             <th>状态</th>
             <th>币种</th>
-            <th>模式</th>
-            {!compact && <th>策略</th>}
+            <th>方向</th>
+            <th>信号类型</th>
             <th>评分</th>
-            <th>信号</th>
+            {!compact && <th>不开仓原因</th>}
+            {!compact && <th>距离触发</th>}
             {!compact && <th>胜率</th>}
             {!compact && <th>净收益</th>}
             <th>PF</th>
             <th>成本比</th>
-            <th>成交额</th>
+            <th>风险%</th>
           </tr>
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={`${row.symbol}-${index}`}>
+            <tr key={`${row.symbol}-${row.direction}-${index}`}>
               <td><span className={row.passed ? "pill ok" : "pill"}>{row.passed ? "通过" : "等待"}</span></td>
               <td className="symbol">{row.symbol}</td>
-              <td>{modeLabel[row.mode] || row.mode}</td>
-              {!compact && <td>{strategyName(row.strategy)}</td>}
+              <td>{signalLabel(row.direction || row.signal?.signal)}</td>
+              <td>{row.entry_type_label || row.signal?.entry_type_label || "-"}</td>
               <td>{fmt(row.score, 2)}</td>
-              <td>{signalLabel(row.signal?.signal || row.direction)}</td>
+              {!compact && <td className="reason-cell">{row.decision_reason || row.reason}</td>}
+              {!compact && <td>{fmt(row.signal?.distance_to_trigger_pct, 3)}%</td>}
               {!compact && <td>{fmt(row.recent?.win_rate, 1)}%</td>}
               {!compact && <td>{fmt(row.recent?.net_pct, 2)}%</td>}
               <td>{fmt(row.recent?.profit_factor, 2)}</td>
               <td>{fmt(row.cost_ratio, 2)}</td>
-              <td>{fmt(row.ticker?.volume_usdt_b, 3)}B</td>
+              <td>{fmt(row.risk_pct, 2)}%</td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
   );
-}
-
-function strategyName(value: string) {
-  const names: Record<string, string> = {
-    default: "趋势回踩",
-    attack: "进攻动量",
-    breakout: "突破",
-  };
-  return names[value] || value || "-";
 }
 
 function signalLabel(value: string) {
@@ -417,12 +420,12 @@ function RiskPanel({ config, state, account }: { config: any; state: any; accoun
   return (
     <section className="stack">
       <div className="metrics">
-        <MetricCard title="单笔风险" value={`${fmt(config.risk_per_trade_pct)}% / ${fmt(config.attack_risk_per_trade_pct)}% / ${fmt(config.tournament_risk_per_trade_pct)}%`} sub="稳健 / 进攻 / 锦标赛" />
+        <MetricCard title="标准风险" value={`${fmt(config.risk_per_trade_pct)}% / ${fmt(config.attack_risk_per_trade_pct)}% / ${fmt(config.tournament_risk_per_trade_pct)}%`} sub="稳健 / 进攻 / 锦标赛" />
+        <MetricCard title="抢跑风险折扣" value={`${fmt(config.preemptive_risk_multiplier, 2)} / ${fmt(config.short_preemptive_risk_multiplier, 2)}`} sub="做多 / 做空" />
         <MetricCard title="每日亏损上限" value={`${fmt(config.daily_loss_limit_pct)}% / ${fmt(config.attack_daily_loss_limit_pct)}% / ${fmt(config.tournament_daily_loss_limit_pct)}%`} />
         <MetricCard title="最大回撤" value={`${fmt(config.max_drawdown_pct)}%`} />
-        <MetricCard title="连续亏损" value={String(state.consecutive_losses ?? 0)} sub={`上限 ${config.max_consecutive_losses}`} />
         <MetricCard title="最大持仓" value={String(config.max_open_positions)} />
-        <MetricCard title="锦标赛停止权益" value={`${fmt(config.tournament_stop_equity)} U`} />
+        <MetricCard title="同币冷却" value={`${fmt(config.symbol_cooldown_minutes, 0)} 分钟`} />
       </div>
       <div className="panel">
         <h2>当前持仓</h2>
@@ -433,13 +436,8 @@ function RiskPanel({ config, state, account }: { config: any; state: any; accoun
 }
 
 function normalizeSymbols(value: any): string[] {
-  if (Array.isArray(value)) {
-    return value.map(String).map((item) => item.trim().toUpperCase()).filter(Boolean);
-  }
-  return String(value || "")
-    .split(",")
-    .map((item) => item.trim().toUpperCase())
-    .filter(Boolean);
+  if (Array.isArray(value)) return value.map(String).map((item) => item.trim().toUpperCase()).filter(Boolean);
+  return String(value || "").split(",").map((item) => item.trim().toUpperCase()).filter(Boolean);
 }
 
 function SymbolMultiPicker({ value, onChange }: { value: any; onChange: (symbols: string[]) => void }) {
@@ -449,10 +447,7 @@ function SymbolMultiPicker({ value, onChange }: { value: any; onChange: (symbols
   const [custom, setCustom] = useState("");
 
   function toggle(symbol: string) {
-    const next = selectedSet.has(symbol)
-      ? selected.filter((item) => item !== symbol)
-      : [...selected, symbol];
-    onChange(next);
+    onChange(selectedSet.has(symbol) ? selected.filter((item) => item !== symbol) : [...selected, symbol]);
   }
 
   function addCustom() {
@@ -466,7 +461,7 @@ function SymbolMultiPicker({ value, onChange }: { value: any; onChange: (symbols
     <div className="field-wide">
       <div className="field-title">
         <span>手动候选币</span>
-        <small>多选框选择，系统会在这些币里优先扫描；也可以开启自动发现。</small>
+        <small>多选框选择，系统会优先扫描这些币；也可以开启自动发现。</small>
       </div>
       <div className="symbol-picker">
         {options.map((symbol) => (
@@ -519,16 +514,17 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
       <input type="checkbox" checked={Boolean(form[key])} onChange={(event) => update(key, event.target.checked)} />
     </label>
   );
+
   return (
     <section className="stack">
       <div className="panel">
         <h2>基础配置</h2>
         <div className="form-grid">
-          {select("growth_mode", "增长模式", modeOptions, "新手建议先用均衡或模拟观察")}
+          {select("growth_mode", "增长模式", modeOptions, "50U 阶段建议锦标赛；系统也会按权益自动切换。")}
           <SymbolMultiPicker value={form.stage1_symbols} onChange={(symbols) => update("stage1_symbols", symbols)} />
-          {number("max_scan_symbols", "最大扫描币种", "2GB VPS 建议 10-15")}
-          {number("min_24h_volume_usdt", "最低 24h 成交额", "过滤流动性太差的币")}
-          {toggle("auto_discover_symbols", "自动发现加密币", "只纳入 Binance 永续币")}
+          {number("max_scan_symbols", "最大扫描币种", "2GB VPS 建议 10-20")}
+          {number("min_24h_volume_usdt", "最低 24h 成交额", "过滤流动性差的币")}
+          {toggle("auto_discover_symbols", "自动发现加密币", "只纳入 Binance U 本位永续币")}
           {toggle("auto_risk_by_equity", "按权益自动切换风险", "50U 自动锦标赛，100U 后进攻")}
           {toggle("dry_run", "模拟交易", "开启时不会真实下单")}
           {toggle("live_trading_enabled", "允许实盘交易", "还需要确认短语才会实盘")}
@@ -541,17 +537,23 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {select("balanced_interval", "均衡周期", intervalOptions)}
           {select("attack_interval", "进攻周期", intervalOptions)}
           {select("tournament_interval", "锦标赛周期", intervalOptions)}
-          {number("risk_per_trade_pct", "稳健风险%")}
-          {number("attack_risk_per_trade_pct", "进攻风险%")}
-          {number("tournament_risk_per_trade_pct", "锦标赛风险%")}
+          {number("tournament_loop_seconds", "锦标赛扫描秒数", "默认 30 秒")}
+          {number("attack_loop_seconds", "进攻扫描秒数", "默认 60 秒")}
+          {number("balanced_loop_seconds", "均衡扫描秒数", "默认 120 秒")}
+          {number("tournament_risk_per_trade_pct", "锦标赛标准风险%")}
+          {toggle("preemptive_entries_enabled", "开启抢跑试探", "高分候选接近触发时允许小仓提前进场")}
+          {number("preemptive_min_score", "抢跑最低评分", "默认 72")}
+          {number("standard_min_score", "标准信号最低评分", "默认 85")}
+          {number("preemptive_risk_multiplier", "做多抢跑风险折扣", "默认 0.47")}
+          {number("short_preemptive_risk_multiplier", "做空抢跑风险折扣", "默认 0.33")}
+          {number("preemptive_max_distance_pct", "抢跑最大触发距离%", "默认 0.35")}
+          {number("symbol_cooldown_minutes", "同币开仓冷却分钟", "默认 15")}
           {number("estimated_slippage_pct", "估算滑点%")}
           {number("min_expected_profit_cost_ratio", "最低收益/成本比")}
-          {number("min_profit_factor", "最低 PF")}
-          {toggle("allow_short", "自动评估做空", "开启后系统会同时回测做多和做空，只执行数据评分最高且通过风控的一边")}
-          {number("short_risk_multiplier", "做空风险折扣", "默认 0.5，表示做空单笔风险为当前模式的一半")}
-          {number("short_min_recent_trades", "做空最少样本", "默认 5，样本太少不允许实盘做空")}
-          {number("short_min_profit_factor", "做空最低 PF", "默认 1.3，比做多更严格")}
-          {number("short_min_net_pct", "做空最低净收益%", "默认 1%，扣除手续费后仍需有利润")}
+          {toggle("allow_short", "自动评估做空", "做空风险会自动打折，并使用更严格回测门槛")}
+          {number("short_min_recent_trades", "做空最少样本")}
+          {number("short_min_profit_factor", "做空最低 PF")}
+          {number("short_min_net_pct", "做空最低净收益%")}
         </div>
       </details>
       <details className="panel danger-zone">
@@ -559,11 +561,11 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
         <div className="form-grid">
           <div className="field-wide account-warning">
             <strong>Binance API 配置</strong>
-            <small>只需要开启“允许读取”和“U 本位合约交易/合约交易”。不要开启提现、万向划转、现货杠杆、预测交易。建议绑定 VPS IP：203.248.94.70。保存后页面只显示打码 Key，Secret 不会明文回显。</small>
+            <small>只需要开启读取和 U 本位合约交易。不要开启提现、万向划转、现货杠杆、预测交易。建议绑定 VPS IP：203.248.94.70。</small>
           </div>
-          <div className="field-wide credential-field">{text("api_key", "Binance API Key", "保存后会自动打码显示；如果看到打码值且不想修改，保持原样即可")}</div>
-          <div className="field-wide credential-field">{password("api_secret", "Binance API Secret", "第一次配置时填写完整 Secret；已经保存过时留空表示不修改")}</div>
-          <div className="field-wide credential-field">{text("binance_base_url", "Binance 合约接口地址", "默认 https://fapi.binance.com，一般不用改")}</div>
+          <div className="field-wide credential-field">{text("api_key", "Binance API Key", "保存后自动打码显示；不想修改则保持原样。")}</div>
+          <div className="field-wide credential-field">{password("api_secret", "Binance API Secret", "已保存过时留空表示不修改。")}</div>
+          <div className="field-wide credential-field">{text("binance_base_url", "Binance 合约接口地址", "默认 https://fapi.binance.com")}</div>
           {text("live_trading_confirmation", "实盘确认短语", "必须填写 ENABLE_LIVE_TRADING")}
           {number("max_drawdown_pct", "最大回撤%")}
           {number("tournament_stop_equity", "锦标赛停止权益")}

@@ -7,7 +7,7 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
       const data = JSON.parse(text);
       message = data.detail || data.message || data.error || message;
     } catch {
-      // Keep the raw response text when the server did not return JSON.
+      // 非 JSON 响应时保留原始错误文本。
     }
     throw new Error(message);
   }

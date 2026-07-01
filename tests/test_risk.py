@@ -1,4 +1,5 @@
 from app.risk import assess_new_position, live_trading_allowed, position_size_from_risk
+from datetime import datetime, timedelta, timezone
 
 
 def base_config():
@@ -34,3 +35,15 @@ def test_risk_blocks_paused_bot():
 
 def test_position_size_from_fixed_risk():
     assert position_size_from_risk(100, 1, 10, 9) == 1
+
+
+def test_risk_blocks_symbol_cooldown():
+    state = {
+        "bot_status": "running",
+        "symbol_cooldowns": {
+            "SOLUSDT": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
+        },
+    }
+    decision = assess_new_position(base_config(), state, 50, "SOLUSDT", [])
+    assert decision.allowed is False
+    assert decision.reason == "symbol_cooldown_active"

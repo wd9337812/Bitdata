@@ -148,11 +148,27 @@ button:hover { transform: translateY(-1px); }
 .metric-card.negative strong, .negative-text { color: #fb7185; }
 
 .panel-head { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.signal-explain p { margin-top: 14px; color: #c7dff7; }
+.explain-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.explain-grid div {
+  border: 1px solid rgba(56, 189, 248, 0.14);
+  border-radius: 10px;
+  padding: 11px;
+  background: rgba(2, 6, 23, 0.38);
+}
+.explain-grid span { display: block; color: #7aa6c7; font-size: 12px; }
+.explain-grid strong { display: block; margin-top: 5px; color: #f8fdff; }
 .table-wrap { overflow-x: auto; margin-top: 12px; }
 table { width: 100%; border-collapse: collapse; min-width: 720px; }
 th, td { padding: 12px 9px; border-bottom: 1px solid rgba(148, 163, 184, 0.12); text-align: left; white-space: nowrap; }
 th { color: #7aa6c7; font-size: 12px; font-weight: 700; }
 td { color: #d8e8fb; font-size: 14px; }
+.reason-cell { max-width: 280px; white-space: normal; color: #b8c9df; }
 .symbol { color: #67e8f9; font-weight: 800; }
 .pill {
   display: inline-flex;

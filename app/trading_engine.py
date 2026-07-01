@@ -57,7 +57,11 @@ def build_stage1_decision(
             "margin_pct": scan_candidate.get("margin_pct", active_mode["margin_pct"]),
         }
     direction = str((scan_candidate or {}).get("direction", "LONG")).upper()
-    signal = latest_strategy_signal(symbol, bars, active_mode["strategy"], StrategyParams(), direction=direction)
+    candidate_signal = (scan_candidate or {}).get("signal") or {}
+    if candidate_signal.get("signal") == direction and candidate_signal.get("stop") and candidate_signal.get("take_profit"):
+        signal = candidate_signal
+    else:
+        signal = latest_strategy_signal(symbol, bars, active_mode["strategy"], StrategyParams(), direction=direction)
     equity = account_summary.get("equity")
     if signal.get("signal") not in {"LONG", "SHORT"} or signal.get("signal") != direction:
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "no_signal"}}
@@ -99,6 +103,8 @@ def build_stage1_decision(
         "estimated_notional": quantity * float(signal["last_price"]),
         "mode": active_mode["mode"],
         "strategy": active_mode["strategy"],
+        "entry_type": (scan_candidate or {}).get("entry_type", signal.get("entry_type", "standard")),
+        "decision_reason": (scan_candidate or {}).get("decision_reason"),
         "risk_pct": active_mode["risk_pct"],
         "leverage": active_mode["leverage"],
     }

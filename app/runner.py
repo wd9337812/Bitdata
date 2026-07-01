@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
@@ -17,6 +18,17 @@ from app.trading_engine import (
 )
 from app.state_store import load_state, save_state
 from app.telemetry import record_equity_snapshot, record_event, record_strategy_run
+
+
+def loop_seconds_for(config: dict, mode: str | None) -> int:
+    mode = mode or "balanced"
+    return int(config.get(f"{mode}_loop_seconds", os.getenv("BOT_LOOP_SECONDS", "300")))
+
+
+def set_symbol_cooldown(state: dict, symbol: str, minutes: float) -> None:
+    cooldowns = dict(state.get("symbol_cooldowns") or {})
+    cooldowns[symbol.upper()] = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+    save_state({"symbol_cooldowns": cooldowns})
 
 
 def synthetic_account(equity: float = 50.0) -> dict:
@@ -40,7 +52,7 @@ def run_once() -> dict:
     )
     if state.get("bot_status") != "running":
         record_event("info", "runner", "机器人暂停，跳过本轮扫描")
-        return {"status": "paused"}
+        return {"status": "paused", "loop_seconds": loop_seconds_for(config, config.get("growth_mode"))}
 
     if config.get("dry_run", True):
         account = synthetic_account()
@@ -74,10 +86,12 @@ def run_once() -> dict:
             )
         record_equity_snapshot(account, state, mode="grid", action="grid_checked", reason="grid_loop")
         record_event("info", "grid", "完成网格检查", {"results": results})
-        return {"status": "grid_checked", "results": results}
+        return {"status": "grid_checked", "results": results, "loop_seconds": int(config.get("grid_loop_seconds", 300))}
 
     decision = build_best_growth_decision(client, config, state, account)
     result = execute_stage1_market_order(client, decision, config)
+    if result.get("mode") == "live" and decision.get("symbol"):
+        set_symbol_cooldown(state, decision["symbol"], float(config.get("symbol_cooldown_minutes", 15)))
     record_strategy_run(state, account, decision, result)
     scan = decision.get("scan") or {}
     best = decision.get("candidate") or scan.get("best") or {}
@@ -90,7 +104,12 @@ def run_once() -> dict:
         reason=decision.get("reason") or (decision.get("risk") or {}).get("reason"),
     )
     record_event("info", "growth", "完成增长模式扫描", {"decision": decision, "result": result})
-    return {"status": "growth_checked", "decision": decision, "results": [result]}
+    return {
+        "status": "growth_checked",
+        "decision": decision,
+        "results": [result],
+        "loop_seconds": loop_seconds_for(config, (scan.get("mode") or {}).get("mode")),
+    }
 
 
 def main() -> None:
@@ -98,7 +117,9 @@ def main() -> None:
     interval_seconds = int(os.getenv("BOT_LOOP_SECONDS", "300"))
     while True:
         try:
-            print(run_once(), flush=True)
+            result = run_once()
+            interval_seconds = int(result.get("loop_seconds") or interval_seconds)
+            print(result, flush=True)
         except Exception as exc:
             save_state({"last_error": str(exc), "bot_status": "paused"})
             record_event("error", "runner", str(exc))
