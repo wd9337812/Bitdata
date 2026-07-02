@@ -9,7 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+import requests
 import websockets
+
+from app.binance_rate import after_response, before_request, estimate_weight
 
 
 _THREAD: threading.Thread | None = None
@@ -136,14 +139,55 @@ def overlay_stream_kline(rows: list[list[Any]], symbol: str, interval: str) -> l
     return result
 
 
+def _append_symbol(symbols: list[str], symbol: str) -> None:
+    upper = str(symbol).upper().strip()
+    if upper.endswith("USDT") and upper not in symbols:
+        symbols.append(upper)
+
+
+def _discover_stream_symbols(config: dict[str, Any], limit: int) -> list[str]:
+    base_url = str(config.get("binance_base_url", "https://fapi.binance.com")).rstrip("/")
+    min_volume = float(config.get("min_24h_volume_usdt", 30_000_000))
+    try:
+        before_request(estimate_weight("/fapi/v1/exchangeInfo"))
+        exchange = requests.get(f"{base_url}/fapi/v1/exchangeInfo", timeout=10)
+        after_response(exchange.headers)
+        exchange.raise_for_status()
+        before_request(estimate_weight("/fapi/v1/ticker/24hr"))
+        tickers_response = requests.get(f"{base_url}/fapi/v1/ticker/24hr", timeout=10)
+        after_response(tickers_response.headers)
+        tickers_response.raise_for_status()
+        coin_symbols = {
+            item["symbol"]
+            for item in exchange.json().get("symbols", [])
+            if item.get("contractType") == "PERPETUAL"
+            and item.get("underlyingType") == "COIN"
+            and item.get("status") == "TRADING"
+            and item.get("quoteAsset") == "USDT"
+        }
+        ranked = [
+            (item["symbol"], float(item.get("quoteVolume", 0)))
+            for item in tickers_response.json()
+            if item.get("symbol") in coin_symbols and float(item.get("quoteVolume", 0)) >= min_volume
+        ]
+        ranked.sort(key=lambda row: row[1], reverse=True)
+        return [symbol for symbol, _ in ranked[:limit]]
+    except Exception:
+        return []
+
+
 def _symbols_from_config(config: dict[str, Any]) -> list[str]:
     symbols: list[str] = []
     for key in ("stage1_symbols", "symbols", "stage2_symbols"):
         for symbol in config.get(key, []) or []:
-            upper = str(symbol).upper().strip()
-            if upper.endswith("USDT") and upper not in symbols:
-                symbols.append(upper)
-    return symbols[: int(config.get("max_observation_symbols", 20))]
+            _append_symbol(symbols, symbol)
+    limit = int(config.get("market_stream_max_symbols", config.get("max_scan_symbols", 30)))
+    if config.get("market_stream_auto_discover", True):
+        for symbol in _discover_stream_symbols(config, limit):
+            _append_symbol(symbols, symbol)
+            if len(symbols) >= limit:
+                break
+    return symbols[:limit]
 
 
 def _combined_url(path: str, streams: list[str]) -> str:

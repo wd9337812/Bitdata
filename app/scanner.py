@@ -859,7 +859,7 @@ def scan_growth_candidates(
                     and depth_checks < max_depth_checks
                     and (
                         signal.get("signal") == direction
-                        or current_score >= float(config.get("preemptive_min_score", 72.0)) * 0.75
+                        or current_score >= float(config.get("depth_check_min_current_score", 38.0))
                     )
                 )
                 if should_check_depth and symbol not in depth_by_symbol:

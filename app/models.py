@@ -8,12 +8,15 @@ class TradingConfig(BaseModel):
     stage1_symbols: list[str] = Field(default_factory=lambda: ["SOLUSDT", "LABUSDT", "SUIUSDT", "AAVEUSDT", "WLDUSDT"])
     stage2_symbols: list[str] = Field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
     auto_discover_symbols: bool = True
-    max_scan_symbols: int = Field(default=20, ge=1, le=120)
+    max_scan_symbols: int = Field(default=30, ge=1, le=120)
     min_24h_volume_usdt: float = Field(default=30_000_000, ge=0)
-    max_observation_symbols: int = Field(default=20, ge=1, le=150)
-    max_trade_pool_symbols: int = Field(default=10, ge=1, le=50)
+    max_observation_symbols: int = Field(default=35, ge=1, le=150)
+    max_trade_pool_symbols: int = Field(default=15, ge=1, le=50)
     depth_check_top_symbols: int = Field(default=8, ge=0, le=50)
+    depth_check_min_current_score: float = Field(default=38.0, ge=0, le=200)
     market_stream_enabled: bool = True
+    market_stream_max_symbols: int = Field(default=30, ge=1, le=200)
+    market_stream_auto_discover: bool = True
     symbol_trade_score: float = Field(default=75.0, ge=0, le=100)
     symbol_small_trade_score: float = Field(default=65.0, ge=0, le=100)
     symbol_observe_score: float = Field(default=50.0, ge=0, le=100)
