@@ -8,6 +8,15 @@ from urllib.parse import urlencode
 
 import requests
 
+from app.binance_rate import (
+    after_response,
+    before_request,
+    cache_get,
+    cache_set,
+    estimate_weight,
+    register_rate_error,
+)
+
 INTERVAL_MS = {
     "1m": 60_000,
     "3m": 180_000,
@@ -38,7 +47,12 @@ class BinanceFuturesClient:
         self.timeout = timeout
 
     def public_get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        weight = estimate_weight(path, params, signed=False)
+        before_request(weight)
         response = requests.get(self.base_url + path, params=params or {}, timeout=self.timeout)
+        after_response(response.headers)
+        if response.status_code in {418, 429}:
+            raise register_rate_error(response.status_code, response.text, response.headers.get("Retry-After"))
         if not response.ok:
             raise RuntimeError(f"Binance API {response.status_code}: {response.text}")
         return response.json()
@@ -47,6 +61,8 @@ class BinanceFuturesClient:
         if not self.api_key or not self.api_secret:
             raise ValueError("Binance API key and secret are required for signed requests.")
         payload = dict(params or {})
+        weight = estimate_weight(path, payload, signed=True)
+        before_request(weight)
         payload.setdefault("recvWindow", 10_000)
         payload["timestamp"] = int(time.time() * 1000)
         query = urlencode(payload, doseq=True)
@@ -60,12 +76,21 @@ class BinanceFuturesClient:
             headers=headers,
             timeout=self.timeout,
         )
+        after_response(response.headers)
+        if response.status_code in {418, 429}:
+            raise register_rate_error(response.status_code, response.text, response.headers.get("Retry-After"))
         if not response.ok:
             raise RuntimeError(f"Binance signed API {response.status_code}: {response.text}")
         return response.json()
 
     def exchange_info(self) -> Any:
-        return self.public_get("/fapi/v1/exchangeInfo")
+        key = "exchange_info"
+        cached = cache_get(key, 3600)
+        if cached:
+            return cached.value
+        data = self.public_get("/fapi/v1/exchangeInfo")
+        cache_set(key, data)
+        return data
 
     def server_time(self) -> Any:
         return self.public_get("/fapi/v1/time")
@@ -76,9 +101,19 @@ class BinanceFuturesClient:
         return local_time - server_time
 
     def klines(self, symbol: str, interval: str = "4h", limit: int = 1000) -> list[list[Any]]:
-        return self.public_get("/fapi/v1/klines", {"symbol": symbol.upper(), "interval": interval, "limit": limit})
+        key = f"klines:{symbol.upper()}:{interval}:{limit}"
+        cached = cache_get(key, 20)
+        if cached:
+            return cached.value
+        data = self.public_get("/fapi/v1/klines", {"symbol": symbol.upper(), "interval": interval, "limit": limit})
+        cache_set(key, data)
+        return data
 
     def klines_history(self, symbol: str, interval: str = "4h", days: int = 30, warmup: int = 200) -> list[list[Any]]:
+        key = f"klines_history:{symbol.upper()}:{interval}:{days}:{warmup}"
+        cached = cache_get(key, 60)
+        if cached:
+            return cached.value
         interval_ms = INTERVAL_MS.get(interval)
         if interval_ms is None:
             return self.klines(symbol, interval, 1000)
@@ -103,27 +138,58 @@ class BinanceFuturesClient:
             if len(batch) < batch_limit:
                 break
         dedup = {int(row[0]): row for row in rows}
-        return [dedup[key] for key in sorted(dedup)]
+        data = [dedup[key] for key in sorted(dedup)]
+        cache_set(key, data)
+        return data
 
     def ticker_24h(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
-        data = self.public_get("/fapi/v1/ticker/24hr")
+        key = "ticker_24h:all"
+        cached = cache_get(key, 30)
+        if cached:
+            data = cached.value
+        else:
+            data = self.public_get("/fapi/v1/ticker/24hr")
+            cache_set(key, data)
         if symbols:
             allowed = {symbol.upper() for symbol in symbols}
             data = [item for item in data if item["symbol"] in allowed]
         return data
 
     def premium_index(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
-        data = self.public_get("/fapi/v1/premiumIndex")
+        key = "premium_index:all"
+        cached = cache_get(key, 30)
+        if cached:
+            data = cached.value
+        else:
+            data = self.public_get("/fapi/v1/premiumIndex")
+            cache_set(key, data)
         if symbols:
             allowed = {symbol.upper() for symbol in symbols}
             data = [item for item in data if item["symbol"] in allowed]
         return data
 
     def depth(self, symbol: str, limit: int = 5) -> Any:
-        return self.public_get("/fapi/v1/depth", {"symbol": symbol.upper(), "limit": limit})
+        key = f"depth:{symbol.upper()}:{limit}"
+        cached = cache_get(key, 10)
+        if cached:
+            return cached.value
+        data = self.public_get("/fapi/v1/depth", {"symbol": symbol.upper(), "limit": limit})
+        cache_set(key, data)
+        return data
 
     def account(self) -> Any:
-        return self.signed_request("GET", "/fapi/v2/account")
+        key = "account:v2"
+        cached = cache_get(key, 45)
+        if cached:
+            return cached.value
+        data = self.signed_request("GET", "/fapi/v2/account")
+        cache_set(key, data)
+        return data
+
+    def account_live(self) -> Any:
+        data = self.signed_request("GET", "/fapi/v2/account")
+        cache_set("account:v2", data)
+        return data
 
     def position_risk(self) -> Any:
         return self.signed_request("GET", "/fapi/v2/positionRisk")

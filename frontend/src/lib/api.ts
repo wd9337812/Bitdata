@@ -7,7 +7,7 @@ export async function api<T>(path: string, options?: RequestInit): Promise<T> {
       const data = JSON.parse(text);
       message = data.detail || data.message || data.error || message;
     } catch {
-      // 非 JSON 响应时保留原始错误文本。
+      // Keep the raw response text when the server did not return JSON.
     }
     throw new Error(message);
   }
@@ -30,6 +30,7 @@ export const modeLabel: Record<string, string> = {
 
 export const statusLabel: Record<string, string> = {
   running: "运行中",
+  rate_limited: "限流等待中",
   paused: "已暂停",
 };
 

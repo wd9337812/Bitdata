@@ -1,4 +1,5 @@
 from app.binance_client import BinanceFuturesClient
+from app.binance_rate import BinanceRateLimitError
 
 
 class FakeHistoryClient(BinanceFuturesClient):
@@ -28,6 +29,9 @@ def test_signed_request_adds_default_recv_window(monkeypatch):
 
     class FakeResponse:
         ok = True
+        status_code = 200
+        text = "{}"
+        headers = {}
 
         def json(self):
             return {"ok": True}
@@ -46,3 +50,26 @@ def test_signed_request_adds_default_recv_window(monkeypatch):
     assert "timestamp" in captured["params"]
     assert "signature" in captured["params"]
     assert captured["headers"]["X-MBX-APIKEY"] == "key"
+
+
+def test_public_request_registers_rate_limit(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+
+    class FakeResponse:
+        ok = False
+        status_code = 429
+        text = '{"code":-1003,"msg":"Too many requests"}'
+        headers = {"Retry-After": "7"}
+
+        def json(self):
+            return {}
+
+    monkeypatch.setattr("app.binance_client.requests.get", lambda *args, **kwargs: FakeResponse())
+
+    client = BinanceFuturesClient()
+    try:
+        client.public_get("/fapi/v1/time")
+        assert False, "expected BinanceRateLimitError"
+    except BinanceRateLimitError as exc:
+        assert exc.status_code == 429
+        assert exc.retry_after and exc.retry_after >= 6

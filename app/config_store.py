@@ -53,7 +53,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "conservative_loop_seconds": 300,
     "balanced_loop_seconds": 120,
     "attack_loop_seconds": 60,
-    "tournament_loop_seconds": 30,
+    "tournament_loop_seconds": 60,
     "limit": 1000,
     "stage1_target_equity": 10000.0,
     "stage2_activation": "manual",

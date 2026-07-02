@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 from app.binance_client import BinanceFuturesClient
+from app.binance_rate import BinanceRateLimitError, rate_status
 from app.config_store import load_config
 from app.trading_engine import (
     build_best_growth_decision,
@@ -122,6 +123,17 @@ def main() -> None:
     interval_seconds = int(os.getenv("BOT_LOOP_SECONDS", "300"))
     while True:
         try:
+            state = load_state()
+            rate = rate_status()
+            if rate.get("cooldown_active"):
+                wait = int(rate.get("cooldown_remaining_seconds") or interval_seconds)
+                save_state({"bot_status": "rate_limited", "last_error": rate.get("last_error", "Binance REST 限流等待中")})
+                record_event("warning", "binance_rate_limit", "Binance REST 限流等待中", rate)
+                print({"status": "rate_limited", "wait_seconds": wait, "rate": rate}, flush=True)
+                time.sleep(max(5, min(wait, 300)))
+                continue
+            if state.get("bot_status") == "rate_limited":
+                save_state({"bot_status": "running", "last_error": ""})
             result = run_once()
             interval_seconds = int(result.get("loop_seconds") or interval_seconds)
             print(result, flush=True)
@@ -130,6 +142,12 @@ def main() -> None:
                 save_state({"last_error": str(exc)})
                 record_event("warning", "runner_time_sync", str(exc))
                 print({"status": "time_sync_retry", "error": str(exc)}, flush=True)
+            elif isinstance(exc, BinanceRateLimitError):
+                wait = int(exc.retry_after or 600)
+                save_state({"last_error": str(exc), "bot_status": "rate_limited"})
+                record_event("warning", "binance_rate_limit", str(exc), {"retry_after": wait, "status_code": exc.status_code})
+                print({"status": "rate_limited", "error": str(exc), "wait_seconds": wait}, flush=True)
+                time.sleep(max(5, min(wait, 300)))
             else:
                 save_state({"last_error": str(exc), "bot_status": "paused"})
                 record_event("error", "runner", str(exc))

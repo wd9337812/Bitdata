@@ -35,6 +35,10 @@ class TradingConfig(BaseModel):
     balanced_recent_days: int = Field(default=20, ge=1, le=120)
     attack_recent_days: int = Field(default=10, ge=1, le=60)
     tournament_recent_days: int = Field(default=5, ge=1, le=30)
+    conservative_loop_seconds: int = Field(default=300, ge=10, le=3600)
+    balanced_loop_seconds: int = Field(default=120, ge=10, le=3600)
+    attack_loop_seconds: int = Field(default=60, ge=10, le=3600)
+    tournament_loop_seconds: int = Field(default=60, ge=10, le=3600)
     limit: int = Field(default=1000, ge=100, le=1500)
     stage1_target_equity: float = Field(default=10000.0, gt=0)
     stage2_activation: str = "manual"

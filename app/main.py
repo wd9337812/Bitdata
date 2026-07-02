@@ -17,7 +17,16 @@ from app.config_store import load_config, save_config
 from app.models import BotControlPayload, ExecutePayload, TradingConfig
 from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
-from app.telemetry import heartbeat, list_equity_snapshots, list_events, list_strategy_runs, record_equity_snapshot, record_event
+from app.binance_rate import cache_status, rate_status
+from app.telemetry import (
+    heartbeat,
+    latest_strategy_payload,
+    list_equity_snapshots,
+    list_events,
+    list_strategy_runs,
+    record_equity_snapshot,
+    record_event,
+)
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
@@ -111,15 +120,22 @@ def status() -> dict[str, Any]:
     config = load_config()
     state = load_state()
     account_summary = {"equity": None, "available_balance": None, "unrealized_pnl": None, "positions": []}
-    if config.get("api_key") and config.get("api_secret"):
-        try:
-            account_summary = summarize_account(client_from_config().account())
-            state = sync_stage(config, state, account_summary)
-        except Exception as exc:
-            error = private_api_error(exc)
-            record_event("error", "binance_auth", error)
-            state = save_state({"last_error": error})
-    return {"config": load_config(include_secret=False), "state": state, "account": account_summary}
+    latest_snapshot = list_equity_snapshots(1)
+    if latest_snapshot:
+        snap = latest_snapshot[-1]
+        account_summary = {
+            "equity": snap.get("equity"),
+            "available_balance": snap.get("available_balance"),
+            "unrealized_pnl": snap.get("unrealized_pnl"),
+            "positions": [],
+        }
+    return {
+        "config": load_config(include_secret=False),
+        "state": state,
+        "account": account_summary,
+        "binance_rate": rate_status(),
+        "cache": cache_status(),
+    }
 
 
 @app.get("/api/equity/snapshots", dependencies=[Depends(require_auth)])
@@ -266,45 +282,33 @@ def api_signals() -> dict[str, Any]:
 def api_decisions() -> dict[str, Any]:
     config = load_config()
     state = load_state()
-    client = client_from_config()
     account_summary = {"equity": None, "available_balance": None, "unrealized_pnl": None, "positions": []}
     auth_error = ""
-    if config.get("api_key") and config.get("api_secret"):
-        try:
-            account_summary = summarize_account(client.account())
-            state = sync_stage(config, state, account_summary)
-        except Exception as exc:
-            auth_error = private_api_error(exc)
-            record_event("error", "binance_auth", auth_error)
-            state = save_state({"last_error": auth_error})
-            if config.get("dry_run", True):
-                account_summary = synthetic_account()
-            else:
-                raise HTTPException(status_code=400, detail=auth_error) from exc
-    else:
-        # Dry-run decision preview uses a configurable synthetic 50U account.
-        account_summary = synthetic_account()
-
-    stage1_decisions = []
-    best_growth = build_best_growth_decision(client, config, state, account_summary)
-    if best_growth.get("action") == "WAIT":
-        top_candidates = best_growth.get("scan", {}).get("candidates", [])[:10]
-        stage1_decisions = top_candidates or [best_growth]
-    else:
-        stage1_decisions = [best_growth] + best_growth.get("scan", {}).get("candidates", [])[1:10]
-
-    grid_klines = {
-        symbol.upper(): client.klines(symbol.upper(), config["interval"], int(config["limit"]))
-        for symbol in config.get("stage2_symbols", ["BTCUSDT", "ETHUSDT"])
-    }
-    grid_decisions = build_grid_decisions(config, account_summary, grid_klines)
+    latest = latest_strategy_payload()
+    payload = (latest or {}).get("payload") or {}
+    best_growth = (payload.get("decision") or {}) if payload else {}
+    scan = best_growth.get("scan") or {}
+    if latest:
+        account_summary.update(
+            {
+                "equity": latest.get("equity"),
+                "available_balance": None,
+                "unrealized_pnl": None,
+                "positions": [],
+            }
+        )
+    top_candidates = scan.get("candidates", [])[:10]
+    stage1_decisions = top_candidates or ([best_growth] if best_growth else [])
     return {
         "state": state,
         "account": account_summary,
         "auth_error": auth_error,
         "stage1": stage1_decisions,
-        "growth_scan": best_growth.get("scan"),
-        "stage2_grid": grid_decisions,
+        "growth_scan": scan,
+        "stage2_grid": [],
+        "source": "runner_latest",
+        "latest_run": {key: latest.get(key) for key in ["id", "ts", "action", "symbol", "reason"]} if latest else None,
+        "binance_rate": rate_status(),
     }
 
 

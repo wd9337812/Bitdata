@@ -184,6 +184,19 @@ def list_strategy_runs(limit: int = 200) -> list[dict[str, Any]]:
     return runs
 
 
+def latest_strategy_payload() -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM strategy_runs ORDER BY id DESC LIMIT 1").fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    try:
+        item["payload"] = json.loads(item.get("payload") or "{}")
+    except json.JSONDecodeError:
+        item["payload"] = {}
+    return item
+
+
 def list_events(limit: int = 200, category: str | None = None) -> list[dict[str, Any]]:
     with connect() as conn:
         if category:
