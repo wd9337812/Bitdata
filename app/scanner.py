@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import math
+import time
 from typing import Any
 
 from app.binance_client import BinanceFuturesClient
@@ -352,6 +353,111 @@ def _simulation_quality(backtests: dict[int, dict[str, Any]], config: dict[str, 
         "net_pct": net_pct,
         "windows": backtests,
     }
+
+
+def live_performance_summary(
+    client: BinanceFuturesClient,
+    symbol: str,
+    direction: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    if not config.get("live_performance_boost_enabled", True):
+        return {"enabled": False, "reason": "disabled"}
+    if not getattr(client, "api_key", "") or not getattr(client, "api_secret", ""):
+        return {"enabled": False, "reason": "missing_api"}
+
+    window_ms = int(float(config.get("live_performance_window_hours", 36)) * 3_600_000)
+    cutoff = int(time.time() * 1000) - window_ms
+    try:
+        raw_trades = client.user_trades(symbol, int(config.get("live_performance_trade_limit", 100)))
+    except Exception as exc:
+        return {"enabled": False, "reason": "fetch_failed", "error": str(exc)}
+
+    direction = direction.upper()
+    closing_orders: dict[str, dict[str, Any]] = {}
+    total_commission = 0.0
+    quote_qty = 0.0
+    for trade in raw_trades:
+        if int(trade.get("time", 0)) < cutoff:
+            continue
+        if str(trade.get("positionSide", "")).upper() != direction:
+            continue
+        commission = float(trade.get("commission") or 0)
+        if str(trade.get("commissionAsset", "USDT")).upper() == "USDT":
+            total_commission += commission
+        quote_qty += float(trade.get("quoteQty") or 0)
+        realized = float(trade.get("realizedPnl") or 0)
+        if abs(realized) <= 0:
+            continue
+        order_id = str(trade.get("orderId") or trade.get("id"))
+        item = closing_orders.setdefault(
+            order_id,
+            {"order_id": order_id, "realized_pnl": 0.0, "commission": 0.0, "fills": 0, "time": int(trade.get("time", 0))},
+        )
+        item["realized_pnl"] += realized
+        item["commission"] += commission if str(trade.get("commissionAsset", "USDT")).upper() == "USDT" else 0.0
+        item["fills"] += 1
+        item["time"] = max(int(item["time"]), int(trade.get("time", 0)))
+
+    closed = list(closing_orders.values())
+    for item in closed:
+        item["net_pnl"] = item["realized_pnl"] - item["commission"]
+    wins = [item for item in closed if float(item["net_pnl"]) > 0]
+    gross_profit = sum(float(item["net_pnl"]) for item in closed if float(item["net_pnl"]) > 0)
+    gross_loss = abs(sum(float(item["net_pnl"]) for item in closed if float(item["net_pnl"]) < 0))
+    realized_pnl = sum(float(item["realized_pnl"]) for item in closed)
+    net_pnl = realized_pnl - total_commission
+    profit_factor = gross_profit / gross_loss if gross_loss else (999.0 if gross_profit > 0 else 0.0)
+    closed_trades = len(closed)
+    passed = (
+        closed_trades >= int(config.get("live_performance_min_closed_trades", 2))
+        and net_pnl >= float(config.get("live_performance_min_net_pnl_usdt", 0.5))
+        and profit_factor >= float(config.get("live_performance_min_profit_factor", 1.05))
+    )
+    return {
+        "enabled": True,
+        "passed": passed,
+        "window_hours": float(config.get("live_performance_window_hours", 36)),
+        "closed_trades": closed_trades,
+        "wins": len(wins),
+        "win_rate": len(wins) / closed_trades * 100 if closed_trades else 0.0,
+        "realized_pnl_usdt": realized_pnl,
+        "commission_usdt": total_commission,
+        "net_pnl_usdt": net_pnl,
+        "profit_factor": profit_factor,
+        "quote_qty_usdt": quote_qty,
+    }
+
+
+def _apply_live_performance_quality(
+    quality: dict[str, Any],
+    live: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    if not live.get("passed"):
+        return quality
+    simulation = quality.get("simulation") or {}
+    market = quality.get("market") or {}
+    spread_ok = float(market.get("spread_pct", 999)) <= float(config.get("max_spread_pct", 0.08))
+    depth_ok = float(market.get("depth_notional", 0)) >= float(config.get("live_performance_min_depth_notional_usdt", 1_500))
+    sim_ok = (
+        float(simulation.get("net_pct", 0)) >= float(config.get("live_performance_min_sim_net_pct", 5.0))
+        and float(simulation.get("profit_factor", 0)) >= 1.0
+        and int(simulation.get("trades", 0)) >= 1
+    )
+    if not (spread_ok and depth_ok and sim_ok):
+        return {**quality, "live_performance": {**live, "adjusted": False}}
+
+    adjusted = dict(quality)
+    adjusted["score"] = round(min(100.0, float(adjusted.get("score", 0)) + min(12.0, float(live.get("net_pnl_usdt", 0)) * 3.0)), 2)
+    adjusted["pool"] = "adaptive_live"
+    adjusted["allowed"] = True
+    adjusted["market_passed"] = True
+    adjusted["live_performance"] = {**live, "adjusted": True}
+    components = dict(adjusted.get("components") or {})
+    components["live_performance"] = round(min(12.0, float(live.get("net_pnl_usdt", 0)) * 3.0), 2)
+    adjusted["components"] = components
+    return adjusted
 
 
 def score_symbol_quality(
@@ -760,7 +866,17 @@ def scan_growth_candidates(
                     depth_by_symbol[symbol] = _depth_metrics(client, symbol)
                     depth_checks += 1
                 depth = depth_by_symbol.get(symbol, _unchecked_depth_metrics())
+                should_check_live = (
+                    signal.get("signal") == direction
+                    or current_score >= float(config.get("live_performance_check_min_score", 70.0))
+                )
+                live_perf = (
+                    live_performance_summary(client, symbol, direction, config)
+                    if should_check_live
+                    else {"enabled": False, "reason": "candidate_score_low"}
+                )
                 quality = score_symbol_quality(symbol, bars, ticker, signal, backtests, depth, config)
+                quality = _apply_live_performance_quality(quality, live_perf, config)
                 history_passed = (
                     recent["trades"] >= min_trades
                     and recent["profit_factor"] >= min_pf
@@ -791,6 +907,10 @@ def scan_growth_candidates(
                     entry_type = "small_standard"
                     risk_pct *= float(config.get("small_trade_risk_multiplier", 0.5))
                     decision_reason = "币种质量允许小仓试探"
+                if passed and quality["pool"] == "adaptive_live":
+                    entry_type = "adaptive_live_standard"
+                    risk_pct *= float(config.get("live_performance_risk_multiplier", 0.6))
+                    decision_reason = "recent live performance supports reduced-risk entry"
                 if signal.get("signal") == direction and not quality["allowed"]:
                     decision_reason = f"币种质量未达实盘准入：{quality['pool']}，评分 {quality['score']}"
 
@@ -856,6 +976,7 @@ def scan_growth_candidates(
                         "entry_type_label": signal.get("entry_type_label", "标准信号" if entry_type == "standard" else "观察"),
                         "symbol_quality": quality,
                         "symbol_pool": quality["pool"],
+                        "live_performance": live_perf,
                         "depth_checked": depth.get("reason") != "depth_not_checked",
                         "simulation_passed": quality["simulation"]["passed"],
                         "current_score": round(current_score, 2),
@@ -896,7 +1017,7 @@ def scan_growth_candidates(
     trade_pool = [
         candidate
         for candidate in candidates
-        if candidate.get("symbol_quality", {}).get("pool") in {"trade", "small_trade"}
+        if candidate.get("symbol_quality", {}).get("pool") in {"trade", "small_trade", "adaptive_live"}
     ][: int(config.get("max_trade_pool_symbols", 15))]
     observe_pool = [
         candidate

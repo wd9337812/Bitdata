@@ -229,6 +229,131 @@ def test_scan_blocks_signal_when_symbol_quality_fails(monkeypatch):
     assert "币种质量未达实盘准入" in best["decision_reason"]
 
 
+def test_live_performance_promotes_same_symbol_direction_to_adaptive_pool(monkeypatch):
+    class FakeScanClient:
+        api_key = "key"
+        api_secret = "secret"
+
+        def ticker_24h(self, symbols=None):
+            return [{"symbol": "INUSDT", "lastPrice": "0.056", "quoteVolume": "92000000", "priceChangePercent": "-15"}]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 0.056, 0.057, 0.055, 0.056, 1000] for i in range(300)]
+
+        def depth(self, symbol, limit=5):
+            return {"bids": [["0.05599", "30000"]], "asks": [["0.05601", "30000"]]}
+
+        def user_trades(self, symbol, limit=100):
+            now = int(scanner.time.time() * 1000)
+            return [
+                {
+                    "symbol": symbol,
+                    "orderId": 1,
+                    "positionSide": "SHORT",
+                    "time": now - 30_000,
+                    "realizedPnl": "-4.4",
+                    "commission": "0.05",
+                    "commissionAsset": "USDT",
+                    "quoteQty": "300",
+                },
+                {
+                    "symbol": symbol,
+                    "orderId": 2,
+                    "positionSide": "SHORT",
+                    "time": now - 20_000,
+                    "realizedPnl": "8.8",
+                    "commission": "0.08",
+                    "commissionAsset": "USDT",
+                    "quoteQty": "480",
+                },
+                {
+                    "symbol": symbol,
+                    "orderId": 3,
+                    "positionSide": "SHORT",
+                    "time": now - 10_000,
+                    "realizedPnl": "-2.4",
+                    "commission": "0.04",
+                    "commissionAsset": "USDT",
+                    "quoteQty": "170",
+                },
+            ]
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["INUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 0.056,
+            "atr": 0.0005,
+            "stop": 0.057,
+            "take_profit": 0.054,
+            "expected_profit_pct": 3.2,
+            "trend": True,
+            "volatility_ok": True,
+            "entry_type": "standard",
+        } if direction == "SHORT" else {"symbol": symbol, "signal": "WAIT", "last_price": 0.056},
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG": {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 22,
+            "wins": 8,
+            "win_rate": 36.36,
+            "net_pct": 41.2,
+            "profit_factor": 3.34,
+        },
+    )
+
+    result = scan_growth_candidates(
+        FakeScanClient(),
+        {
+            "growth_mode": "tournament",
+            "auto_risk_by_equity": False,
+            "tournament_interval": "5m",
+            "tournament_recent_days": 5,
+            "tournament_risk_per_trade_pct": 15,
+            "tournament_max_leverage": 5,
+            "tournament_max_symbol_margin_pct": 90,
+            "allow_short": True,
+            "short_risk_multiplier": 0.5,
+            "short_min_recent_trades": 5,
+            "short_min_profit_factor": 1.3,
+            "short_min_net_pct": 1.0,
+            "min_expected_profit_cost_ratio": 2,
+            "estimated_slippage_pct": 0.04,
+            "min_expected_profit_pct": 0.35,
+            "standard_min_score": 50,
+            "symbol_trade_score": 75,
+            "symbol_small_trade_score": 65,
+            "symbol_observe_score": 50,
+            "min_simulated_trades": 5,
+            "min_simulated_win_rate": 45,
+            "min_simulated_profit_factor": 1.25,
+            "min_simulated_net_pct": 1.5,
+            "quality_backtest_days": [3, 5],
+            "min_depth_notional_usdt": 20_000,
+            "live_performance_min_depth_notional_usdt": 1_500,
+            "live_performance_risk_multiplier": 0.6,
+        },
+        {"equity": 72},
+    )
+
+    best = result["candidates"][0]
+    assert best["direction"] == "SHORT"
+    assert best["passed"] is True
+    assert best["symbol_pool"] == "adaptive_live"
+    assert best["live_performance"]["passed"] is True
+    assert best["risk_pct"] == 4.5
+
+
 def test_small_trade_pool_reduces_risk(monkeypatch):
     class FakeScanClient:
         def ticker_24h(self, symbols=None):

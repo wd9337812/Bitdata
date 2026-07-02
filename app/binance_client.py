@@ -210,6 +210,16 @@ class BinanceFuturesClient:
         params = {"symbol": symbol.upper()} if symbol else {}
         return self.signed_request("GET", "/fapi/v1/openOrders", params)
 
+    def user_trades(self, symbol: str, limit: int = 100) -> Any:
+        symbol = symbol.upper()
+        key = f"user_trades:{symbol}:{limit}"
+        cached = cache_get(key, 120)
+        if cached:
+            return cached.value
+        data = self.signed_request("GET", "/fapi/v1/userTrades", {"symbol": symbol, "limit": limit})
+        cache_set(key, data)
+        return data
+
     def open_algo_orders(self, symbol: str | None = None) -> Any:
         params = {"symbol": symbol.upper()} if symbol else {}
         return self.signed_request("GET", "/fapi/v1/openAlgoOrders", params)
