@@ -76,3 +76,21 @@ def test_tournament_can_ignore_high_watermark_drawdown():
     )
     assert decision.allowed is True
     assert decision.reason == "allowed"
+
+
+def test_rotation_can_ignore_max_open_positions_explicitly():
+    state = {"bot_status": "running", "daily_start_equity": 50, "equity_high_watermark": 50}
+    open_positions = [{"symbol": "OLDUSDT", "positionAmt": "1"}]
+
+    blocked = assess_new_position(base_config(), state, 50, "NEWUSDT", open_positions)
+    allowed = assess_new_position(
+        base_config(),
+        state,
+        50,
+        "NEWUSDT",
+        open_positions,
+        overrides={"ignore_max_open_positions": True},
+    )
+
+    assert blocked.reason == "max_open_positions"
+    assert allowed.allowed is True

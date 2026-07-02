@@ -33,6 +33,12 @@ def set_symbol_cooldown(state: dict, symbol: str, minutes: float) -> None:
     save_state({"symbol_cooldowns": cooldowns})
 
 
+def set_rotation_cooldown(state: dict, symbol: str, minutes: float) -> None:
+    cooldowns = dict(state.get("rotation_cooldowns") or {})
+    cooldowns[symbol.upper()] = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
+    save_state({"rotation_cooldowns": cooldowns})
+
+
 def synthetic_account(equity: float = 50.0) -> dict:
     return {"equity": equity, "available_balance": equity, "unrealized_pnl": 0.0, "positions": []}
 
@@ -97,8 +103,15 @@ def run_once() -> dict:
 
     decision = build_best_growth_decision(client, config, state, account)
     result = execute_stage1_market_order(client, decision, config)
-    if result.get("mode") == "live" and decision.get("symbol"):
+    if result.get("mode") in {"live", "rotation_live"} and decision.get("symbol"):
         set_symbol_cooldown(state, decision["symbol"], float(config.get("symbol_cooldown_minutes", 15)))
+    if result.get("mode") == "rotation_live":
+        rotation_from = ((decision.get("rotation") or {}).get("from") or {}).get("symbol")
+        rotation_minutes = float(config.get("rotation_cooldown_minutes", 45))
+        if rotation_from:
+            set_rotation_cooldown(state, rotation_from, rotation_minutes)
+        if decision.get("symbol"):
+            set_rotation_cooldown(state, decision["symbol"], rotation_minutes)
     record_strategy_run(state, account, decision, result)
     scan = decision.get("scan") or {}
     best = decision.get("candidate") or scan.get("best") or {}

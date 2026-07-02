@@ -60,6 +60,14 @@ class FakeFiltersClient:
     def set_leverage(self, symbol: str, leverage: int):
         self.orders.append(("LEVERAGE", symbol, float(leverage)))
 
+    def cancel_all_open_orders(self, symbol: str):
+        self.orders.append(("CANCEL_ORDERS", symbol, None, None))
+        return {"symbol": symbol, "cancelled": "orders"}
+
+    def cancel_all_open_algo_orders(self, symbol: str):
+        self.orders.append(("CANCEL_ALGO", symbol, None, None))
+        return {"symbol": symbol, "cancelled": "algo"}
+
     def position_side_dual(self):
         return {"dualSidePosition": True}
 
@@ -143,3 +151,32 @@ def test_execute_closes_entry_when_protection_fails():
     assert result["mode"] == "protection_failed_closed"
     assert ("MARKET", "SELL", 1.0, "SHORT") in client.orders
     assert ("MARKET", "BUY", 1.0, "SHORT") in client.orders
+
+
+def test_execute_rotation_closes_old_position_before_new_entry():
+    client = FakeFiltersClient()
+    decision = {
+        "symbol": "TESTUSDT",
+        "action": "OPEN_SHORT",
+        "direction": "SHORT",
+        "quantity": 1.0,
+        "leverage": 3,
+        "signal": {"last_price": 100.0, "stop": 102.0, "take_profit": 96.0},
+        "rotation": {
+            "allowed": True,
+            "from": {"symbol": "TESTUSDT", "direction": "LONG", "quantity": 0.5},
+            "to": {"symbol": "TESTUSDT", "direction": "SHORT"},
+        },
+    }
+
+    result = execute_stage1_market_order(
+        client,
+        decision,
+        {"dry_run": False, "live_trading_enabled": True, "live_trading_confirmation": "ENABLE_LIVE_TRADING"},
+    )
+
+    assert result["mode"] == "rotation_live"
+    close_index = client.orders.index(("MARKET", "SELL", 0.5, "LONG"))
+    entry_index = client.orders.index(("MARKET", "SELL", 1.0, "SHORT"))
+    assert ("CANCEL_ALGO", "TESTUSDT", None, None) in client.orders
+    assert close_index < entry_index

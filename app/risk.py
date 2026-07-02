@@ -84,7 +84,7 @@ def assess_new_position(
         pos for pos in open_positions
         if abs(float(pos.get("positionAmt", pos.get("amount", 0)))) > 0
     ]
-    if len(active_positions) >= int(config.get("max_open_positions", 1)):
+    if len(active_positions) >= int(config.get("max_open_positions", 1)) and not overrides.get("ignore_max_open_positions", False):
         return RiskDecision(False, "max_open_positions")
 
     symbol_margin_pct = float(overrides.get("margin_pct", config.get("max_symbol_margin_pct", 35.0)))

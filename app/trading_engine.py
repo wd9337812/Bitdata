@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from app.binance_client import BinanceFuturesClient
@@ -9,6 +10,161 @@ from app.risk import assess_new_position, current_stage, live_trading_allowed, p
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates
 from app.state_store import save_state
 from app.strategy import StrategyParams
+
+
+def position_direction(position: dict[str, Any]) -> str:
+    direction = str(position.get("direction") or "").upper()
+    if direction in {"LONG", "SHORT"}:
+        return direction
+    side = str(position.get("positionSide") or "").upper()
+    if side in {"LONG", "SHORT"}:
+        return side
+    amount = float(position.get("positionAmt", position.get("amount", 0)) or 0)
+    return "SHORT" if amount < 0 else "LONG"
+
+
+def position_symbol(position: dict[str, Any]) -> str:
+    return str(position.get("symbol") or "").upper()
+
+
+def position_amount_abs(position: dict[str, Any]) -> float:
+    return abs(float(position.get("positionAmt", position.get("amount", position.get("quantity", 0))) or 0))
+
+
+def position_margin(position: dict[str, Any]) -> float:
+    margin = float(position.get("positionInitialMargin", 0) or 0)
+    if margin > 0:
+        return margin
+    notional = abs(float(position.get("notional", 0) or 0))
+    leverage = max(1.0, float(position.get("leverage", 1) or 1))
+    return notional / leverage if notional > 0 else 0.0
+
+
+def position_pnl_pct(position: dict[str, Any]) -> float:
+    margin = position_margin(position)
+    if margin <= 0:
+        return 0.0
+    return float(position.get("unrealizedProfit", 0) or 0) / margin * 100
+
+
+def candidate_score(candidate: dict[str, Any] | None) -> float:
+    if not candidate:
+        return 0.0
+    return float(candidate.get("score") or 0)
+
+
+def find_position_scan_candidate(position: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    symbol = position_symbol(position)
+    direction = position_direction(position)
+    for candidate in candidates:
+        if str(candidate.get("symbol") or "").upper() == symbol and str(candidate.get("direction") or "").upper() == direction:
+            return candidate
+    return None
+
+
+def rotation_cooldown_active(state: dict[str, Any], symbol: str) -> bool:
+    cooldowns = state.get("rotation_cooldowns") or {}
+    until = cooldowns.get(symbol.upper()) if isinstance(cooldowns, dict) else None
+    if not until:
+        return False
+    try:
+        return datetime.fromisoformat(until) > datetime.now(timezone.utc)
+    except ValueError:
+        return False
+
+
+def build_position_rotation_plan(
+    candidate: dict[str, Any],
+    scan: dict[str, Any],
+    config: dict[str, Any],
+    state: dict[str, Any],
+    account_summary: dict[str, Any],
+) -> dict[str, Any]:
+    mode = str((scan.get("mode") or {}).get("mode") or config.get("growth_mode") or "balanced")
+    if not config.get("position_rotation_enabled", True):
+        return {"allowed": False, "reason": "rotation_disabled"}
+    if not config.get(f"{mode}_rotation_enabled", False):
+        return {"allowed": False, "reason": f"{mode}_rotation_disabled"}
+
+    positions = [
+        position for position in account_summary.get("positions", [])
+        if position_amount_abs(position) > 0
+    ]
+    if not positions:
+        return {"allowed": False, "reason": "no_position_to_rotate"}
+
+    new_symbol = str(candidate.get("symbol") or "").upper()
+    new_direction = str(candidate.get("direction") or "").upper()
+    if any(position_symbol(position) == new_symbol and position_direction(position) == new_direction for position in positions):
+        return {"allowed": False, "reason": "same_position_already_open"}
+    if rotation_cooldown_active(state, new_symbol):
+        return {"allowed": False, "reason": "rotation_cooldown_active"}
+
+    candidates = list(scan.get("candidates") or [])
+    unknown_score = float(config.get("rotation_unknown_position_score", 75.0))
+    scored_positions = []
+    for position in positions:
+        current_candidate = find_position_scan_candidate(position, candidates)
+        current_score = candidate_score(current_candidate) if current_candidate else unknown_score
+        scored_positions.append(
+            {
+                "position": position,
+                "score": current_score,
+                "pnl_pct": position_pnl_pct(position),
+                "scan_candidate": current_candidate,
+            }
+        )
+    weakest = min(scored_positions, key=lambda item: (item["score"], item["pnl_pct"]))
+    new_score = candidate_score(candidate)
+    min_new_score = float(config.get(f"{mode}_rotation_min_new_score", 999.0))
+    min_delta = float(config.get(f"{mode}_rotation_min_score_delta", 999.0))
+    min_cost_ratio = float(config.get("rotation_min_cost_ratio", 8.0))
+    keep_winner_profit_pct = float(config.get("rotation_keep_winner_profit_pct", 3.0))
+    max_current_loss_pct = float(config.get("rotation_max_current_loss_pct", 6.0))
+    cost_ratio = float(candidate.get("cost_ratio") or 0)
+    score_delta = new_score - float(weakest["score"])
+    current_pnl_pct = float(weakest["pnl_pct"])
+
+    if new_score < min_new_score:
+        reason = "new_score_below_rotation_threshold"
+    elif score_delta < min_delta:
+        reason = "score_delta_too_small"
+    elif cost_ratio < min_cost_ratio:
+        reason = "cost_ratio_too_low"
+    elif current_pnl_pct >= keep_winner_profit_pct:
+        reason = "current_position_is_winner"
+    elif current_pnl_pct <= -max_current_loss_pct:
+        reason = "current_position_near_hard_loss"
+    else:
+        reason = "rotation_allowed"
+
+    return {
+        "allowed": reason == "rotation_allowed",
+        "reason": reason,
+        "mode": mode,
+        "from": {
+            "symbol": position_symbol(weakest["position"]),
+            "direction": position_direction(weakest["position"]),
+            "quantity": position_amount_abs(weakest["position"]),
+            "score": weakest["score"],
+            "pnl_pct_on_margin": current_pnl_pct,
+            "unrealized_pnl": float(weakest["position"].get("unrealizedProfit", 0) or 0),
+        },
+        "to": {
+            "symbol": new_symbol,
+            "direction": new_direction,
+            "score": new_score,
+            "cost_ratio": cost_ratio,
+        },
+        "thresholds": {
+            "min_new_score": min_new_score,
+            "min_score_delta": min_delta,
+            "min_cost_ratio": min_cost_ratio,
+            "keep_winner_profit_pct": keep_winner_profit_pct,
+            "max_current_loss_pct": max_current_loss_pct,
+        },
+        "score_delta": score_delta,
+    }
 
 
 def summarize_account(account: dict[str, Any] | None) -> dict[str, Any]:
@@ -45,6 +201,7 @@ def build_stage1_decision(
     state: dict[str, Any],
     account_summary: dict[str, Any],
     scan_candidate: dict[str, Any] | None = None,
+    risk_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     active_mode = mode_config(config, account_summary.get("equity"))
     if scan_candidate:
@@ -73,18 +230,20 @@ def build_stage1_decision(
         daily_loss_key = "attack_daily_loss_limit_pct"
     if active_mode["mode"] == "tournament":
         daily_loss_key = "tournament_daily_loss_limit_pct"
+    overrides = {
+        "margin_pct": active_mode["margin_pct"],
+        "leverage": active_mode["leverage"],
+        "daily_loss_limit_pct": config.get(daily_loss_key, config.get("daily_loss_limit_pct", 3.0)),
+        "ignore_max_drawdown": active_mode["mode"] == "tournament",
+    }
+    overrides.update(risk_overrides or {})
     risk = assess_new_position(
         config,
         state,
         equity,
         symbol,
         account_summary.get("positions", []),
-        overrides={
-            "margin_pct": active_mode["margin_pct"],
-            "leverage": active_mode["leverage"],
-            "daily_loss_limit_pct": config.get(daily_loss_key, config.get("daily_loss_limit_pct", 3.0)),
-            "ignore_max_drawdown": active_mode["mode"] == "tournament",
-        },
+        overrides=overrides,
     )
     quantity = position_size_from_risk(
         equity=equity,
@@ -128,9 +287,53 @@ def build_best_growth_decision(
         }
     bars = client.klines_history(best["symbol"], scan["mode"]["interval"], int(scan["mode"]["recent_days"]))
     decision = build_stage1_decision(best["symbol"], bars, config, state, account_summary, scan_candidate=best)
+    if (decision.get("risk") or {}).get("reason") == "max_open_positions":
+        rotation = build_position_rotation_plan(best, scan, config, state, account_summary)
+        if rotation.get("allowed"):
+            decision = build_stage1_decision(
+                best["symbol"],
+                bars,
+                config,
+                state,
+                account_summary,
+                scan_candidate=best,
+                risk_overrides={"ignore_max_open_positions": True},
+            )
+        else:
+            decision["action"] = "WAIT"
+        decision["rotation"] = rotation
     decision["scan"] = scan
     decision["candidate"] = best
     return decision
+
+
+def close_rotation_position(client: BinanceFuturesClient, position: dict[str, Any]) -> dict[str, Any]:
+    symbol = position_symbol(position)
+    direction = position_direction(position)
+    quantity = position_amount_abs(position)
+    close_side = "BUY" if direction == "SHORT" else "SELL"
+    position_side = None
+    try:
+        if client.position_side_dual().get("dualSidePosition") is True:
+            position_side = direction
+    except Exception:
+        position_side = None
+    cancelled_orders = client.cancel_all_open_orders(symbol)
+    cancelled_algo_orders = client.cancel_all_open_algo_orders(symbol)
+    close_order = client.place_market_order(
+        symbol=symbol,
+        side=close_side,
+        quantity=quantity,
+        position_side=position_side,
+    )
+    return {
+        "symbol": symbol,
+        "direction": direction,
+        "quantity": quantity,
+        "cancelled_orders": cancelled_orders,
+        "cancelled_algo_orders": cancelled_algo_orders,
+        "close_order": close_order,
+    }
 
 
 def build_grid_decisions(config: dict[str, Any], account_summary: dict[str, Any], klines: dict[str, list[list[Any]]]) -> list[dict[str, Any]]:
@@ -171,7 +374,10 @@ def execute_stage1_market_order(
     }
     if quantity <= 0 or notional < min_notional:
         return {"mode": "blocked", "message": "Quantity is below exchange minimum.", "order": order}
+    rotation = decision.get("rotation") or {}
     if not live_trading_allowed(config):
+        if rotation.get("allowed"):
+            return {"mode": "rotation_dry_run", "order": order, "rotation": rotation}
         return {"mode": "dry_run", "order": order}
     leverage = max(1, min(50, int(float(decision.get("leverage", config.get("stage1_max_leverage", 2))))))
     client.set_leverage(symbol, leverage)
@@ -182,6 +388,9 @@ def execute_stage1_market_order(
             order["position_side"] = position_side
     except Exception:
         position_side = None
+    rotation_close = None
+    if rotation.get("allowed"):
+        rotation_close = close_rotation_position(client, rotation.get("from", {}))
     entry_order = client.place_market_order(symbol=symbol, side=entry_side, quantity=quantity, position_side=position_side)
     try:
         stop_order = client.place_algo_order(
@@ -212,7 +421,8 @@ def execute_stage1_market_order(
             "error": str(exc),
         }
     return {
-        "mode": "live",
+        "mode": "rotation_live" if rotation_close else "live",
+        "rotation_close": rotation_close,
         "entry_order": entry_order,
         "stop_order": stop_order,
         "take_profit_order": take_profit_order,

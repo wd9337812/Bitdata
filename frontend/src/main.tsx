@@ -552,6 +552,12 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("short_preemptive_risk_multiplier", "做空抢跑风险折扣", "默认 0.33")}
           {number("preemptive_max_distance_pct", "抢跑最大触发距离%", "默认 0.35")}
           {number("symbol_cooldown_minutes", "同币开仓冷却分钟", "默认 15")}
+          {toggle("position_rotation_enabled", "持仓轮换", "满仓时，只有明显更强的新信号才会替换当前弱仓")}
+          {number("tournament_rotation_min_new_score", "锦标赛轮换最低新评分", "默认 95")}
+          {number("tournament_rotation_min_score_delta", "锦标赛轮换最低分差", "默认 12")}
+          {number("rotation_min_cost_ratio", "轮换最低收益/成本比", "默认 8")}
+          {number("rotation_keep_winner_profit_pct", "盈利仓保护%", "旧仓浮盈超过该值时不轻易轮换")}
+          {number("rotation_max_current_loss_pct", "深亏仓保护%", "旧仓浮亏超过该值时交给止损，不强制轮换")}
           {number("estimated_slippage_pct", "估算滑点%")}
           {number("min_expected_profit_cost_ratio", "最低收益/成本比")}
           {toggle("allow_short", "自动评估做空", "做空风险会自动打折，并使用更严格回测门槛")}
