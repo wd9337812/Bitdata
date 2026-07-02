@@ -8,7 +8,6 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlencode
 
 import websockets
 
@@ -147,7 +146,18 @@ def _symbols_from_config(config: dict[str, Any]) -> list[str]:
     return symbols[: int(config.get("max_observation_symbols", 20))]
 
 
-def _stream_url(symbols: list[str], interval: str) -> str:
+def _combined_url(path: str, streams: list[str]) -> str:
+    return f"wss://fstream.binance.com/{path}/stream?streams=" + "/".join(streams)
+
+
+def _public_stream_url(symbols: list[str]) -> str:
+    streams: list[str] = []
+    for symbol in symbols:
+        streams.append(f"{symbol.lower()}@depth5@500ms")
+    return _combined_url("public", streams)
+
+
+def _market_stream_url(symbols: list[str], interval: str) -> str:
     streams: list[str] = []
     for symbol in symbols:
         lower = symbol.lower()
@@ -155,10 +165,9 @@ def _stream_url(symbols: list[str], interval: str) -> str:
             [
                 f"{lower}@ticker",
                 f"{lower}@kline_{interval}",
-                f"{lower}@depth5@500ms",
             ]
         )
-    return "wss://fstream.binance.com/stream?" + urlencode({"streams": "/".join(streams)})
+    return _combined_url("market", streams)
 
 
 def _ticker_from_event(data: dict[str, Any]) -> dict[str, Any]:
@@ -222,6 +231,36 @@ def _depth_from_event(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+async def _consume_stream(url: str, symbols: list[str], state: dict[str, Any]) -> None:
+    async with websockets.connect(url, ping_interval=20, ping_timeout=10, close_timeout=5) as websocket:
+        state.update({"connected": True, "symbols": symbols, "last_error": "", "updated_at": _now_iso()})
+        write_snapshot(state)
+        last_flush = 0.0
+        while not _STOP.is_set():
+            raw = await asyncio.wait_for(websocket.recv(), timeout=35)
+            payload = json.loads(raw)
+            data = payload.get("data") or {}
+            event_type = data.get("e")
+            with _LOCK:
+                if event_type == "24hrTicker":
+                    symbol = str(data.get("s") or "").upper()
+                    if symbol:
+                        state.setdefault("tickers", {})[symbol] = _ticker_from_event(data)
+                elif event_type == "kline":
+                    symbol, kline_interval, item = _kline_from_event(data)
+                    if symbol and kline_interval:
+                        state.setdefault("klines", {}).setdefault(symbol, {})[kline_interval] = item
+                elif event_type == "depthUpdate" or payload.get("stream", "").endswith("depth5@500ms"):
+                    symbol = str(data.get("s") or payload.get("stream", "").split("@")[0]).upper()
+                    if symbol:
+                        state.setdefault("depths", {})[symbol] = _depth_from_event(data)
+                now = time.time()
+                if now - last_flush >= 2:
+                    state.update({"connected": True, "updated_at": _now_iso(), "symbols": symbols})
+                    write_snapshot(state)
+                    last_flush = now
+
+
 async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
     while not _STOP.is_set():
         config = config_provider()
@@ -239,36 +278,13 @@ async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
         if not symbols:
             await asyncio.sleep(30)
             continue
-        url = _stream_url(symbols, interval)
         try:
-            async with websockets.connect(url, ping_interval=20, ping_timeout=10, close_timeout=5) as websocket:
-                state = read_snapshot()
-                state.update({"connected": True, "symbols": symbols, "last_error": "", "updated_at": _now_iso()})
-                write_snapshot(state)
-                last_flush = 0.0
-                while not _STOP.is_set():
-                    raw = await asyncio.wait_for(websocket.recv(), timeout=35)
-                    payload = json.loads(raw)
-                    data = payload.get("data") or {}
-                    event_type = data.get("e")
-                    with _LOCK:
-                        if event_type == "24hrTicker":
-                            symbol = str(data.get("s") or "").upper()
-                            if symbol:
-                                state.setdefault("tickers", {})[symbol] = _ticker_from_event(data)
-                        elif event_type == "kline":
-                            symbol, kline_interval, item = _kline_from_event(data)
-                            if symbol and kline_interval:
-                                state.setdefault("klines", {}).setdefault(symbol, {})[kline_interval] = item
-                        elif payload.get("stream", "").endswith("depth5@500ms"):
-                            symbol = str(data.get("s") or payload.get("stream", "").split("@")[0]).upper()
-                            if symbol:
-                                state.setdefault("depths", {})[symbol] = _depth_from_event(data)
-                        now = time.time()
-                        if now - last_flush >= 2:
-                            state.update({"connected": True, "updated_at": _now_iso(), "symbols": symbols})
-                            write_snapshot(state)
-                            last_flush = now
+            public_url = _public_stream_url(symbols)
+            market_url = _market_stream_url(symbols, interval)
+            await asyncio.gather(
+                _consume_stream(public_url, symbols, state),
+                _consume_stream(market_url, symbols, state),
+            )
         except Exception as exc:
             state = read_snapshot()
             state.update({"connected": False, "last_error": str(exc), "updated_at": _now_iso(), "symbols": symbols})
