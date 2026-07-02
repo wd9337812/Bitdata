@@ -69,17 +69,41 @@ bot_status = running
 
 原因：当前阶段还未接入 WebSocket 行情中心，完整 REST 扫描 30 秒一轮风险过高。等二期 WebSocket 行情中心上线后，可再把触发检查改成更实时。
 
-## 二期目标
+## 二期上线：WebSocket Market Data Hub
 
-下一步建议做 WebSocket Market Data Hub：
+新增 `app/market_stream.py`：
 
-- REST 启动时拉一次历史 K 线。
-- WebSocket 实时更新 kline、bookTicker、markPrice。
+- runner 启动时创建后台 WebSocket 线程。
+- 订阅候选币的 `@ticker`、`@kline_5m`、`@depth5@500ms`。
+- 持续写入 `data/market_stream.json`。
+- `ticker_24h(symbols)` 会优先使用实时 ticker 覆盖 REST 快照。
+- `depth(symbol)` 会优先使用实时 depth5。
+- `klines/klines_history` 会用实时当前 K 线覆盖最后一根 K 线。
+- REST 仍作为初始化和断流兜底。
+
+这使系统从“每轮 REST 拉行情”改为“WebSocket 实时更新 + REST 兜底”。完整策略扫描仍按配置节奏执行，但数据源的新鲜度更高，REST 权重更低。
+
+新增配置：
+
+- `market_stream_enabled = true`
+
+状态接口会返回：
+
+- `market_stream.connected`
+- `market_stream.age_seconds`
+- `market_stream.ticker_count`
+- `market_stream.depth_count`
+- `market_stream.kline_count`
+
+如果 WebSocket 断开，runner 会自动重连；策略仍会退回 REST 频控路径。
+
+## 后续目标
+
+后续可以继续把“完整扫描”改成事件驱动：
+
 - 新 K 线收盘触发完整策略评估。
 - 临近触发候选用实时盘口和价格做快评。
-- REST 只用于补缺口、账户快照、下单、异常恢复。
-
-二期完成后，数据实时性会更好，同时 REST 权重会更低。
+- REST 仅用于缺口补齐、账户快照、下单、异常恢复。
 
 ## 当前安全边界
 

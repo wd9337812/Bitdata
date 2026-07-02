@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from app.binance_client import BinanceFuturesClient
 from app.config_store import load_config, save_config
 from app.models import BotControlPayload, ExecutePayload, TradingConfig
+from app.market_stream import stream_status
 from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
 from app.binance_rate import cache_status, rate_status
@@ -135,6 +136,7 @@ def status() -> dict[str, Any]:
         "account": account_summary,
         "binance_rate": rate_status(),
         "cache": cache_status(),
+        "market_stream": stream_status(),
     }
 
 

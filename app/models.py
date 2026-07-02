@@ -13,6 +13,7 @@ class TradingConfig(BaseModel):
     max_observation_symbols: int = Field(default=20, ge=1, le=150)
     max_trade_pool_symbols: int = Field(default=10, ge=1, le=50)
     depth_check_top_symbols: int = Field(default=8, ge=0, le=50)
+    market_stream_enabled: bool = True
     symbol_trade_score: float = Field(default=75.0, ge=0, le=100)
     symbol_small_trade_score: float = Field(default=65.0, ge=0, le=100)
     symbol_observe_score: float = Field(default=50.0, ge=0, le=100)
@@ -38,7 +39,7 @@ class TradingConfig(BaseModel):
     conservative_loop_seconds: int = Field(default=300, ge=10, le=3600)
     balanced_loop_seconds: int = Field(default=120, ge=10, le=3600)
     attack_loop_seconds: int = Field(default=60, ge=10, le=3600)
-    tournament_loop_seconds: int = Field(default=60, ge=10, le=3600)
+    tournament_loop_seconds: int = Field(default=30, ge=10, le=3600)
     limit: int = Field(default=1000, ge=100, le=1500)
     stage1_target_equity: float = Field(default=10000.0, gt=0)
     stage2_activation: str = "manual"

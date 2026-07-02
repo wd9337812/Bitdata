@@ -16,6 +16,7 @@ from app.binance_rate import (
     estimate_weight,
     register_rate_error,
 )
+from app.market_stream import overlay_stream_kline, stream_depth, stream_ticker
 
 INTERVAL_MS = {
     "1m": 60_000,
@@ -106,6 +107,7 @@ class BinanceFuturesClient:
         if cached:
             return cached.value
         data = self.public_get("/fapi/v1/klines", {"symbol": symbol.upper(), "interval": interval, "limit": limit})
+        data = overlay_stream_kline(data, symbol, interval)
         cache_set(key, data)
         return data
 
@@ -113,7 +115,7 @@ class BinanceFuturesClient:
         key = f"klines_history:{symbol.upper()}:{interval}:{days}:{warmup}"
         cached = cache_get(key, 60)
         if cached:
-            return cached.value
+            return overlay_stream_kline(cached.value, symbol, interval)
         interval_ms = INTERVAL_MS.get(interval)
         if interval_ms is None:
             return self.klines(symbol, interval, 1000)
@@ -139,6 +141,7 @@ class BinanceFuturesClient:
                 break
         dedup = {int(row[0]): row for row in rows}
         data = [dedup[key] for key in sorted(dedup)]
+        data = overlay_stream_kline(data, symbol, interval)
         cache_set(key, data)
         return data
 
@@ -153,6 +156,12 @@ class BinanceFuturesClient:
         if symbols:
             allowed = {symbol.upper() for symbol in symbols}
             data = [item for item in data if item["symbol"] in allowed]
+            streamed = {item["symbol"]: item for item in data}
+            for symbol in allowed:
+                item = stream_ticker(symbol)
+                if item:
+                    streamed[symbol] = {**streamed.get(symbol, {}), **item}
+            data = list(streamed.values())
         return data
 
     def premium_index(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
@@ -169,6 +178,9 @@ class BinanceFuturesClient:
         return data
 
     def depth(self, symbol: str, limit: int = 5) -> Any:
+        item = stream_depth(symbol)
+        if item and item.get("bids") and item.get("asks"):
+            return {"bids": item["bids"], "asks": item["asks"]}
         key = f"depth:{symbol.upper()}:{limit}"
         cached = cache_get(key, 10)
         if cached:

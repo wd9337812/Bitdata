@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from app.binance_client import BinanceFuturesClient
 from app.binance_rate import BinanceRateLimitError, rate_status
 from app.config_store import load_config
+from app.market_stream import start_market_stream_thread
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
@@ -120,6 +121,7 @@ def run_once() -> dict:
 
 def main() -> None:
     load_dotenv()
+    start_market_stream_thread(load_config)
     interval_seconds = int(os.getenv("BOT_LOOP_SECONDS", "300"))
     while True:
         try:
