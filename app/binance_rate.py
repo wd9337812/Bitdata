@@ -5,6 +5,7 @@ import os
 import re
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -52,7 +53,8 @@ def _read_json(path: Path, default: Any) -> Any:
 
 
 def _write_json(path: Path, value: Any) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp")
     with tmp.open("w", encoding="utf-8") as file:
         json.dump(value, file, ensure_ascii=False)
     tmp.replace(path)
