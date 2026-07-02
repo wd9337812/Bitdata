@@ -83,6 +83,7 @@ def build_stage1_decision(
             "margin_pct": active_mode["margin_pct"],
             "leverage": active_mode["leverage"],
             "daily_loss_limit_pct": config.get(daily_loss_key, config.get("daily_loss_limit_pct", 3.0)),
+            "ignore_max_drawdown": active_mode["mode"] == "tournament",
         },
     )
     quantity = position_size_from_risk(

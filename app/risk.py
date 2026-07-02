@@ -73,11 +73,12 @@ def assess_new_position(
         if daily_dd_pct >= daily_loss_limit_pct:
             return RiskDecision(False, "daily_loss_limit")
 
-    high_watermark = max(float(state.get("equity_high_watermark") or equity), equity)
-    if high_watermark > 0:
-        drawdown_pct = max(0.0, (high_watermark - equity) / high_watermark * 100)
-        if drawdown_pct >= float(config.get("max_drawdown_pct", 15.0)):
-            return RiskDecision(False, "max_drawdown_limit")
+    if not overrides.get("ignore_max_drawdown", False):
+        high_watermark = max(float(state.get("equity_high_watermark") or equity), equity)
+        if high_watermark > 0:
+            drawdown_pct = max(0.0, (high_watermark - equity) / high_watermark * 100)
+            if drawdown_pct >= float(config.get("max_drawdown_pct", 15.0)):
+                return RiskDecision(False, "max_drawdown_limit")
 
     active_positions = [
         pos for pos in open_positions

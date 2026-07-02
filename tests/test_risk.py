@@ -47,3 +47,32 @@ def test_risk_blocks_symbol_cooldown():
     decision = assess_new_position(base_config(), state, 50, "SOLUSDT", [])
     assert decision.allowed is False
     assert decision.reason == "symbol_cooldown_active"
+
+
+def test_risk_blocks_max_drawdown_by_default():
+    state = {
+        "bot_status": "running",
+        "equity_high_watermark": 100,
+        "daily_start_equity": 72,
+    }
+    decision = assess_new_position(base_config(), state, 72, "SOLUSDT", [])
+    assert decision.allowed is False
+    assert decision.reason == "max_drawdown_limit"
+
+
+def test_tournament_can_ignore_high_watermark_drawdown():
+    state = {
+        "bot_status": "running",
+        "equity_high_watermark": 100,
+        "daily_start_equity": 72,
+    }
+    decision = assess_new_position(
+        base_config(),
+        state,
+        72,
+        "SOLUSDT",
+        [],
+        overrides={"ignore_max_drawdown": True, "daily_loss_limit_pct": 25, "margin_pct": 90, "leverage": 5},
+    )
+    assert decision.allowed is True
+    assert decision.reason == "allowed"
