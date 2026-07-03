@@ -612,7 +612,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
         <div className="form-grid">
           {select("growth_mode", "增长模式", modeOptions, "50U 阶段建议锦标赛；系统也会按权益自动切换。")}
           <SymbolMultiPicker value={form.stage1_symbols} onChange={(symbols) => update("stage1_symbols", symbols)} />
-          {number("max_scan_symbols", "最大扫描币种", "2GB VPS 当前建议 30；观察池默认 35")}
+          {number("max_scan_symbols", "最大扫描币种", "2GB VPS 当前建议 40；观察池默认 45")}
           {number("min_24h_volume_usdt", "最低 24h 成交额", "过滤流动性差的币")}
           {toggle("auto_discover_symbols", "自动发现加密币", "只纳入 Binance U 本位永续币")}
           {toggle("auto_risk_by_equity", "按权益自动切换风险", "50U 自动锦标赛，100U 后进攻")}
