@@ -548,9 +548,14 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("preemptive_entries_enabled", "开启抢跑试探", "高分候选接近触发时允许小仓提前进场")}
           {number("preemptive_min_score", "抢跑最低评分", "默认 72")}
           {number("standard_min_score", "标准信号最低评分", "默认 85")}
-          {number("preemptive_risk_multiplier", "做多抢跑风险折扣", "默认 0.47")}
-          {number("short_preemptive_risk_multiplier", "做空抢跑风险折扣", "默认 0.33")}
+          {number("preemptive_risk_multiplier", "做多抢跑风险折扣", "默认 0.24")}
+          {number("short_preemptive_risk_multiplier", "做空抢跑风险折扣", "默认 0.18")}
           {number("preemptive_max_distance_pct", "抢跑最大触发距离%", "默认 0.35")}
+          {toggle("observe_breakout_enabled", "观察池标准突破试单", "高分 observe 币出现标准突破时允许折扣仓位试单")}
+          {number("observe_breakout_min_score", "观察池试单最低评分", "默认 105")}
+          {number("observe_breakout_min_quality", "观察池试单质量分", "默认 78")}
+          {number("observe_breakout_min_cost_ratio", "观察池试单成本比", "默认 20")}
+          {number("observe_breakout_risk_multiplier", "观察池试单仓位折扣", "默认 0.35")}
           {number("symbol_cooldown_minutes", "同币开仓冷却分钟", "默认 15")}
           {toggle("position_rotation_enabled", "持仓轮换", "满仓时，只有明显更强的新信号才会替换当前弱仓")}
           {number("tournament_rotation_min_new_score", "锦标赛轮换最低新评分", "默认 95")}

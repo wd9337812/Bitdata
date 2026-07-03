@@ -551,6 +551,41 @@ def score_symbol_quality(
     }
 
 
+def observe_breakout_allows_entry(
+    candidate_score: float,
+    quality: dict[str, Any],
+    recent: dict[str, Any],
+    signal: dict[str, Any],
+    cost_ratio: float,
+    depth: dict[str, Any],
+    config: dict[str, Any],
+    mode: dict[str, Any],
+) -> bool:
+    if not config.get("observe_breakout_enabled", True):
+        return False
+    if mode.get("mode") != "tournament":
+        return False
+    if quality.get("pool") != "observe":
+        return False
+    if signal.get("signal") not in {"LONG", "SHORT"}:
+        return False
+    if candidate_score < float(config.get("observe_breakout_min_score", 105.0)):
+        return False
+    if float(quality.get("score", 0)) < float(config.get("observe_breakout_min_quality", 78.0)):
+        return False
+    if cost_ratio < float(config.get("observe_breakout_min_cost_ratio", 20.0)):
+        return False
+    if float(recent.get("profit_factor", 0)) < float(config.get("observe_breakout_min_profit_factor", 1.5)):
+        return False
+    if float(recent.get("net_pct", 0)) < float(config.get("observe_breakout_min_net_pct", 4.0)):
+        return False
+    if float(depth.get("spread_pct", 999)) > float(config.get("observe_breakout_max_spread_pct", 0.08)):
+        return False
+    if float(depth.get("depth_notional", 0)) < float(config.get("observe_breakout_min_depth_notional_usdt", 500.0)):
+        return False
+    return True
+
+
 def backtest_strategy(symbol: str, bars: list[list[Any]], strategy: str, days: int, direction: str = "LONG") -> dict[str, Any]:
     if len(bars) < 100:
         return {"symbol": symbol, "trades": 0, "wins": 0, "win_rate": 0, "net_pct": 0, "profit_factor": 0}
@@ -677,146 +712,6 @@ def scan_growth_candidates(
     fee_pct = StrategyParams().taker_fee * 2 * 100
     slippage_pct = float(config.get("estimated_slippage_pct", 0.04))
     cost_pct = fee_pct + slippage_pct
-
-    for symbol in symbols:
-        try:
-            bars = client.klines_history(symbol, mode["interval"], int(mode["recent_days"]))
-            directions = ["LONG", "SHORT"] if config.get("allow_short", False) else ["LONG"]
-            for direction in directions:
-                signal = latest_strategy_signal(symbol, bars, mode["strategy"], direction=direction)
-                recent = backtest_strategy(symbol, bars, mode["strategy"], int(mode["recent_days"]), direction=direction)
-                last_price = float(signal.get("last_price") or tickers.get(symbol, {}).get("lastPrice", 0))
-                expected_profit_pct = float(signal.get("expected_profit_pct") or 0)
-                cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
-                if direction == "SHORT":
-                    min_trades = int(config.get("short_min_recent_trades", 5))
-                    min_pf = float(config.get("short_min_profit_factor", 1.3))
-                    min_net_pct = float(config.get("short_min_net_pct", 1.0))
-                    risk_pct = float(mode["risk_pct"]) * float(config.get("short_risk_multiplier", 0.5))
-                else:
-                    min_trades = int(mode["min_trades"])
-                    min_pf = float(mode["min_pf"])
-                    min_net_pct = 0.0
-                    risk_pct = float(mode["risk_pct"])
-                history_passed = (
-                    recent["trades"] >= min_trades
-                    and recent["profit_factor"] >= min_pf
-                    and recent["net_pct"] > min_net_pct
-                )
-                standard_passed = (
-                    signal.get("signal") == direction
-                    and history_passed
-                    and expected_profit_pct >= float(config.get("min_expected_profit_pct", 0.35))
-                    and cost_ratio >= float(config.get("min_expected_profit_cost_ratio", 3.0))
-                )
-                current_score = _current_signal_score(signal, direction, cost_ratio, recent)
-                score = 0.0
-                score += min(float(tickers.get(symbol, {}).get("quoteVolume", 0)) / 1_000_000_000, 5) * 0.5
-                score += recent["net_pct"] * 0.15
-                score += min(recent["profit_factor"], 10) * 2
-                score += recent["win_rate"] * 0.05
-                score += current_score
-                score += 3 if standard_passed else 0
-                score -= 1.5 if direction == "SHORT" else 0
-                entry_type = "standard" if standard_passed else "watch"
-                passed = standard_passed and score >= float(config.get("standard_min_score", 85.0))
-                decision_reason = "标准突破信号通过" if passed else "等待触发"
-                preemptive_enabled = mode["mode"] == "tournament" and config.get("preemptive_entries_enabled", True)
-                if not passed and preemptive_enabled and history_passed and signal.get("signal") == "WAIT":
-                    distance_pct = float(signal.get("distance_to_trigger_pct") or 999)
-                    near_trigger = (
-                        signal.get("trend") is True
-                        and signal.get("volatility_ok") is True
-                        and distance_pct <= float(config.get("preemptive_max_distance_pct", 0.35))
-                    )
-                    strong_momentum = (
-                        signal.get("trend") is True
-                        and signal.get("volatility_ok") is True
-                        and float(signal.get("candle_move_pct") or 0) >= max(0.12, distance_pct)
-                    )
-                    min_preempt_score = float(config.get("preemptive_min_score", 72.0))
-                    if score >= min_preempt_score and (near_trigger or strong_momentum):
-                        entry_type = "momentum" if strong_momentum and not near_trigger else "preemptive"
-                        risk_multiplier = (
-                            float(config.get("short_preemptive_risk_multiplier", 0.33))
-                            if direction == "SHORT"
-                            else float(config.get("preemptive_risk_multiplier", 0.47))
-                        )
-                        signal = _promote_wait_signal(signal, direction, entry_type, risk_multiplier)
-                        expected_profit_pct = float(signal.get("expected_profit_pct") or 0)
-                        cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
-                        risk_pct *= risk_multiplier
-                        passed = (
-                            expected_profit_pct >= float(config.get("min_expected_profit_pct", 0.35))
-                            and cost_ratio >= max(1.5, float(config.get("min_expected_profit_cost_ratio", 3.0)) * 0.65)
-                        )
-                        decision_reason = "高分候选接近触发，允许小仓抢跑" if entry_type == "preemptive" else "短线强动量，允许小仓试探"
-                    else:
-                        misses = []
-                        if not history_passed:
-                            misses.append("历史回测不足")
-                        if not signal.get("trend"):
-                            misses.append("趋势未成立")
-                        if not signal.get("volatility_ok"):
-                            misses.append("波动不足")
-                        if distance_pct > float(config.get("preemptive_max_distance_pct", 0.35)):
-                            misses.append("距离触发价偏远")
-                        if score < min_preempt_score:
-                            misses.append("综合评分不足")
-                        decision_reason = "、".join(misses) or "等待触发"
-                candidates.append(
-                    {
-                        "symbol": symbol,
-                        "direction": direction,
-                        "mode": mode["mode"],
-                        "strategy": mode["strategy"],
-                        "score": round(score, 4),
-                        "passed": passed,
-                        "reason": "passed" if passed else "filters_not_passed",
-                        "decision_reason": decision_reason,
-                        "entry_type": entry_type,
-                        "entry_type_label": signal.get("entry_type_label", "标准信号" if entry_type == "standard" else "观察"),
-                        "current_score": round(current_score, 2),
-                        "signal": signal,
-                        "recent": recent,
-                        "ticker": {
-                            "last": last_price,
-                            "change_pct": float(tickers.get(symbol, {}).get("priceChangePercent", 0)),
-                            "volume_usdt_b": round(float(tickers.get(symbol, {}).get("quoteVolume", 0)) / 1_000_000_000, 3),
-                        },
-                        "cost_ratio": cost_ratio,
-                        "fee_pct": fee_pct,
-                        "estimated_slippage_pct": slippage_pct,
-                        "estimated_cost_pct": cost_pct,
-                        "expected_profit_pct": expected_profit_pct,
-                        "risk_pct": risk_pct,
-                        "base_risk_pct": mode["risk_pct"],
-                        "leverage": mode["leverage"],
-                        "margin_pct": mode["margin_pct"],
-                        "thresholds": {"min_trades": min_trades, "min_pf": min_pf, "min_net_pct": min_net_pct},
-                    }
-                )
-        except Exception as exc:
-            candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})
-
-    candidates.sort(key=lambda item: (item.get("passed", False), item.get("score", -999)), reverse=True)
-    candidates = [_json_safe(candidate) for candidate in candidates]
-    return {"mode": _json_safe(mode), "symbols": symbols, "candidates": candidates[:30], "best": candidates[0] if candidates else None}
-
-
-def scan_growth_candidates(
-    client: BinanceFuturesClient,
-    config: dict[str, Any],
-    account_summary: dict[str, Any],
-) -> dict[str, Any]:
-    equity = account_summary.get("equity")
-    mode = mode_config(config, equity)
-    symbols = discover_coin_symbols(client, config)
-    candidates = []
-    tickers = {item["symbol"]: item for item in client.ticker_24h(symbols)}
-    fee_pct = StrategyParams().taker_fee * 2 * 100
-    slippage_pct = float(config.get("estimated_slippage_pct", 0.04))
-    cost_pct = fee_pct + slippage_pct
     quality_days = sorted({
         int(day)
         for day in config.get("quality_backtest_days", [3, 5])
@@ -912,8 +807,13 @@ def scan_growth_candidates(
                     risk_pct *= float(config.get("live_performance_risk_multiplier", 0.6))
                     decision_reason = "recent live performance supports reduced-risk entry"
                 if signal.get("signal") == direction and not quality["allowed"]:
-                    decision_reason = f"币种质量未达实盘准入：{quality['pool']}，评分 {quality['score']}"
-
+                    if observe_breakout_allows_entry(score, quality, recent, signal, cost_ratio, depth, config, mode):
+                        entry_type = "observe_standard"
+                        passed = score >= float(config.get("standard_min_score", 85.0))
+                        risk_pct *= float(config.get("observe_breakout_risk_multiplier", 0.35))
+                        decision_reason = "观察池高分标准突破，允许折扣仓位试单" if passed else "观察池标准突破评分不足"
+                    else:
+                        decision_reason = f"币种质量未达实盘准入：{quality['pool']}，评分 {quality['score']}"
                 preemptive_enabled = mode["mode"] == "tournament" and config.get("preemptive_entries_enabled", True)
                 if not passed and preemptive_enabled and history_passed and quality["allowed"] and signal.get("signal") == "WAIT":
                     distance_pct = float(signal.get("distance_to_trigger_pct") or 999)
@@ -931,9 +831,9 @@ def scan_growth_candidates(
                     if score >= min_preempt_score and (near_trigger or strong_momentum):
                         entry_type = "momentum" if strong_momentum and not near_trigger else "preemptive"
                         risk_multiplier = (
-                            float(config.get("short_preemptive_risk_multiplier", 0.33))
+                            float(config.get("short_preemptive_risk_multiplier", 0.18))
                             if direction == "SHORT"
-                            else float(config.get("preemptive_risk_multiplier", 0.47))
+                            else float(config.get("preemptive_risk_multiplier", 0.24))
                         )
                         if quality["pool"] == "small_trade":
                             risk_multiplier *= float(config.get("small_trade_risk_multiplier", 0.5))

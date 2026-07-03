@@ -229,6 +229,94 @@ def test_scan_blocks_signal_when_symbol_quality_fails(monkeypatch):
     assert "币种质量未达实盘准入" in best["decision_reason"]
 
 
+def test_observe_high_score_standard_breakout_uses_discount_risk(monkeypatch):
+    class FakeScanClient:
+        def ticker_24h(self, symbols=None):
+            return [{"symbol": "INUSDT", "lastPrice": "0.06", "quoteVolume": "80000000", "priceChangePercent": "8"}]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 0.06, 0.063, 0.058, 0.06, 1000] for i in range(300)]
+
+        def depth(self, symbol, limit=5):
+            return {"bids": [["0.05999", "10000"]], "asks": [["0.06001", "10000"]]}
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["INUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 0.06,
+            "atr": 0.002,
+            "stop": 0.0576,
+            "take_profit": 0.066,
+            "expected_profit_pct": 10.0,
+            "trend": True,
+            "volatility_ok": True,
+            "entry_type": "standard",
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG": {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 18,
+            "wins": 10,
+            "win_rate": 55.5,
+            "net_pct": 30.0,
+            "profit_factor": 2.5,
+        },
+    )
+
+    result = scan_growth_candidates(
+        FakeScanClient(),
+        {
+            "growth_mode": "tournament",
+            "auto_risk_by_equity": False,
+            "tournament_interval": "5m",
+            "tournament_recent_days": 5,
+            "tournament_risk_per_trade_pct": 15,
+            "tournament_max_leverage": 5,
+            "tournament_max_symbol_margin_pct": 90,
+            "allow_short": False,
+            "min_expected_profit_cost_ratio": 3,
+            "estimated_slippage_pct": 0.04,
+            "min_expected_profit_pct": 0.35,
+            "standard_min_score": 85,
+            "symbol_trade_score": 95,
+            "symbol_small_trade_score": 90,
+            "symbol_observe_score": 50,
+            "min_simulated_trades": 5,
+            "quality_backtest_days": [3, 5, 10],
+            "min_depth_notional_usdt": 20_000,
+            "depth_check_top_symbols": 1,
+            "observe_breakout_enabled": True,
+            "observe_breakout_min_score": 85,
+            "observe_breakout_min_quality": 70,
+            "observe_breakout_min_cost_ratio": 20,
+            "observe_breakout_min_profit_factor": 1.5,
+            "observe_breakout_min_net_pct": 4,
+            "observe_breakout_min_depth_notional_usdt": 500,
+            "observe_breakout_max_spread_pct": 0.08,
+            "observe_breakout_risk_multiplier": 0.35,
+        },
+        {"equity": 50},
+    )
+
+    best = result["candidates"][0]
+    assert best["passed"] is True
+    assert best["entry_type"] == "observe_standard"
+    assert best["symbol_pool"] == "observe"
+    assert best["risk_pct"] == 5.25
+    assert "观察池高分标准突破" in best["decision_reason"]
+
+
 def test_live_performance_promotes_same_symbol_direction_to_adaptive_pool(monkeypatch):
     class FakeScanClient:
         api_key = "key"

@@ -98,6 +98,22 @@ class TradingConfig(BaseModel):
     min_expected_profit_cost_ratio: float = Field(default=3.0, ge=0, le=20)
     estimated_slippage_pct: float = Field(default=0.04, ge=0, le=5)
     min_expected_profit_pct: float = Field(default=0.35, ge=0, le=20)
+    preemptive_entries_enabled: bool = True
+    preemptive_min_score: float = Field(default=72.0, ge=0, le=200)
+    preemptive_risk_multiplier: float = Field(default=0.24, ge=0.05, le=1)
+    short_preemptive_risk_multiplier: float = Field(default=0.18, ge=0.05, le=1)
+    preemptive_max_distance_pct: float = Field(default=0.35, ge=0, le=5)
+    observe_breakout_enabled: bool = True
+    observe_breakout_min_score: float = Field(default=105.0, ge=0, le=200)
+    observe_breakout_min_quality: float = Field(default=78.0, ge=0, le=100)
+    observe_breakout_min_cost_ratio: float = Field(default=20.0, ge=0, le=200)
+    observe_breakout_min_profit_factor: float = Field(default=1.5, ge=0, le=20)
+    observe_breakout_min_net_pct: float = Field(default=4.0, ge=-100, le=500)
+    observe_breakout_min_depth_notional_usdt: float = Field(default=500.0, ge=0)
+    observe_breakout_max_spread_pct: float = Field(default=0.08, ge=0, le=5)
+    observe_breakout_risk_multiplier: float = Field(default=0.35, ge=0.05, le=1)
+    symbol_cooldown_minutes: int = Field(default=15, ge=0, le=1440)
+    stop_loss_cooldown_minutes: int = Field(default=30, ge=0, le=1440)
     allow_short: bool = True
     short_risk_multiplier: float = Field(default=0.5, ge=0.1, le=1)
     short_min_recent_trades: int = Field(default=5, ge=0, le=50)
