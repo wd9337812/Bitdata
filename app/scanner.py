@@ -429,6 +429,42 @@ def live_performance_summary(
     }
 
 
+def consecutive_live_losses(
+    client: BinanceFuturesClient,
+    symbols: list[str],
+    direction: str,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    if not getattr(client, "api_key", "") or not getattr(client, "api_secret", ""):
+        return {"enabled": False, "reason": "missing_api", "count": 0}
+    try:
+        income = client.income_history(int(config.get("live_performance_trade_limit", 100)), "REALIZED_PNL")
+    except Exception as exc:
+        return {"enabled": False, "reason": "fetch_failed", "error": str(exc), "count": 0}
+
+    closing_orders = [
+        {
+            "symbol": str(item.get("symbol", "")),
+            "net_pnl": float(item.get("income") or 0),
+            "time": int(item.get("time", 0)),
+        }
+        for item in income
+        if str(item.get("incomeType", "REALIZED_PNL")) == "REALIZED_PNL"
+    ]
+    closing_orders.sort(key=lambda item: int(item.get("time", 0)), reverse=True)
+    count = 0
+    for item in closing_orders:
+        if float(item.get("net_pnl", 0)) < 0:
+            count += 1
+            continue
+        break
+    return {
+        "enabled": True,
+        "count": count,
+        "recent": closing_orders[:5],
+    }
+
+
 def _apply_live_performance_quality(
     quality: dict[str, Any],
     live: dict[str, Any],
@@ -583,7 +619,40 @@ def observe_breakout_allows_entry(
         return False
     if float(depth.get("depth_notional", 0)) < float(config.get("observe_breakout_min_depth_notional_usdt", 500.0)):
         return False
+    atr_pct = float((quality.get("market") or {}).get("atr_pct", 0))
+    extreme_atr = float(config.get("observe_extreme_atr_pct", 3.0))
+    extreme_depth = float(config.get("observe_extreme_depth_notional_usdt", 5_000.0))
+    if atr_pct >= extreme_atr and float(depth.get("depth_notional", 0)) < extreme_depth:
+        return False
     return True
+
+
+def observe_breakout_risk_adjustment(
+    quality: dict[str, Any],
+    signal: dict[str, Any],
+    live_losses: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    multiplier = float(config.get("observe_breakout_risk_multiplier", 0.22))
+    reasons = [f"观察池基础折扣 {multiplier:.2f}"]
+    price = float(signal.get("last_price") or 0)
+    low_price_threshold = float(config.get("observe_low_price_threshold", 0.01))
+    if price and low_price_threshold > 0 and price < low_price_threshold:
+        low_mult = float(config.get("observe_low_price_risk_multiplier", 0.75))
+        multiplier *= low_mult
+        reasons.append(f"低价币折扣 {low_mult:.2f}")
+    atr_pct = float((quality.get("market") or {}).get("atr_pct", 0))
+    if atr_pct >= float(config.get("observe_high_atr_pct", 3.0)):
+        atr_mult = float(config.get("observe_high_atr_risk_multiplier", 0.75))
+        multiplier *= atr_mult
+        reasons.append(f"高ATR折扣 {atr_mult:.2f}")
+    loss_count = int(live_losses.get("count", 0) or 0)
+    threshold = int(config.get("observe_consecutive_loss_count", 2))
+    if threshold > 0 and loss_count >= threshold:
+        loss_mult = float(config.get("observe_consecutive_loss_risk_multiplier", 0.5))
+        multiplier *= loss_mult
+        reasons.append(f"连续亏损{loss_count}笔折扣 {loss_mult:.2f}")
+    return {"multiplier": multiplier, "reasons": reasons, "live_losses": live_losses}
 
 
 def backtest_strategy(symbol: str, bars: list[list[Any]], strategy: str, days: int, direction: str = "LONG") -> dict[str, Any]:
@@ -720,6 +789,7 @@ def scan_growth_candidates(
     max_depth_checks = int(config.get("depth_check_top_symbols", 8))
     depth_checks = 0
     depth_by_symbol: dict[str, dict[str, Any]] = {}
+    live_losses_by_direction: dict[str, dict[str, Any]] = {}
 
     for symbol in symbols:
         try:
@@ -747,6 +817,8 @@ def scan_growth_candidates(
                     min_pf = float(mode["min_pf"])
                     min_net_pct = 0.0
                     risk_pct = float(mode["risk_pct"])
+                if direction not in live_losses_by_direction:
+                    live_losses_by_direction[direction] = consecutive_live_losses(client, symbols, direction, config)
 
                 current_score = _current_signal_score(signal, direction, cost_ratio, recent)
                 should_check_depth = (
@@ -797,6 +869,7 @@ def scan_growth_candidates(
 
                 entry_type = "standard" if standard_passed else "watch"
                 passed = standard_passed and score >= float(config.get("standard_min_score", 85.0))
+                risk_adjustment: dict[str, Any] | None = None
                 decision_reason = "标准突破信号通过" if passed else "等待触发"
                 if passed and quality["pool"] == "small_trade":
                     entry_type = "small_standard"
@@ -810,7 +883,13 @@ def scan_growth_candidates(
                     if observe_breakout_allows_entry(score, quality, recent, signal, cost_ratio, depth, config, mode):
                         entry_type = "observe_standard"
                         passed = score >= float(config.get("standard_min_score", 85.0))
-                        risk_pct *= float(config.get("observe_breakout_risk_multiplier", 0.35))
+                        risk_adjustment = observe_breakout_risk_adjustment(
+                            quality,
+                            signal,
+                            live_losses_by_direction.get(direction, {"enabled": False, "count": 0}),
+                            config,
+                        )
+                        risk_pct *= float(risk_adjustment["multiplier"])
                         decision_reason = "观察池高分标准突破，允许折扣仓位试单" if passed else "观察池标准突破评分不足"
                     else:
                         decision_reason = f"币种质量未达实盘准入：{quality['pool']}，评分 {quality['score']}"
@@ -894,6 +973,7 @@ def scan_growth_candidates(
                         "estimated_cost_pct": cost_pct,
                         "expected_profit_pct": expected_profit_pct,
                         "risk_pct": risk_pct,
+                        "risk_adjustment": risk_adjustment,
                         "base_risk_pct": mode["risk_pct"],
                         "leverage": mode["leverage"],
                         "margin_pct": mode["margin_pct"],

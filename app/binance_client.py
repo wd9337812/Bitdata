@@ -220,6 +220,12 @@ class BinanceFuturesClient:
         cache_set(key, data)
         return data
 
+    def income_history(self, limit: int = 100, income_type: str | None = None) -> Any:
+        params: dict[str, Any] = {"limit": limit}
+        if income_type:
+            params["incomeType"] = income_type
+        return self.signed_request("GET", "/fapi/v1/income", params)
+
     def open_algo_orders(self, symbol: str | None = None) -> Any:
         params = {"symbol": symbol.upper()} if symbol else {}
         return self.signed_request("GET", "/fapi/v1/openAlgoOrders", params)

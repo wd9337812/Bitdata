@@ -238,7 +238,7 @@ def test_observe_high_score_standard_breakout_uses_discount_risk(monkeypatch):
             return [[i, 0.06, 0.063, 0.058, 0.06, 1000] for i in range(300)]
 
         def depth(self, symbol, limit=5):
-            return {"bids": [["0.05999", "10000"]], "asks": [["0.06001", "10000"]]}
+            return {"bids": [["0.05999", "100000"]], "asks": [["0.06001", "100000"]]}
 
     monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["INUSDT"])
     monkeypatch.setattr(
@@ -304,7 +304,7 @@ def test_observe_high_score_standard_breakout_uses_discount_risk(monkeypatch):
             "observe_breakout_min_net_pct": 4,
             "observe_breakout_min_depth_notional_usdt": 500,
             "observe_breakout_max_spread_pct": 0.08,
-            "observe_breakout_risk_multiplier": 0.35,
+            "observe_breakout_risk_multiplier": 0.22,
         },
         {"equity": 50},
     )
@@ -313,8 +313,200 @@ def test_observe_high_score_standard_breakout_uses_discount_risk(monkeypatch):
     assert best["passed"] is True
     assert best["entry_type"] == "observe_standard"
     assert best["symbol_pool"] == "observe"
-    assert best["risk_pct"] == 5.25
+    assert best["risk_pct"] == 2.475
+    assert best["risk_adjustment"]["multiplier"] == 0.165
     assert "观察池高分标准突破" in best["decision_reason"]
+
+
+def test_observe_breakout_reduces_risk_after_consecutive_live_losses(monkeypatch):
+    class FakeScanClient:
+        api_key = "key"
+        api_secret = "secret"
+
+        def ticker_24h(self, symbols=None):
+            return [{"symbol": "TLMUSDT", "lastPrice": "0.002", "quoteVolume": "360000000", "priceChangePercent": "20"}]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 0.002, 0.0022, 0.0019, 0.002, 100000] for i in range(300)]
+
+        def depth(self, symbol, limit=5):
+            return {"bids": [["0.0019995", "5000000"]], "asks": [["0.0020005", "5000000"]]}
+
+        def income_history(self, limit=100, income_type=None):
+            return [
+                {"symbol": "TLMUSDT", "incomeType": "REALIZED_PNL", "income": "-6.0", "time": 3000},
+                {"symbol": "TAIKOUSDT", "incomeType": "REALIZED_PNL", "income": "-1.5", "time": 2000},
+                {"symbol": "LABUSDT", "incomeType": "REALIZED_PNL", "income": "1.0", "time": 1000},
+            ]
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["TLMUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 0.002,
+            "atr": 0.00008,
+            "stop": 0.0019,
+            "take_profit": 0.0022,
+            "expected_profit_pct": 10.0,
+            "trend": True,
+            "volatility_ok": True,
+            "entry_type": "standard",
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG": {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 20,
+            "wins": 12,
+            "win_rate": 60.0,
+            "net_pct": 40.0,
+            "profit_factor": 3.0,
+        },
+    )
+
+    result = scan_growth_candidates(
+        FakeScanClient(),
+        {
+            "growth_mode": "tournament",
+            "auto_risk_by_equity": False,
+            "tournament_interval": "5m",
+            "tournament_recent_days": 5,
+            "tournament_risk_per_trade_pct": 15,
+            "tournament_max_leverage": 5,
+            "tournament_max_symbol_margin_pct": 90,
+            "allow_short": False,
+            "min_expected_profit_cost_ratio": 3,
+            "estimated_slippage_pct": 0.04,
+            "min_expected_profit_pct": 0.35,
+            "standard_min_score": 85,
+            "symbol_trade_score": 95,
+            "symbol_small_trade_score": 90,
+            "symbol_observe_score": 50,
+            "min_simulated_trades": 5,
+            "quality_backtest_days": [3, 5, 10],
+            "min_depth_notional_usdt": 20_000,
+            "depth_check_top_symbols": 1,
+            "observe_breakout_enabled": True,
+            "observe_breakout_min_score": 85,
+            "observe_breakout_min_quality": 70,
+            "observe_breakout_min_cost_ratio": 20,
+            "observe_breakout_min_profit_factor": 1.5,
+            "observe_breakout_min_net_pct": 4,
+            "observe_breakout_min_depth_notional_usdt": 500,
+            "observe_breakout_max_spread_pct": 0.08,
+            "observe_breakout_risk_multiplier": 0.22,
+            "observe_low_price_threshold": 0.01,
+            "observe_low_price_risk_multiplier": 0.75,
+            "observe_high_atr_pct": 3.0,
+            "observe_high_atr_risk_multiplier": 0.75,
+            "observe_consecutive_loss_count": 2,
+            "observe_consecutive_loss_risk_multiplier": 0.5,
+            "observe_extreme_atr_pct": 3.0,
+            "observe_extreme_depth_notional_usdt": 5_000,
+        },
+        {"equity": 50},
+    )
+
+    best = result["candidates"][0]
+    assert best["passed"] is True
+    assert best["entry_type"] == "observe_standard"
+    assert round(best["risk_pct"], 6) == round(15 * 0.22 * 0.75 * 0.75 * 0.5, 6)
+    assert best["risk_adjustment"]["live_losses"]["count"] == 2
+
+
+def test_observe_breakout_blocks_extreme_atr_with_weak_depth(monkeypatch):
+    class FakeScanClient:
+        def ticker_24h(self, symbols=None):
+            return [{"symbol": "TLMUSDT", "lastPrice": "0.002", "quoteVolume": "360000000", "priceChangePercent": "20"}]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 0.002, 0.0022, 0.0019, 0.002, 100000] for i in range(300)]
+
+        def depth(self, symbol, limit=5):
+            return {"bids": [["0.001999", "1000000"]], "asks": [["0.002001", "1000000"]]}
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["TLMUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 0.002,
+            "atr": 0.00008,
+            "stop": 0.0019,
+            "take_profit": 0.0022,
+            "expected_profit_pct": 10.0,
+            "trend": True,
+            "volatility_ok": True,
+            "entry_type": "standard",
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG": {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 20,
+            "wins": 12,
+            "win_rate": 60.0,
+            "net_pct": 40.0,
+            "profit_factor": 3.0,
+        },
+    )
+
+    result = scan_growth_candidates(
+        FakeScanClient(),
+        {
+            "growth_mode": "tournament",
+            "auto_risk_by_equity": False,
+            "tournament_interval": "5m",
+            "tournament_recent_days": 5,
+            "tournament_risk_per_trade_pct": 15,
+            "tournament_max_leverage": 5,
+            "tournament_max_symbol_margin_pct": 90,
+            "allow_short": False,
+            "min_expected_profit_cost_ratio": 3,
+            "estimated_slippage_pct": 0.04,
+            "min_expected_profit_pct": 0.35,
+            "standard_min_score": 85,
+            "symbol_trade_score": 95,
+            "symbol_small_trade_score": 90,
+            "symbol_observe_score": 50,
+            "min_simulated_trades": 5,
+            "quality_backtest_days": [3, 5, 10],
+            "min_depth_notional_usdt": 20_000,
+            "depth_check_top_symbols": 1,
+            "observe_breakout_enabled": True,
+            "observe_breakout_min_score": 85,
+            "observe_breakout_min_quality": 70,
+            "observe_breakout_min_cost_ratio": 20,
+            "observe_breakout_min_profit_factor": 1.5,
+            "observe_breakout_min_net_pct": 4,
+            "observe_breakout_min_depth_notional_usdt": 500,
+            "observe_breakout_max_spread_pct": 0.08,
+            "observe_extreme_atr_pct": 3.0,
+            "observe_extreme_depth_notional_usdt": 5_000,
+        },
+        {"equity": 50},
+    )
+
+    best = result["candidates"][0]
+    assert best["passed"] is False
+    assert best["entry_type"] == "watch"
 
 
 def test_live_performance_promotes_same_symbol_direction_to_adaptive_pool(monkeypatch):

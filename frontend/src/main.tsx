@@ -553,10 +553,17 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("preemptive_max_distance_pct", "抢跑最大触发距离%", "默认 0.35")}
           {toggle("observe_breakout_enabled", "观察池标准突破试单", "高分 observe 币出现标准突破时允许折扣仓位试单")}
           {number("observe_breakout_min_score", "观察池试单最低评分", "默认 105")}
-          {number("observe_breakout_min_quality", "观察池试单质量分", "默认 78")}
-          {number("observe_breakout_min_cost_ratio", "观察池试单成本比", "默认 20")}
-          {number("observe_breakout_risk_multiplier", "观察池试单仓位折扣", "默认 0.35")}
-          {number("symbol_cooldown_minutes", "同币开仓冷却分钟", "默认 15")}
+                {number("observe_breakout_min_quality", "观察池试单质量分", "默认 78")}
+                {number("observe_breakout_min_cost_ratio", "观察池试单成本比", "默认 20")}
+                {number("observe_breakout_risk_multiplier", "观察池试单仓位折扣", "默认 0.22")}
+                {number("observe_low_price_threshold", "低价币阈值", "低于该价格会再次降仓，默认 0.01")}
+                {number("observe_low_price_risk_multiplier", "低价币仓位折扣", "默认 0.75")}
+                {number("observe_high_atr_pct", "高波动 ATR%", "超过该值会再次降仓，默认 3")}
+                {number("observe_high_atr_risk_multiplier", "高波动仓位折扣", "默认 0.75")}
+                {number("observe_extreme_depth_notional_usdt", "极端弱深度阈值", "高 ATR 且深度低于该值会拦截，默认 5000U")}
+                {number("observe_consecutive_loss_count", "连续亏损降档笔数", "默认 2 笔")}
+                {number("observe_consecutive_loss_risk_multiplier", "连续亏损仓位折扣", "默认 0.5")}
+                {number("symbol_cooldown_minutes", "同币开仓冷却分钟", "默认 15")}
           {toggle("position_rotation_enabled", "持仓轮换", "满仓时，只有明显更强的新信号才会替换当前弱仓")}
           {number("tournament_rotation_min_new_score", "锦标赛轮换最低新评分", "默认 95")}
           {number("tournament_rotation_min_score_delta", "锦标赛轮换最低分差", "默认 12")}
