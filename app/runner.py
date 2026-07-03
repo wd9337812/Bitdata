@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from app.binance_client import BinanceFuturesClient
 from app.binance_rate import BinanceRateLimitError, rate_status
 from app.config_store import load_config
+from app.live_learning import sync_live_learning_from_binance
 from app.market_stream import start_market_stream_thread
 from app.trading_engine import (
     build_best_growth_decision,
@@ -50,6 +51,25 @@ def private_api_error(exc: Exception) -> str:
     )
 
 
+def maybe_sync_live_learning(client: BinanceFuturesClient, config: dict, state: dict) -> None:
+    if config.get("dry_run", True) or not config.get("live_credit_enabled", True):
+        return
+    last = state.get("last_live_learning_sync")
+    min_seconds = int(config.get("live_credit_sync_seconds", 600))
+    now = datetime.now(timezone.utc)
+    if last:
+        try:
+            if (now - datetime.fromisoformat(last)).total_seconds() < min_seconds:
+                return
+        except ValueError:
+            pass
+    try:
+        result = sync_live_learning_from_binance(client, config)
+        save_state({"last_live_learning_sync": now.isoformat(), "last_live_learning_records": result.get("records", 0)})
+    except Exception as exc:
+        record_event("warning", "live_learning", f"实盘信用分同步失败：{exc}")
+
+
 def is_timestamp_error(exc: Exception) -> bool:
     message = str(exc)
     return "-1021" in message or "recvWindow" in message or "Timestamp for this request" in message
@@ -79,6 +99,7 @@ def run_once() -> dict:
     else:
         raise RuntimeError("实盘模式需要先配置 Binance API Key 和 Secret。")
     state = sync_stage(config, state, account)
+    maybe_sync_live_learning(client, config, state)
 
     if state.get("stage") == "grid":
         results = []

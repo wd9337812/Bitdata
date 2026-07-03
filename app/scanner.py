@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from app.binance_client import BinanceFuturesClient
+from app.live_learning import apply_live_credit_to_candidate
 from app.strategy import StrategyParams, atr, ema
 
 
@@ -941,8 +942,7 @@ def scan_growth_candidates(
                             misses.append("综合评分不足")
                         decision_reason = "、".join(misses) or "等待触发"
 
-                candidates.append(
-                    {
+                candidate = {
                         "symbol": symbol,
                         "direction": direction,
                         "mode": mode["mode"],
@@ -979,7 +979,8 @@ def scan_growth_candidates(
                         "margin_pct": mode["margin_pct"],
                         "thresholds": {"min_trades": min_trades, "min_pf": min_pf, "min_net_pct": min_net_pct},
                     }
-                )
+                candidate = apply_live_credit_to_candidate(candidate, config)
+                candidates.append(candidate)
         except Exception as exc:
             candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})
 

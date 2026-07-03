@@ -180,6 +180,7 @@ td { color: #d8e8fb; font-size: 14px; }
   font-size: 12px;
 }
 .pill.ok { border-color: rgba(52, 211, 153, 0.45); background: rgba(5, 150, 105, 0.16); color: #86efac; }
+.pill.bad { border-color: rgba(248, 113, 113, 0.45); background: rgba(127, 29, 29, 0.22); color: #fecaca; }
 .chart-panel { min-height: 430px; }
 .alert {
   display: flex;

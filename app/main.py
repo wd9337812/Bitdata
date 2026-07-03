@@ -14,6 +14,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from app.binance_client import BinanceFuturesClient
 from app.config_store import load_config, save_config
+from app.live_learning import list_live_scores, sync_live_learning_from_binance
 from app.models import BotControlPayload, ExecutePayload, TradingConfig
 from app.market_stream import stream_status
 from app.state_store import load_state, save_state
@@ -169,6 +170,23 @@ def logs(limit: int = 200, category: str | None = None) -> dict[str, Any]:
 @app.get("/api/strategy-runs", dependencies=[Depends(require_auth)])
 def strategy_runs(limit: int = 200) -> dict[str, Any]:
     return {"runs": list_strategy_runs(limit)}
+
+
+@app.get("/api/live-learning", dependencies=[Depends(require_auth)])
+def live_learning(limit: int = 100) -> dict[str, Any]:
+    return {"scores": list_live_scores(limit)}
+
+
+@app.post("/api/live-learning/sync", dependencies=[Depends(require_auth)])
+def sync_live_learning() -> dict[str, Any]:
+    config = load_config()
+    if not config.get("api_key") or not config.get("api_secret"):
+        raise HTTPException(status_code=400, detail="请先配置 Binance API Key 和 Secret。")
+    try:
+        return sync_live_learning_from_binance(client_from_config(), config)
+    except Exception as exc:
+        record_event("error", "live_learning", str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/api/runner/heartbeat", dependencies=[Depends(require_auth)])

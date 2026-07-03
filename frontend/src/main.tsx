@@ -31,10 +31,12 @@ type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: an
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
+type LiveLearningData = { scores: any[] };
 
 const menu = [
   { id: "overview", label: "总览", icon: Activity },
   { id: "scan", label: "多币种扫描", icon: CandlestickChart },
+  { id: "learning", label: "实盘学习", icon: Zap },
   { id: "pnl", label: "收益曲线", icon: LineChart },
   { id: "risk", label: "风控中心", icon: Shield },
   { id: "config", label: "配置中心", icon: Settings },
@@ -79,6 +81,7 @@ function useData() {
   const [market, setMarket] = useState<MarketData | null>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
+  const [liveLearning, setLiveLearning] = useState<any[]>([]);
   const [health, setHealth] = useState<any>(null);
   const [error, setError] = useState("");
 
@@ -96,7 +99,11 @@ function useData() {
       setSnapshots(snapshotRes.snapshots || []);
       setLogs(logsRes.events || []);
       setHealth(healthRes);
-      if (!light) setDecisions(await api<DecisionsData>("/api/decisions"));
+      if (!light) {
+        setDecisions(await api<DecisionsData>("/api/decisions"));
+        const learningRes = await api<LiveLearningData>("/api/live-learning?limit=100");
+        setLiveLearning(learningRes.scores || []);
+      }
       setError("");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -115,7 +122,7 @@ function useData() {
     };
   }, []);
 
-  return { status, decisions, market, snapshots, logs, health, error, refresh };
+  return { status, decisions, market, snapshots, logs, liveLearning, health, error, refresh };
 }
 
 function MetricCard({ title, value, sub, tone }: { title: string; value: string; sub?: string; tone?: string }) {
@@ -200,6 +207,18 @@ function App() {
       const result = await api<any>("/api/config/test-binance", { method: "POST" });
       setActionError("");
       setActionNotice(`Binance API 测试通过，账户权益 ${fmt(result.account?.equity, 4)} U。`);
+      await data.refresh();
+    } catch (err) {
+      setActionNotice("");
+      setActionError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function syncLiveLearning() {
+    try {
+      const result = await api<any>("/api/live-learning/sync", { method: "POST" });
+      setActionError("");
+      setActionNotice(`实盘信用分同步成功：归因 ${result.records || 0} 笔交易，生成 ${result.scores?.length || 0} 个币种方向评分。`);
       await data.refresh();
     } catch (err) {
       setActionNotice("");
@@ -296,6 +315,8 @@ function App() {
           </section>
         )}
 
+        {active === "learning" && <LiveLearningPanel rows={data.liveLearning} onSync={syncLiveLearning} />}
+
         {active === "pnl" && (
           <section className="stack">
             <div className="metrics">
@@ -361,6 +382,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
             <th>方向</th>
             <th>信号类型</th>
             <th>评分</th>
+            <th>实盘信用</th>
             {!compact && <th>不开仓原因</th>}
             {!compact && <th>距离触发</th>}
             {!compact && <th>胜率</th>}
@@ -378,6 +400,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               <td>{signalLabel(row.direction || row.signal?.signal)}</td>
               <td>{row.entry_type_label || row.signal?.entry_type_label || "-"}</td>
               <td>{fmt(row.score, 2)}</td>
+              <td>{row.live_credit ? `${fmt(row.live_credit.score, 1)} · ${row.live_credit.status_label || "-"}` : "-"}</td>
               {!compact && <td className="reason-cell">{row.decision_reason || row.reason}</td>}
               {!compact && <td>{fmt(row.signal?.distance_to_trigger_pct, 3)}%</td>}
               {!compact && <td>{fmt(row.recent?.win_rate, 1)}%</td>}
@@ -390,6 +413,69 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
         </tbody>
       </table>
     </div>
+  );
+}
+
+function LiveLearningPanel({ rows, onSync }: { rows: any[]; onSync: () => Promise<void> }) {
+  const totalNet = rows.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
+  const strong = rows.filter((row) => row.status === "strong").length;
+  const penalty = rows.filter((row) => row.status === "penalty").length;
+  return (
+    <section className="stack">
+      <div className="metrics">
+        <MetricCard title="已学习方向" value={String(rows.length)} sub="按币种 + 做多/做空分开统计" />
+        <MetricCard title="强信任方向" value={String(strong)} sub="会提高排序，小幅奖励仓位" />
+        <MetricCard title="惩罚区方向" value={String(penalty)} sub="默认只观察不实盘" tone={penalty ? "negative" : ""} />
+        <MetricCard title="学习净盈亏" value={`${fmt(totalNet, 4)} U`} tone={totalNet >= 0 ? "positive" : "negative"} />
+      </div>
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>币种实盘信用分</h2>
+            <p>系统根据真实成交、手续费、持仓时间和连续盈亏，自动奖励有效币种，惩罚伤害账户的币种。</p>
+          </div>
+          <button className="secondary" onClick={onSync}>同步历史信用分</button>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>币种</th>
+                <th>方向</th>
+                <th>信用分</th>
+                <th>状态</th>
+                <th>交易数</th>
+                <th>胜率</th>
+                <th>净盈亏</th>
+                <th>PF</th>
+                <th>连续盈亏</th>
+                <th>平均持仓</th>
+                <th>冷却结束</th>
+                <th>学习备注</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={`${row.symbol}-${row.direction}`}>
+                  <td className="symbol">{row.symbol}</td>
+                  <td>{signalLabel(row.direction)}</td>
+                  <td>{fmt(row.score, 1)}</td>
+                  <td><span className={row.status === "strong" ? "pill ok" : row.status === "penalty" ? "pill bad" : "pill"}>{row.status_label}</span></td>
+                  <td>{row.closed_trades}</td>
+                  <td>{fmt(row.win_rate, 1)}%</td>
+                  <td className={Number(row.net_pnl) >= 0 ? "positive-text" : "negative-text"}>{fmt(row.net_pnl, 4)} U</td>
+                  <td>{fmt(row.profit_factor, 2)}</td>
+                  <td>{row.consecutive_wins > 0 ? `连赢 ${row.consecutive_wins}` : row.consecutive_losses > 0 ? `连亏 ${row.consecutive_losses}` : "-"}</td>
+                  <td>{fmt(Number(row.avg_hold_seconds || 0) / 60, 1)} 分钟</td>
+                  <td>{row.penalty_until ? new Date(row.penalty_until).toLocaleString("zh-CN") : "-"}</td>
+                  <td className="reason-cell">{(row.notes || []).join("；")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -563,6 +649,17 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
                 {number("observe_extreme_depth_notional_usdt", "极端弱深度阈值", "高 ATR 且深度低于该值会拦截，默认 5000U")}
                 {number("observe_consecutive_loss_count", "连续亏损降档笔数", "默认 2 笔")}
                 {number("observe_consecutive_loss_risk_multiplier", "连续亏损仓位折扣", "默认 0.5")}
+                {toggle("live_credit_enabled", "启用实盘信用分", "按真实成交奖励有效币种，惩罚连续亏损或快速止损的币种方向")}
+                {number("live_credit_history_hours", "信用分历史窗口小时", "默认 96 小时；部署时会用这个窗口初始化")}
+                {number("live_credit_score_weight", "信用分排序权重", "默认 0.35；分数越高越偏向近期实盘表现")}
+                {number("live_credit_max_risk_multiplier", "强信任最大仓位倍率", "默认 1.15，不建议过高")}
+                {number("live_credit_observe_risk_multiplier", "观察区仓位倍率", "默认 0.70")}
+                {number("live_credit_weak_risk_multiplier", "弱信任仓位倍率", "默认 0.45")}
+                {toggle("live_credit_penalty_observe_only", "惩罚区只观察", "开启后惩罚区币种方向不会实盘开仓")}
+                {number("live_credit_quick_stop_seconds", "快速止损秒数", "默认 60 秒；低于该持仓时间的亏损会重罚")}
+                {number("live_credit_two_loss_cooldown_hours", "同方向两连亏冷却小时", "默认 4 小时")}
+                {number("live_credit_tail_win_count", "连续盈利防追尾笔数", "默认 3 笔")}
+                {number("live_credit_tail_risk_multiplier", "防追尾仓位倍率", "默认 0.75")}
                 {number("symbol_cooldown_minutes", "同币开仓冷却分钟", "默认 15")}
           {toggle("position_rotation_enabled", "持仓轮换", "满仓时，只有明显更强的新信号才会替换当前弱仓")}
           {number("tournament_rotation_min_new_score", "锦标赛轮换最低新评分", "默认 95")}
