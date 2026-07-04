@@ -12,6 +12,8 @@ class TradingConfig(BaseModel):
     coarse_pool_limit: int = Field(default=220, ge=1, le=500)
     rank_pool_limit: int = Field(default=90, ge=1, le=200)
     auction_pool_limit: int = Field(default=15, ge=0, le=50)
+    scan_degrade_seconds: int = Field(default=18, ge=5, le=300)
+    scan_min_rank_symbols: int = Field(default=25, ge=1, le=200)
     max_scan_symbols: int = Field(default=40, ge=1, le=120)
     min_24h_volume_usdt: float = Field(default=30_000_000, ge=0)
     max_observation_symbols: int = Field(default=45, ge=1, le=150)

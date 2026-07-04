@@ -1128,7 +1128,7 @@ def scan_growth_candidates(
     candidates = []
     recalled_symbols = list(symbols)
     tickers = {item["symbol"]: item for item in client.ticker_24h(recalled_symbols)}
-    symbols, coarse_rows = _coarse_rank_symbols(recalled_symbols, tickers, config, mode)
+    ranked_symbols, coarse_rows = _coarse_rank_symbols(recalled_symbols, tickers, config, mode)
     fee_pct = StrategyParams().taker_fee * 2 * 100
     slippage_pct = float(config.get("estimated_slippage_pct", 0.04))
     cost_pct = fee_pct + slippage_pct
@@ -1138,11 +1138,17 @@ def scan_growth_candidates(
         if int(day) > 0
     } | {int(mode["recent_days"])})
     max_depth_checks = min(int(config.get("depth_check_top_symbols", 8)), limits["auction"])
+    degrade_seconds = float(config.get("scan_degrade_seconds", 18))
+    min_rank_symbols = min(int(config.get("scan_min_rank_symbols", 25)), len(ranked_symbols))
     depth_checks = 0
     depth_by_symbol: dict[str, dict[str, Any]] = {}
     live_losses_by_direction: dict[str, dict[str, Any]] = {}
+    processed_symbols: list[str] = []
 
-    for symbol in symbols:
+    for symbol in ranked_symbols:
+        if len(processed_symbols) >= min_rank_symbols and time.perf_counter() - started_at >= degrade_seconds:
+            break
+        processed_symbols.append(symbol)
         try:
             bars = client.klines_history(symbol, mode["interval"], max(quality_days))
             directions = ["LONG", "SHORT"] if config.get("allow_short", False) else ["LONG"]
@@ -1171,7 +1177,7 @@ def scan_growth_candidates(
                     min_net_pct = float(config.get("tournament_sprint_long_min_net_pct", -3.0) if is_sprint else 0.0)
                     risk_pct = float(mode["risk_pct"])
                 if direction not in live_losses_by_direction:
-                    live_losses_by_direction[direction] = consecutive_live_losses(client, symbols, direction, config)
+                    live_losses_by_direction[direction] = consecutive_live_losses(client, processed_symbols or ranked_symbols, direction, config)
 
                 current_score = _current_signal_score(signal, direction, cost_ratio, recent)
                 should_check_depth = (
@@ -1384,9 +1390,11 @@ def scan_growth_candidates(
             "label": "粗排",
         },
         "rank": {
-            "count": len(symbols),
+            "count": len(processed_symbols),
             "limit": limits["rank"],
             "label": "精排",
+            "planned": len(ranked_symbols),
+            "degraded": len(processed_symbols) < len(ranked_symbols),
         },
         "auction": {
             "count": depth_checks,
@@ -1399,11 +1407,13 @@ def scan_growth_candidates(
             "label": "候选",
         },
         "elapsed_seconds": round(time.perf_counter() - started_at, 3),
+        "degrade_seconds": degrade_seconds,
         "coarse_top": _json_safe(coarse_rows[:20]),
     }
     return {
         "mode": _json_safe(mode),
-        "symbols": symbols,
+        "symbols": processed_symbols,
+        "ranked_symbols": ranked_symbols,
         "recalled_symbols": recalled_symbols,
         "funnel": _json_safe(funnel),
         "trade_pool": trade_pool,

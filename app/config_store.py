@@ -27,6 +27,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "coarse_pool_limit": 220,
     "rank_pool_limit": 90,
     "auction_pool_limit": 15,
+    "scan_degrade_seconds": 18,
+    "scan_min_rank_symbols": 25,
     "max_scan_symbols": 40,
     "min_24h_volume_usdt": 30_000_000,
     "max_observation_symbols": 45,
