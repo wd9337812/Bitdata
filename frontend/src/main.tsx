@@ -685,6 +685,15 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("tournament_sprint_short_preemptive_risk_multiplier", "冲刺做空抢跑风险折扣", "默认 0.25")}
           {number("tournament_sprint_min_expected_profit_cost_ratio", "冲刺最低收益/成本比", "默认 1.35，低于此值不值得付手续费和滑点")}
           {toggle("quality_mode_weights_enabled", "启用模式化质量评分", "不同模式使用不同权重；冲刺更看重放量、ATR、趋势和实盘表现")}
+          {number("tournament_sprint_standard_stop_atr", "冲刺标准止损 ATR", "默认 0.9；只影响新开仓保护单")}
+          {number("tournament_sprint_standard_take_profit_atr", "冲刺标准止盈 ATR", "默认 1.4；更快止盈，减少持仓占用")}
+          {number("tournament_sprint_standard_max_hold_bars", "冲刺标准最多K线", "默认 6 根 5m K线，回测使用")}
+          {number("tournament_sprint_preemptive_stop_atr", "冲刺抢跑止损 ATR", "默认 0.75；抢跑单更快认错")}
+          {number("tournament_sprint_preemptive_take_profit_atr", "冲刺抢跑止盈 ATR", "默认 1.0")}
+          {number("tournament_sprint_preemptive_max_hold_bars", "冲刺抢跑最多K线", "默认 4 根 5m K线，回测使用")}
+          {number("tournament_sprint_momentum_stop_atr", "冲刺动量止损 ATR", "默认 0.8")}
+          {number("tournament_sprint_momentum_take_profit_atr", "冲刺动量止盈 ATR", "默认 1.2")}
+          {number("tournament_sprint_momentum_max_hold_bars", "冲刺动量最多K线", "默认 5 根 5m K线，回测使用")}
           {number("sprint_symbol_trade_score", "冲刺交易池分数", "默认 68")}
           {number("sprint_symbol_small_trade_score", "冲刺小仓交易分数", "默认 55")}
           {number("sprint_symbol_hot_observe_score", "冲刺热点观察分数", "默认 45，满足放量和盘口时可小仓试探")}

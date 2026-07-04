@@ -1,5 +1,5 @@
 from app import scanner
-from app.scanner import active_growth_mode, discover_coin_symbols, latest_strategy_signal, mode_config, scan_growth_candidates, score_symbol_quality
+from app.scanner import active_growth_mode, discover_coin_symbols, latest_strategy_signal, mode_config, scan_growth_candidates, score_symbol_quality, strategy_params_for_mode
 
 
 class FakeClient:
@@ -32,6 +32,112 @@ class FakeClient:
 
 def make_bar(open_price: float, high: float, low: float, close: float, ts: int) -> list[float]:
     return [ts, open_price, high, low, close, 0, ts + 1, 0, 0, 0, 0, 0]
+
+
+def test_tournament_sprint_uses_fast_protection_defaults():
+    standard = strategy_params_for_mode({}, {"mode": "tournament_sprint"}, "standard")
+    preemptive = strategy_params_for_mode({}, {"mode": "tournament_sprint"}, "preemptive")
+    momentum = strategy_params_for_mode({}, {"mode": "tournament_sprint"}, "momentum")
+
+    assert standard.stop_atr == 0.9
+    assert standard.take_profit_atr == 1.4
+    assert standard.max_hold_bars == 6
+    assert preemptive.stop_atr == 0.75
+    assert preemptive.take_profit_atr == 1.0
+    assert preemptive.max_hold_bars == 4
+    assert momentum.stop_atr == 0.8
+    assert momentum.take_profit_atr == 1.2
+    assert momentum.max_hold_bars == 5
+    assert strategy_params_for_mode({}, {"mode": "tournament"}, "standard") is None
+
+
+def test_tournament_sprint_scan_passes_fast_protection_to_signal_and_backtest(monkeypatch):
+    class FakeScanClient:
+        def ticker_24h(self, symbols=None):
+            return [{"symbol": "FASTUSDT", "lastPrice": "10", "quoteVolume": "50000000", "priceChangePercent": "5"}]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 10, 10.4, 9.8, 10, 1000] for i in range(200)]
+
+    captured = {"signal": [], "backtest": []}
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["FASTUSDT"])
+
+    def fake_signal(symbol, bars, strategy, params=None, direction="LONG"):
+        captured["signal"].append((params.stop_atr, params.take_profit_atr, params.max_hold_bars))
+        return {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 10.0,
+            "atr": 0.5,
+            "stop": 9.55,
+            "take_profit": 10.7,
+            "expected_profit_pct": 7.0,
+            "trend": True,
+            "volatility_ok": True,
+            "entry_type": "standard",
+        }
+
+    def fake_backtest(symbol, bars, strategy, days, direction="LONG", params=None):
+        captured["backtest"].append((params.stop_atr, params.take_profit_atr, params.max_hold_bars))
+        return {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 8,
+            "wins": 5,
+            "win_rate": 62.5,
+            "net_pct": 8.0,
+            "profit_factor": 2.0,
+        }
+
+    monkeypatch.setattr(scanner, "latest_strategy_signal", fake_signal)
+    monkeypatch.setattr(scanner, "backtest_strategy", fake_backtest)
+    monkeypatch.setattr(
+        scanner,
+        "score_symbol_quality",
+        lambda symbol, bars, ticker, signal, backtests, depth, config, mode=None: {
+            "score": 80,
+            "pool": "trade",
+            "allowed": True,
+            "quality_risk_multiplier": 1.0,
+            "quality_risk_reasons": [],
+            "components": {},
+            "market_passed": True,
+            "simulation": {"passed": True},
+            "market": {"atr_pct": 5.0, "spread_pct": 0.02, "depth_notional": 50_000},
+        },
+    )
+
+    result = scan_growth_candidates(
+        FakeScanClient(),
+        {
+            "growth_mode": "tournament_sprint",
+            "auto_risk_by_equity": False,
+            "tournament_sprint_interval": "5m",
+            "tournament_sprint_recent_days": 3,
+            "tournament_sprint_risk_per_trade_pct": 18,
+            "tournament_sprint_max_leverage": 5,
+            "tournament_sprint_max_symbol_margin_pct": 95,
+            "tournament_sprint_standard_stop_atr": 0.85,
+            "tournament_sprint_standard_take_profit_atr": 1.25,
+            "tournament_sprint_standard_max_hold_bars": 5,
+            "tournament_sprint_long_min_profit_factor": 0.85,
+            "tournament_sprint_long_min_net_pct": -3,
+            "tournament_sprint_min_expected_profit_cost_ratio": 1.2,
+            "tournament_sprint_min_expected_profit_pct": 0.2,
+            "allow_short": False,
+            "estimated_slippage_pct": 0.04,
+            "min_depth_notional_usdt": 20_000,
+        },
+        {"equity": 69},
+    )
+
+    assert result["candidates"][0]["passed"] is True
+    assert captured["signal"] == [(0.85, 1.25, 5)]
+    assert captured["backtest"]
+    assert set(captured["backtest"]) == {(0.85, 1.25, 5)}
 
 
 def test_auto_growth_mode_uses_tournament_for_small_equity():

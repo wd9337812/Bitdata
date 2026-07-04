@@ -7,7 +7,7 @@ from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.grid import build_grid_orders, build_grid_plan
 from app.risk import assess_new_position, current_stage, live_trading_allowed, position_size_from_risk
-from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates
+from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates, strategy_params_for_mode
 from app.state_store import save_state
 from app.strategy import StrategyParams
 
@@ -218,7 +218,8 @@ def build_stage1_decision(
     if candidate_signal.get("signal") == direction and candidate_signal.get("stop") and candidate_signal.get("take_profit"):
         signal = candidate_signal
     else:
-        signal = latest_strategy_signal(symbol, bars, active_mode["strategy"], StrategyParams(), direction=direction)
+        signal_params = strategy_params_for_mode(config, active_mode, "standard") or StrategyParams()
+        signal = latest_strategy_signal(symbol, bars, active_mode["strategy"], signal_params, direction=direction)
     equity = account_summary.get("equity")
     if signal.get("signal") not in {"LONG", "SHORT"} or signal.get("signal") != direction:
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "no_signal"}}

@@ -101,6 +101,29 @@ def mode_config(config: dict[str, Any], equity: float | None = None) -> dict[str
     return preset
 
 
+def strategy_params_for_mode(
+    config: dict[str, Any],
+    mode: dict[str, Any] | str,
+    entry_type: str = "standard",
+) -> StrategyParams | None:
+    mode_name = str(mode.get("mode") if isinstance(mode, dict) else mode)
+    if mode_name != "tournament_sprint":
+        return None
+    entry_key = "momentum" if entry_type == "momentum" else "preemptive" if entry_type == "preemptive" else "standard"
+    defaults = {
+        "standard": (0.9, 1.4, 6),
+        "preemptive": (0.75, 1.0, 4),
+        "momentum": (0.8, 1.2, 5),
+    }
+    default_stop, default_take, default_hold = defaults[entry_key]
+    return StrategyParams(
+        stop_atr=float(config.get(f"tournament_sprint_{entry_key}_stop_atr", default_stop)),
+        take_profit_atr=float(config.get(f"tournament_sprint_{entry_key}_take_profit_atr", default_take)),
+        max_hold_bars=int(config.get(f"tournament_sprint_{entry_key}_max_hold_bars", default_hold)),
+        min_atr_pct=0.006,
+    )
+
+
 def discover_coin_symbols(client: BinanceFuturesClient, config: dict[str, Any]) -> list[str]:
     if not config.get("auto_discover_symbols", True):
         return [symbol.upper() for symbol in config.get("stage1_symbols", ["SOLUSDT"])]
@@ -138,6 +161,7 @@ def latest_strategy_signal(
     params: StrategyParams | None = None,
     direction: str = "LONG",
 ) -> dict[str, Any]:
+    custom_params = params is not None
     params = params or StrategyParams()
     if len(bars) < 80:
         return {"symbol": symbol, "signal": "WAIT", "reason": "not_enough_data"}
@@ -170,8 +194,8 @@ def latest_strategy_signal(
         trend = close < e20[i] < e50[i] if is_short else close > e20[i] > e50[i]
         trigger_price = min(lows[max(0, i - 12):i]) if is_short else max(highs[max(0, i - 12):i])
         trigger = close < trigger_price if is_short else close > trigger_price
-        stop_mult = 1.2
-        take_mult = 2.5
+        stop_mult = params.stop_atr if custom_params else 1.2
+        take_mult = params.take_profit_atr if custom_params else 2.5
         min_atr = 0.006
         reason = "short_breakout" if is_short else "breakout"
     else:
@@ -208,6 +232,11 @@ def latest_strategy_signal(
             "expected_profit_pct": abs(take_profit - close) / close * 100,
             "entry_type": "standard",
             "entry_type_label": "标准信号",
+            "protection_profile": {
+                "stop_atr": stop_mult,
+                "take_profit_atr": take_mult,
+                "max_hold_bars": params.max_hold_bars if custom_params else None,
+            },
             "trigger_price": trigger_price,
             "distance_to_trigger_pct": 0.0,
             "candle_move_pct": candle_move_pct,
@@ -239,12 +268,19 @@ def _promote_wait_signal(
     direction: str,
     entry_type: str,
     risk_multiplier: float,
+    params: StrategyParams | None = None,
 ) -> dict[str, Any]:
     close = float(signal["last_price"])
     atr_value = float(signal["atr"])
     is_short = direction == "SHORT"
-    stop_mult = 1.05 if entry_type == "momentum" else 1.15
-    take_mult = 2.15 if entry_type == "momentum" else 2.35
+    if params is not None:
+        stop_mult = params.stop_atr
+        take_mult = params.take_profit_atr
+        max_hold_bars = params.max_hold_bars
+    else:
+        stop_mult = 1.05 if entry_type == "momentum" else 1.15
+        take_mult = 2.15 if entry_type == "momentum" else 2.35
+        max_hold_bars = None
     stop = close + atr_value * stop_mult if is_short else close - atr_value * stop_mult
     take_profit = close - atr_value * take_mult if is_short else close + atr_value * take_mult
     return {
@@ -257,6 +293,11 @@ def _promote_wait_signal(
         "expected_profit_pct": abs(take_profit - close) / close * 100,
         "entry_type": entry_type,
         "entry_type_label": "强动量" if entry_type == "momentum" else "抢跑试探",
+        "protection_profile": {
+            "stop_atr": stop_mult,
+            "take_profit_atr": take_mult,
+            "max_hold_bars": max_hold_bars,
+        },
         "risk_multiplier": risk_multiplier,
     }
 
@@ -274,6 +315,22 @@ def _current_signal_score(signal: dict[str, Any], direction: str, cost_ratio: fl
     score += min(max(cost_ratio, 0), 8) * 2.5
     score += min(float(recent.get("profit_factor", 0)), 5) * 3
     return score
+
+
+def _backtest_strategy_with_params(
+    symbol: str,
+    bars: list[list[Any]],
+    strategy: str,
+    days: int,
+    direction: str,
+    params: StrategyParams | None,
+) -> dict[str, Any]:
+    try:
+        return backtest_strategy(symbol, bars, strategy, days, direction=direction, params=params)
+    except TypeError as exc:
+        if "params" not in str(exc):
+            raise
+        return backtest_strategy(symbol, bars, strategy, days, direction=direction)
 
 
 def _volume_spike_ratio(bars: list[list[Any]], lookback: int = 20) -> float:
@@ -870,11 +927,19 @@ def observe_breakout_risk_adjustment(
     return {"multiplier": multiplier, "reasons": reasons, "live_losses": live_losses}
 
 
-def backtest_strategy(symbol: str, bars: list[list[Any]], strategy: str, days: int, direction: str = "LONG") -> dict[str, Any]:
+def backtest_strategy(
+    symbol: str,
+    bars: list[list[Any]],
+    strategy: str,
+    days: int,
+    direction: str = "LONG",
+    params: StrategyParams | None = None,
+) -> dict[str, Any]:
     if len(bars) < 100:
         return {"symbol": symbol, "trades": 0, "wins": 0, "win_rate": 0, "net_pct": 0, "profit_factor": 0}
 
-    params = StrategyParams()
+    custom_params = params is not None
+    params = params or StrategyParams()
     opens = [float(bar[1]) for bar in bars]
     highs = [float(bar[2]) for bar in bars]
     lows = [float(bar[3]) for bar in bars]
@@ -903,9 +968,9 @@ def backtest_strategy(symbol: str, bars: list[list[Any]], strategy: str, days: i
         elif strategy == "breakout":
             trend = closes[i] < e20[i] < e50[i] if is_short else closes[i] > e20[i] > e50[i]
             trigger = closes[i] < min(lows[max(0, i - 12):i]) if is_short else closes[i] > max(highs[max(0, i - 12):i])
-            stop_mult = 1.2
-            take_mult = 2.5
-            max_hold = 10
+            stop_mult = params.stop_atr if custom_params else 1.2
+            take_mult = params.take_profit_atr if custom_params else 2.5
+            max_hold = params.max_hold_bars if custom_params else 10
             min_atr = 0.006
         else:
             trend = closes[i] < e20[i] < e50[i] if is_short else closes[i] > e20[i] > e50[i]
@@ -1012,9 +1077,10 @@ def scan_growth_candidates(
             directions = ["LONG", "SHORT"] if config.get("allow_short", False) else ["LONG"]
             for direction in directions:
                 is_sprint = mode["mode"] == "tournament_sprint"
-                signal = latest_strategy_signal(symbol, bars, mode["strategy"], direction=direction)
+                signal_params = strategy_params_for_mode(config, mode, "standard")
+                signal = latest_strategy_signal(symbol, bars, mode["strategy"], params=signal_params, direction=direction)
                 backtests = {
-                    day: backtest_strategy(symbol, bars, mode["strategy"], day, direction=direction)
+                    day: _backtest_strategy_with_params(symbol, bars, mode["strategy"], day, direction, signal_params)
                     for day in quality_days
                 }
                 recent = backtests[int(mode["recent_days"])]
@@ -1139,7 +1205,8 @@ def scan_growth_candidates(
                         )
                         if quality["pool"] == "small_trade":
                             risk_multiplier *= float(config.get("small_trade_risk_multiplier", 0.5))
-                        signal = _promote_wait_signal(signal, direction, entry_type, risk_multiplier)
+                        entry_params = strategy_params_for_mode(config, mode, entry_type)
+                        signal = _promote_wait_signal(signal, direction, entry_type, risk_multiplier, params=entry_params)
                         expected_profit_pct = float(signal.get("expected_profit_pct") or 0)
                         cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
                         risk_pct *= risk_multiplier
