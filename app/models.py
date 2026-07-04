@@ -76,14 +76,17 @@ class TradingConfig(BaseModel):
     balanced_interval: str = "1h"
     attack_interval: str = "15m"
     tournament_interval: str = "5m"
+    tournament_sprint_interval: str = "5m"
     conservative_recent_days: int = Field(default=30, ge=1, le=120)
     balanced_recent_days: int = Field(default=20, ge=1, le=120)
     attack_recent_days: int = Field(default=10, ge=1, le=60)
     tournament_recent_days: int = Field(default=5, ge=1, le=30)
+    tournament_sprint_recent_days: int = Field(default=3, ge=1, le=14)
     conservative_loop_seconds: int = Field(default=300, ge=10, le=3600)
     balanced_loop_seconds: int = Field(default=120, ge=10, le=3600)
     attack_loop_seconds: int = Field(default=60, ge=10, le=3600)
     tournament_loop_seconds: int = Field(default=30, ge=10, le=3600)
+    tournament_sprint_loop_seconds: int = Field(default=20, ge=10, le=3600)
     limit: int = Field(default=1000, ge=100, le=1500)
     stage1_target_equity: float = Field(default=10000.0, gt=0)
     stage2_activation: str = "manual"
@@ -93,23 +96,30 @@ class TradingConfig(BaseModel):
     risk_per_trade_pct: float = Field(default=1.0, ge=0.1, le=25)
     attack_risk_per_trade_pct: float = Field(default=5.0, ge=0.1, le=25)
     tournament_risk_per_trade_pct: float = Field(default=15.0, ge=0.1, le=50)
+    tournament_sprint_risk_per_trade_pct: float = Field(default=18.0, ge=0.1, le=60)
     daily_loss_limit_pct: float = Field(default=3.0, ge=0.1, le=60)
     attack_daily_loss_limit_pct: float = Field(default=10.0, ge=0.1, le=60)
     tournament_daily_loss_limit_pct: float = Field(default=25.0, ge=0.1, le=80)
+    tournament_sprint_daily_loss_limit_pct: float = Field(default=35.0, ge=0.1, le=90)
     max_drawdown_pct: float = Field(default=15.0, ge=1, le=80)
     max_consecutive_losses: int = Field(default=2, ge=1, le=20)
     cooldown_hours: int = Field(default=24, ge=1, le=168)
     max_open_positions: int = Field(default=1, ge=1, le=20)
+    tournament_sprint_max_open_positions: int = Field(default=1, ge=1, le=5)
+    tournament_sprint_second_position_equity: float = Field(default=100.0, ge=0)
     position_rotation_enabled: bool = True
     tournament_rotation_enabled: bool = True
+    tournament_sprint_rotation_enabled: bool = True
     attack_rotation_enabled: bool = True
     balanced_rotation_enabled: bool = True
     conservative_rotation_enabled: bool = False
     tournament_rotation_min_new_score: float = Field(default=95.0, ge=0, le=200)
+    tournament_sprint_rotation_min_new_score: float = Field(default=88.0, ge=0, le=200)
     attack_rotation_min_new_score: float = Field(default=100.0, ge=0, le=200)
     balanced_rotation_min_new_score: float = Field(default=110.0, ge=0, le=200)
     conservative_rotation_min_new_score: float = Field(default=130.0, ge=0, le=200)
     tournament_rotation_min_score_delta: float = Field(default=12.0, ge=0, le=200)
+    tournament_sprint_rotation_min_score_delta: float = Field(default=8.0, ge=0, le=200)
     attack_rotation_min_score_delta: float = Field(default=18.0, ge=0, le=200)
     balanced_rotation_min_score_delta: float = Field(default=25.0, ge=0, le=200)
     conservative_rotation_min_score_delta: float = Field(default=999.0, ge=0, le=1000)
@@ -121,9 +131,11 @@ class TradingConfig(BaseModel):
     max_symbol_margin_pct: float = Field(default=35.0, ge=1, le=100)
     attack_max_symbol_margin_pct: float = Field(default=60.0, ge=1, le=100)
     tournament_max_symbol_margin_pct: float = Field(default=90.0, ge=1, le=100)
+    tournament_sprint_max_symbol_margin_pct: float = Field(default=95.0, ge=1, le=100)
     stage1_max_leverage: float = Field(default=2, ge=1, le=10)
     attack_max_leverage: float = Field(default=3, ge=1, le=20)
     tournament_max_leverage: float = Field(default=5, ge=1, le=50)
+    tournament_sprint_max_leverage: float = Field(default=5, ge=1, le=50)
     stage2_max_leverage: float = Field(default=1.5, ge=1, le=5)
     min_recent_trades: int = Field(default=2, ge=0, le=50)
     min_profit_factor: float = Field(default=1.2, ge=0, le=10)
@@ -135,6 +147,24 @@ class TradingConfig(BaseModel):
     preemptive_risk_multiplier: float = Field(default=0.24, ge=0.05, le=1)
     short_preemptive_risk_multiplier: float = Field(default=0.18, ge=0.05, le=1)
     preemptive_max_distance_pct: float = Field(default=0.35, ge=0, le=5)
+    tournament_sprint_enabled: bool = True
+    tournament_sprint_auto_under_equity: float = Field(default=100.0, ge=0)
+    tournament_sprint_standard_min_score: float = Field(default=72.0, ge=0, le=200)
+    tournament_sprint_preemptive_min_score: float = Field(default=58.0, ge=0, le=200)
+    tournament_sprint_preemptive_max_distance_pct: float = Field(default=0.55, ge=0, le=5)
+    tournament_sprint_preemptive_risk_multiplier: float = Field(default=0.35, ge=0.05, le=1)
+    tournament_sprint_short_preemptive_risk_multiplier: float = Field(default=0.25, ge=0.05, le=1)
+    tournament_sprint_momentum_enabled: bool = True
+    tournament_sprint_momentum_min_score: float = Field(default=54.0, ge=0, le=200)
+    tournament_sprint_momentum_min_candle_pct: float = Field(default=0.10, ge=0, le=20)
+    tournament_sprint_min_expected_profit_cost_ratio: float = Field(default=1.35, ge=0, le=20)
+    tournament_sprint_min_expected_profit_pct: float = Field(default=0.22, ge=0, le=20)
+    tournament_sprint_short_min_recent_trades: int = Field(default=3, ge=0, le=50)
+    tournament_sprint_short_min_profit_factor: float = Field(default=1.05, ge=0, le=10)
+    tournament_sprint_short_min_net_pct: float = Field(default=-2.0, ge=-100, le=100)
+    tournament_sprint_long_min_profit_factor: float = Field(default=0.85, ge=0, le=10)
+    tournament_sprint_long_min_net_pct: float = Field(default=-3.0, ge=-100, le=100)
+    tournament_sprint_max_consecutive_losses: int = Field(default=4, ge=1, le=20)
     observe_breakout_enabled: bool = True
     observe_breakout_min_score: float = Field(default=105.0, ge=0, le=200)
     observe_breakout_min_quality: float = Field(default=78.0, ge=0, le=100)

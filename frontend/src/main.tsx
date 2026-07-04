@@ -57,6 +57,8 @@ const modeOptions = [
   ["tournament", "锦标赛：5分钟，高风险机会模式"],
 ];
 
+modeOptions.push(["tournament_sprint", "锦标赛冲刺：5分钟，更高频、更高风险"]);
+
 const defaultSymbolOptions = [
   "BTCUSDT",
   "ETHUSDT",
@@ -514,11 +516,11 @@ function RiskPanel({ config, state, account }: { config: any; state: any; accoun
   return (
     <section className="stack">
       <div className="metrics">
-        <MetricCard title="标准风险" value={`${fmt(config.risk_per_trade_pct)}% / ${fmt(config.attack_risk_per_trade_pct)}% / ${fmt(config.tournament_risk_per_trade_pct)}%`} sub="稳健 / 进攻 / 锦标赛" />
+        <MetricCard title="标准风险" value={`${fmt(config.risk_per_trade_pct)}% / ${fmt(config.attack_risk_per_trade_pct)}% / ${fmt(config.tournament_risk_per_trade_pct)}% / ${fmt(config.tournament_sprint_risk_per_trade_pct)}%`} sub="稳健 / 进攻 / 锦标赛 / 冲刺" />
         <MetricCard title="抢跑风险折扣" value={`${fmt(config.preemptive_risk_multiplier, 2)} / ${fmt(config.short_preemptive_risk_multiplier, 2)}`} sub="做多 / 做空" />
-        <MetricCard title="每日亏损上限" value={`${fmt(config.daily_loss_limit_pct)}% / ${fmt(config.attack_daily_loss_limit_pct)}% / ${fmt(config.tournament_daily_loss_limit_pct)}%`} />
+        <MetricCard title="每日亏损上限" value={`${fmt(config.daily_loss_limit_pct)}% / ${fmt(config.attack_daily_loss_limit_pct)}% / ${fmt(config.tournament_daily_loss_limit_pct)}% / ${fmt(config.tournament_sprint_daily_loss_limit_pct)}%`} />
         <MetricCard title="最大回撤" value={`${fmt(config.max_drawdown_pct)}%`} />
-        <MetricCard title="最大持仓" value={String(config.max_open_positions)} />
+        <MetricCard title="最大持仓" value={`${config.max_open_positions} / 冲刺 ${config.tournament_sprint_max_open_positions || 1}`} />
         <MetricCard title="同币冷却" value={`${fmt(config.symbol_cooldown_minutes, 0)} 分钟`} />
       </div>
       <div className="panel">
@@ -632,6 +634,20 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {select("attack_interval", "进攻周期", intervalOptions)}
           {select("tournament_interval", "锦标赛周期", intervalOptions)}
           {number("tournament_loop_seconds", "锦标赛扫描秒数", "默认 30 秒")}
+          {select("tournament_sprint_interval", "锦标赛冲刺周期", intervalOptions)}
+          {number("tournament_sprint_loop_seconds", "冲刺扫描秒数", "默认 20 秒；完整决策仍受币种数量和回测耗时影响")}
+          {number("tournament_sprint_risk_per_trade_pct", "冲刺基础风险%", "默认 18%，属于高风险小资金冲刺")}
+          {number("tournament_sprint_daily_loss_limit_pct", "冲刺每日亏损上限%", "默认 35%，触发后停止新开仓")}
+          {number("tournament_sprint_max_open_positions", "冲刺最大持仓数", "100U 前建议 1，100U 后可配置 2")}
+          {number("tournament_sprint_second_position_equity", "允许第二持仓权益", "默认 100U")}
+          {toggle("tournament_sprint_momentum_enabled", "开启冲刺强动量", "成交和价格快速异动时允许小仓试探")}
+          {number("tournament_sprint_standard_min_score", "冲刺标准信号最低评分", "默认 72")}
+          {number("tournament_sprint_preemptive_min_score", "冲刺抢跑最低评分", "默认 58")}
+          {number("tournament_sprint_momentum_min_score", "冲刺强动量最低评分", "默认 54")}
+          {number("tournament_sprint_preemptive_max_distance_pct", "冲刺抢跑最大触发距离%", "默认 0.55")}
+          {number("tournament_sprint_preemptive_risk_multiplier", "冲刺做多抢跑风险折扣", "默认 0.35")}
+          {number("tournament_sprint_short_preemptive_risk_multiplier", "冲刺做空抢跑风险折扣", "默认 0.25")}
+          {number("tournament_sprint_min_expected_profit_cost_ratio", "冲刺最低收益/成本比", "默认 1.35，低于此值不值得付手续费和滑点")}
           {number("attack_loop_seconds", "进攻扫描秒数", "默认 60 秒")}
           {number("balanced_loop_seconds", "均衡扫描秒数", "默认 120 秒")}
           {number("tournament_risk_per_trade_pct", "锦标赛标准风险%")}

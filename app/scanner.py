@@ -55,6 +55,17 @@ MODE_PRESETS: dict[str, dict[str, Any]] = {
         "min_trades": 1,
         "recent_days": 5,
     },
+    "tournament_sprint": {
+        "strategy": "breakout",
+        "interval_key": "tournament_sprint_interval",
+        "recent_days_key": "tournament_sprint_recent_days",
+        "risk_key": "tournament_sprint_risk_per_trade_pct",
+        "leverage_key": "tournament_sprint_max_leverage",
+        "margin_key": "tournament_sprint_max_symbol_margin_pct",
+        "min_pf": 0.85,
+        "min_trades": 1,
+        "recent_days": 3,
+    },
 }
 
 
@@ -64,6 +75,11 @@ def active_growth_mode(config: dict[str, Any], equity: float | None = None) -> s
         return configured if configured in MODE_PRESETS else "balanced"
     if equity is None:
         return configured if configured in MODE_PRESETS else "balanced"
+    if (
+        config.get("tournament_sprint_enabled", True)
+        and equity < float(config.get("tournament_sprint_auto_under_equity", 0))
+    ):
+        return "tournament_sprint"
     if equity < 100:
         return "tournament"
     if equity < 500:
@@ -600,12 +616,28 @@ def observe_breakout_allows_entry(
 ) -> bool:
     if not config.get("observe_breakout_enabled", True):
         return False
-    if mode.get("mode") != "tournament":
+    if mode.get("mode") not in {"tournament", "tournament_sprint"}:
         return False
     if quality.get("pool") != "observe":
         return False
     if signal.get("signal") not in {"LONG", "SHORT"}:
         return False
+    if mode.get("mode") == "tournament_sprint":
+        if candidate_score < float(config.get("tournament_sprint_standard_min_score", config.get("standard_min_score", 85.0))):
+            return False
+        if float(quality.get("score", 0)) < float(config.get("observe_breakout_min_quality", 78.0)) - 5.0:
+            return False
+        if cost_ratio < float(config.get("tournament_sprint_min_expected_profit_cost_ratio", 1.35)):
+            return False
+        if float(recent.get("profit_factor", 0)) < float(config.get("tournament_sprint_long_min_profit_factor", 0.85)):
+            return False
+        if float(recent.get("net_pct", 0)) < float(config.get("tournament_sprint_long_min_net_pct", -3.0)):
+            return False
+        if float(depth.get("spread_pct", 999)) > float(config.get("observe_breakout_max_spread_pct", 0.08)):
+            return False
+        if float(depth.get("depth_notional", 0)) < float(config.get("observe_breakout_min_depth_notional_usdt", 500.0)):
+            return False
+        return True
     if candidate_score < float(config.get("observe_breakout_min_score", 105.0)):
         return False
     if float(quality.get("score", 0)) < float(config.get("observe_breakout_min_quality", 78.0)):
@@ -797,6 +829,7 @@ def scan_growth_candidates(
             bars = client.klines_history(symbol, mode["interval"], max(quality_days))
             directions = ["LONG", "SHORT"] if config.get("allow_short", False) else ["LONG"]
             for direction in directions:
+                is_sprint = mode["mode"] == "tournament_sprint"
                 signal = latest_strategy_signal(symbol, bars, mode["strategy"], direction=direction)
                 backtests = {
                     day: backtest_strategy(symbol, bars, mode["strategy"], day, direction=direction)
@@ -809,14 +842,14 @@ def scan_growth_candidates(
                 cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
 
                 if direction == "SHORT":
-                    min_trades = int(config.get("short_min_recent_trades", 5))
-                    min_pf = float(config.get("short_min_profit_factor", 1.3))
-                    min_net_pct = float(config.get("short_min_net_pct", 1.0))
+                    min_trades = int(config.get("tournament_sprint_short_min_recent_trades", 3) if is_sprint else config.get("short_min_recent_trades", 5))
+                    min_pf = float(config.get("tournament_sprint_short_min_profit_factor", 1.05) if is_sprint else config.get("short_min_profit_factor", 1.3))
+                    min_net_pct = float(config.get("tournament_sprint_short_min_net_pct", -2.0) if is_sprint else config.get("short_min_net_pct", 1.0))
                     risk_pct = float(mode["risk_pct"]) * float(config.get("short_risk_multiplier", 0.5))
                 else:
                     min_trades = int(mode["min_trades"])
-                    min_pf = float(mode["min_pf"])
-                    min_net_pct = 0.0
+                    min_pf = float(config.get("tournament_sprint_long_min_profit_factor", mode["min_pf"]) if is_sprint else mode["min_pf"])
+                    min_net_pct = float(config.get("tournament_sprint_long_min_net_pct", -3.0) if is_sprint else 0.0)
                     risk_pct = float(mode["risk_pct"])
                 if direction not in live_losses_by_direction:
                     live_losses_by_direction[direction] = consecutive_live_losses(client, symbols, direction, config)
@@ -854,8 +887,8 @@ def scan_growth_candidates(
                     signal.get("signal") == direction
                     and history_passed
                     and quality["allowed"]
-                    and expected_profit_pct >= float(config.get("min_expected_profit_pct", 0.35))
-                    and cost_ratio >= float(config.get("min_expected_profit_cost_ratio", 3.0))
+                    and expected_profit_pct >= float(config.get("tournament_sprint_min_expected_profit_pct", 0.22) if is_sprint else config.get("min_expected_profit_pct", 0.35))
+                    and cost_ratio >= float(config.get("tournament_sprint_min_expected_profit_cost_ratio", 1.35) if is_sprint else config.get("min_expected_profit_cost_ratio", 3.0))
                 )
                 current_score = _current_signal_score(signal, direction, cost_ratio, recent)
                 score = 0.0
@@ -869,7 +902,8 @@ def scan_growth_candidates(
                 score -= 1.5 if direction == "SHORT" else 0
 
                 entry_type = "standard" if standard_passed else "watch"
-                passed = standard_passed and score >= float(config.get("standard_min_score", 85.0))
+                standard_min_score = float(config.get("tournament_sprint_standard_min_score", 72.0) if is_sprint else config.get("standard_min_score", 85.0))
+                passed = standard_passed and score >= standard_min_score
                 risk_adjustment: dict[str, Any] | None = None
                 decision_reason = "标准突破信号通过" if passed else "等待触发"
                 if passed and quality["pool"] == "small_trade":
@@ -883,7 +917,7 @@ def scan_growth_candidates(
                 if signal.get("signal") == direction and not quality["allowed"]:
                     if observe_breakout_allows_entry(score, quality, recent, signal, cost_ratio, depth, config, mode):
                         entry_type = "observe_standard"
-                        passed = score >= float(config.get("standard_min_score", 85.0))
+                        passed = score >= standard_min_score
                         risk_adjustment = observe_breakout_risk_adjustment(
                             quality,
                             signal,
@@ -894,26 +928,30 @@ def scan_growth_candidates(
                         decision_reason = "观察池高分标准突破，允许折扣仓位试单" if passed else "观察池标准突破评分不足"
                     else:
                         decision_reason = f"币种质量未达实盘准入：{quality['pool']}，评分 {quality['score']}"
-                preemptive_enabled = mode["mode"] == "tournament" and config.get("preemptive_entries_enabled", True)
+                preemptive_enabled = mode["mode"] in {"tournament", "tournament_sprint"} and config.get("preemptive_entries_enabled", True)
                 if not passed and preemptive_enabled and history_passed and quality["allowed"] and signal.get("signal") == "WAIT":
                     distance_pct = float(signal.get("distance_to_trigger_pct") or 999)
+                    max_distance = float(config.get("tournament_sprint_preemptive_max_distance_pct", 0.55) if is_sprint else config.get("preemptive_max_distance_pct", 0.35))
+                    min_candle_pct = float(config.get("tournament_sprint_momentum_min_candle_pct", 0.10)) if is_sprint else 0.12
                     near_trigger = (
                         signal.get("trend") is True
                         and signal.get("volatility_ok") is True
-                        and distance_pct <= float(config.get("preemptive_max_distance_pct", 0.35))
+                        and distance_pct <= max_distance
                     )
                     strong_momentum = (
-                        signal.get("trend") is True
+                        (config.get("tournament_sprint_momentum_enabled", True) if is_sprint else True)
+                        and signal.get("trend") is True
                         and signal.get("volatility_ok") is True
-                        and float(signal.get("candle_move_pct") or 0) >= max(0.12, distance_pct)
+                        and float(signal.get("candle_move_pct") or 0) >= max(min_candle_pct, distance_pct)
                     )
-                    min_preempt_score = float(config.get("preemptive_min_score", 72.0))
-                    if score >= min_preempt_score and (near_trigger or strong_momentum):
+                    min_preempt_score = float(config.get("tournament_sprint_preemptive_min_score", 58.0) if is_sprint else config.get("preemptive_min_score", 72.0))
+                    min_momentum_score = float(config.get("tournament_sprint_momentum_min_score", min_preempt_score) if is_sprint else min_preempt_score)
+                    if (near_trigger and score >= min_preempt_score) or (strong_momentum and score >= min_momentum_score):
                         entry_type = "momentum" if strong_momentum and not near_trigger else "preemptive"
                         risk_multiplier = (
-                            float(config.get("short_preemptive_risk_multiplier", 0.18))
+                            float(config.get("tournament_sprint_short_preemptive_risk_multiplier", 0.25) if is_sprint else config.get("short_preemptive_risk_multiplier", 0.18))
                             if direction == "SHORT"
-                            else float(config.get("preemptive_risk_multiplier", 0.24))
+                            else float(config.get("tournament_sprint_preemptive_risk_multiplier", 0.35) if is_sprint else config.get("preemptive_risk_multiplier", 0.24))
                         )
                         if quality["pool"] == "small_trade":
                             risk_multiplier *= float(config.get("small_trade_risk_multiplier", 0.5))
@@ -922,8 +960,12 @@ def scan_growth_candidates(
                         cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
                         risk_pct *= risk_multiplier
                         passed = (
-                            expected_profit_pct >= float(config.get("min_expected_profit_pct", 0.35))
-                            and cost_ratio >= max(1.5, float(config.get("min_expected_profit_cost_ratio", 3.0)) * 0.65)
+                            expected_profit_pct >= float(config.get("tournament_sprint_min_expected_profit_pct", 0.22) if is_sprint else config.get("min_expected_profit_pct", 0.35))
+                            and cost_ratio >= (
+                                float(config.get("tournament_sprint_min_expected_profit_cost_ratio", 1.35))
+                                if is_sprint
+                                else max(1.5, float(config.get("min_expected_profit_cost_ratio", 3.0)) * 0.65)
+                            )
                         )
                         decision_reason = "高分候选接近触发，允许小仓抢跑" if entry_type == "preemptive" else "短线强动量，允许小仓试探"
                     else:
@@ -936,7 +978,7 @@ def scan_growth_candidates(
                             misses.append("趋势未成立")
                         if not signal.get("volatility_ok"):
                             misses.append("波动不足")
-                        if distance_pct > float(config.get("preemptive_max_distance_pct", 0.35)):
+                        if distance_pct > max_distance:
                             misses.append("距离触发价偏远")
                         if score < min_preempt_score:
                             misses.append("综合评分不足")

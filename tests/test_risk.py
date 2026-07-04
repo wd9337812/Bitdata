@@ -94,3 +94,21 @@ def test_rotation_can_ignore_max_open_positions_explicitly():
 
     assert blocked.reason == "max_open_positions"
     assert allowed.allowed is True
+
+
+def test_risk_allows_sprint_consecutive_loss_override():
+    config = base_config()
+    state = {"bot_status": "running", "daily_start_equity": 50, "equity_high_watermark": 50, "consecutive_losses": 3}
+
+    blocked = assess_new_position(config, state, 50, "SOLUSDT", [])
+    allowed = assess_new_position(
+        config,
+        state,
+        50,
+        "SOLUSDT",
+        [],
+        overrides={"max_consecutive_losses": 4, "margin_pct": 95, "leverage": 5},
+    )
+
+    assert blocked.reason == "consecutive_loss_limit"
+    assert allowed.allowed is True

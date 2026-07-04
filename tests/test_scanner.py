@@ -40,6 +40,18 @@ def test_auto_growth_mode_uses_tournament_for_small_equity():
     assert active_growth_mode({"auto_risk_by_equity": True, "growth_mode": "balanced"}, 1000) == "balanced"
 
 
+def test_auto_growth_mode_uses_sprint_when_enabled_for_small_equity():
+    assert active_growth_mode(
+        {
+            "auto_risk_by_equity": True,
+            "growth_mode": "balanced",
+            "tournament_sprint_enabled": True,
+            "tournament_sprint_auto_under_equity": 100,
+        },
+        69,
+    ) == "tournament_sprint"
+
+
 def test_mode_config_uses_mode_specific_interval():
     config = {
         "auto_risk_by_equity": False,
@@ -153,6 +165,100 @@ def test_scan_promotes_high_score_near_trigger_to_preemptive(monkeypatch):
     assert best["entry_type"] in {"preemptive", "momentum"}
     assert best["signal"]["signal"] == "LONG"
     assert best["risk_pct"] < 15
+
+
+def test_sprint_promotes_looser_near_trigger_to_preemptive(monkeypatch):
+    class FakeScanClient:
+        def ticker_24h(self, symbols=None):
+            return [{"symbol": "LABUSDT", "lastPrice": "10", "quoteVolume": "800000000", "priceChangePercent": "12"}]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 10, 11, 9, 10, 1000] for i in range(120)]
+
+        def depth(self, symbol, limit=5):
+            return {"bids": [["9.999", "5000"]], "asks": [["10.001", "5000"]]}
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["LABUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": "WAIT",
+            "reason": "filters_not_aligned",
+            "strategy": strategy,
+            "last_price": 10.0,
+            "ema_fast": 9.5,
+            "ema_slow": 9.0,
+            "atr": 0.1,
+            "direction": direction,
+            "trend": True,
+            "trigger": False,
+            "volatility_ok": True,
+            "trigger_price": 10.045,
+            "distance_to_trigger_pct": 0.45,
+            "candle_move_pct": 0.46,
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG": {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 3,
+            "wins": 1,
+            "win_rate": 33.3,
+            "net_pct": -1.0,
+            "profit_factor": 1.05,
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "score_symbol_quality",
+        lambda symbol, bars, ticker, signal, backtests, depth, config: {
+            "score": 80,
+            "pool": "trade",
+            "allowed": True,
+            "components": {},
+            "market_passed": True,
+            "simulation": {"passed": True},
+            "market": {"atr_pct": 1.0, "spread_pct": 0.02, "depth_notional": 50_000},
+        },
+    )
+
+    result = scan_growth_candidates(
+        FakeScanClient(),
+        {
+            "growth_mode": "tournament_sprint",
+            "auto_risk_by_equity": False,
+            "tournament_sprint_interval": "5m",
+            "tournament_sprint_recent_days": 3,
+            "tournament_sprint_risk_per_trade_pct": 18,
+            "tournament_sprint_max_leverage": 5,
+            "tournament_sprint_max_symbol_margin_pct": 95,
+            "tournament_sprint_long_min_profit_factor": 0.85,
+            "tournament_sprint_long_min_net_pct": -3,
+            "preemptive_entries_enabled": True,
+            "tournament_sprint_preemptive_min_score": 40,
+            "tournament_sprint_preemptive_max_distance_pct": 0.55,
+            "tournament_sprint_preemptive_risk_multiplier": 0.35,
+            "tournament_sprint_min_expected_profit_cost_ratio": 1.2,
+            "tournament_sprint_min_expected_profit_pct": 0.2,
+            "allow_short": False,
+            "estimated_slippage_pct": 0.04,
+            "min_depth_notional_usdt": 20_000,
+        },
+        {"equity": 69},
+    )
+
+    best = result["candidates"][0]
+    assert result["mode"]["mode"] == "tournament_sprint"
+    assert best["passed"] is True
+    assert best["entry_type"] in {"preemptive", "momentum"}
+    assert best["risk_pct"] < 18
 
 
 def test_scan_blocks_signal_when_symbol_quality_fails(monkeypatch):

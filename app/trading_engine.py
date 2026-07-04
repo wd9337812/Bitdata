@@ -230,11 +230,24 @@ def build_stage1_decision(
         daily_loss_key = "attack_daily_loss_limit_pct"
     if active_mode["mode"] == "tournament":
         daily_loss_key = "tournament_daily_loss_limit_pct"
+    if active_mode["mode"] == "tournament_sprint":
+        daily_loss_key = "tournament_sprint_daily_loss_limit_pct"
+    max_open_positions = config.get("max_open_positions", 1)
+    if active_mode["mode"] == "tournament_sprint":
+        max_open_positions = int(config.get("tournament_sprint_max_open_positions", max_open_positions))
+        if equity is not None and float(equity) < float(config.get("tournament_sprint_second_position_equity", 100.0)):
+            max_open_positions = min(max_open_positions, 1)
     overrides = {
         "margin_pct": active_mode["margin_pct"],
         "leverage": active_mode["leverage"],
         "daily_loss_limit_pct": config.get(daily_loss_key, config.get("daily_loss_limit_pct", 3.0)),
-        "ignore_max_drawdown": active_mode["mode"] == "tournament",
+        "ignore_max_drawdown": active_mode["mode"] in {"tournament", "tournament_sprint"},
+        "max_open_positions": max_open_positions,
+        "max_consecutive_losses": (
+            config.get("tournament_sprint_max_consecutive_losses", config.get("max_consecutive_losses", 2))
+            if active_mode["mode"] == "tournament_sprint"
+            else config.get("max_consecutive_losses", 2)
+        ),
     }
     overrides.update(risk_overrides or {})
     risk = assess_new_position(

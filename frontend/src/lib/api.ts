@@ -26,6 +26,7 @@ export const modeLabel: Record<string, string> = {
   balanced: "均衡",
   attack: "进攻",
   tournament: "锦标赛",
+  tournament_sprint: "锦标赛冲刺",
 };
 
 export const statusLabel: Record<string, string> = {

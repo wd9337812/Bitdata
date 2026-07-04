@@ -63,7 +63,8 @@ def assess_new_position(
         except ValueError:
             return RiskDecision(False, "invalid_symbol_cooldown_state")
 
-    if int(state.get("consecutive_losses", 0)) >= int(config.get("max_consecutive_losses", 2)):
+    max_consecutive_losses = int(overrides.get("max_consecutive_losses", config.get("max_consecutive_losses", 2)))
+    if int(state.get("consecutive_losses", 0)) >= max_consecutive_losses:
         return RiskDecision(False, "consecutive_loss_limit")
 
     daily_start = float(state.get("daily_start_equity") or equity)
@@ -84,7 +85,8 @@ def assess_new_position(
         pos for pos in open_positions
         if abs(float(pos.get("positionAmt", pos.get("amount", 0)))) > 0
     ]
-    if len(active_positions) >= int(config.get("max_open_positions", 1)) and not overrides.get("ignore_max_open_positions", False):
+    max_open_positions = int(overrides.get("max_open_positions", config.get("max_open_positions", 1)))
+    if len(active_positions) >= max_open_positions and not overrides.get("ignore_max_open_positions", False):
         return RiskDecision(False, "max_open_positions")
 
     symbol_margin_pct = float(overrides.get("margin_pct", config.get("max_symbol_margin_pct", 35.0)))
