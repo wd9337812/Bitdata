@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from app.live_learning import apply_live_credit_to_candidate, build_trade_records_from_user_trades, score_records
+from app.live_learning import (
+    apply_live_credit_to_candidate,
+    build_trade_records_from_user_trades,
+    live_credit_multiplier,
+    recovered_score,
+    score_records,
+)
 
 
 def test_trade_record_builder_groups_open_and_close_fills():
@@ -25,10 +31,11 @@ def test_trade_record_builder_groups_open_and_close_fills():
 
 
 def test_score_records_rewards_winners_and_punishes_quick_losses():
+    now = int(datetime.now(timezone.utc).timestamp() * 1000)
     records = [
-        {"symbol": "LABUSDT", "direction": "SHORT", "open_time": 1000, "close_time": 121_000, "open_notional": 90, "net_pnl": 2.5, "commission": 0.08, "hold_seconds": 120},
-        {"symbol": "LABUSDT", "direction": "SHORT", "open_time": 200_000, "close_time": 260_000, "open_notional": 80, "net_pnl": 1.0, "commission": 0.06, "hold_seconds": 60},
-        {"symbol": "TLMUSDT", "direction": "LONG", "open_time": 300_000, "close_time": 351_000, "open_notional": 95, "net_pnl": -6.0, "commission": 0.09, "hold_seconds": 51},
+        {"symbol": "LABUSDT", "direction": "SHORT", "open_time": now - 300_000, "close_time": now - 180_000, "open_notional": 90, "net_pnl": 2.5, "commission": 0.08, "hold_seconds": 120},
+        {"symbol": "LABUSDT", "direction": "SHORT", "open_time": now - 120_000, "close_time": now - 60_000, "open_notional": 80, "net_pnl": 1.0, "commission": 0.06, "hold_seconds": 60},
+        {"symbol": "TLMUSDT", "direction": "LONG", "open_time": now - 120_000, "close_time": now - 69_000, "open_notional": 95, "net_pnl": -6.0, "commission": 0.09, "hold_seconds": 51},
     ]
 
     lab = score_records(records[:2], {})
@@ -41,14 +48,14 @@ def test_score_records_rewards_winners_and_punishes_quick_losses():
     assert tlm["penalty_until"]
 
 
-def test_live_credit_penalty_blocks_candidate(monkeypatch):
+def test_live_credit_uses_linear_multiplier_instead_of_blocking(monkeypatch):
     penalty_until = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat()
 
     monkeypatch.setattr(
         "app.live_learning.live_score_for",
         lambda symbol, direction, config: {
             "enabled": True,
-            "score": 20,
+            "score": 21,
             "status": "penalty",
             "status_label": "惩罚区",
             "penalty_until": penalty_until,
@@ -59,11 +66,39 @@ def test_live_credit_penalty_blocks_candidate(monkeypatch):
     )
 
     candidate = apply_live_credit_to_candidate(
-        {"symbol": "TLMUSDT", "direction": "LONG", "score": 120, "passed": True, "risk_pct": 15, "decision_reason": "原始信号通过"},
+        {"symbol": "LABUSDT", "direction": "SHORT", "score": 120, "passed": True, "risk_pct": 15, "decision_reason": "原始信号通过"},
         {"live_credit_enabled": True},
     )
 
-    assert candidate["passed"] is False
-    assert candidate["risk_pct"] == 15
-    assert candidate["reason"] in {"live_credit_cooldown", "live_credit_penalty"}
-    assert candidate["live_credit_adjustment"]["risk_multiplier"] == 0
+    assert candidate["passed"] is True
+    assert candidate["risk_pct"] == 15 * 0.25
+    assert candidate["live_credit_adjustment"]["risk_multiplier"] == 0.25
+    assert "冷却倍率上限" in "；".join(candidate["live_credit_adjustment"]["reasons"])
+
+
+def test_live_credit_multiplier_is_score_divided_by_50():
+    config = {"live_credit_multiplier_divisor": 50, "live_credit_max_risk_multiplier": 2.0, "live_credit_fuse_score": 2}
+
+    assert live_credit_multiplier({"score": 50, "penalty_until": None}, config) == 1.0
+    assert live_credit_multiplier({"score": 75, "penalty_until": None}, config) == 1.5
+    assert live_credit_multiplier({"score": 100, "penalty_until": None}, config) == 2.0
+    assert live_credit_multiplier({"score": 1.5, "penalty_until": None}, config) == 0.0
+
+
+def test_live_credit_natural_recovery_caps_at_default():
+    old = int((datetime.now(timezone.utc) - timedelta(hours=24)).timestamp() * 1000)
+
+    recovered = recovered_score(
+        21,
+        old,
+        {
+            "live_credit_recovery_enabled": True,
+            "live_credit_recovery_interval_hours": 6,
+            "live_credit_recovery_points": 3,
+            "live_credit_recovery_cap": 50,
+            "live_credit_fuse_score": 2,
+        },
+    )
+
+    assert recovered["score"] == 33
+    assert recovered["recovery_points"] == 12

@@ -174,7 +174,7 @@ def strategy_runs(limit: int = 200) -> dict[str, Any]:
 
 @app.get("/api/live-learning", dependencies=[Depends(require_auth)])
 def live_learning(limit: int = 100) -> dict[str, Any]:
-    return {"scores": list_live_scores(limit)}
+    return {"scores": list_live_scores(limit, load_config())}
 
 
 @app.post("/api/live-learning/sync", dependencies=[Depends(require_auth)])

@@ -82,6 +82,30 @@ def _status_for_score(score: float) -> str:
     return "penalty"
 
 
+def recovered_score(raw_score: float, last_trade_time: int | None, config: dict[str, Any]) -> dict[str, Any]:
+    cap = float(config.get("live_credit_recovery_cap", DEFAULT_SCORE))
+    score = max(0.0, min(100.0, float(raw_score)))
+    if not config.get("live_credit_recovery_enabled", True) or not last_trade_time or score >= cap:
+        return {"score": round(score, 2), "recovery_points": 0.0, "next_recovery_at": None}
+
+    elapsed_hours = max(0.0, (time.time() * 1000 - int(last_trade_time)) / 3_600_000)
+    if score < float(config.get("live_credit_fuse_score", 2.0)):
+        interval = float(config.get("live_credit_low_recovery_interval_hours", 12))
+        points = float(config.get("live_credit_low_recovery_points", 2.0))
+    else:
+        interval = float(config.get("live_credit_recovery_interval_hours", 6))
+        points = float(config.get("live_credit_recovery_points", 3.0))
+    steps = math.floor(elapsed_hours / max(interval, 0.0001))
+    recovery = steps * points
+    adjusted = min(cap, score + recovery)
+    next_at = datetime.fromtimestamp(int(last_trade_time) / 1000, timezone.utc) + timedelta(hours=(steps + 1) * interval)
+    return {
+        "score": round(adjusted, 2),
+        "recovery_points": round(adjusted - score, 2),
+        "next_recovery_at": next_at.isoformat() if adjusted < cap else None,
+    }
+
+
 def status_label(status: str) -> str:
     return {
         "strong": "强信任",
@@ -191,6 +215,11 @@ def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict
 
     closed = len(records)
     profit_factor = gross_profit / gross_loss if gross_loss else (999.0 if gross_profit > 0 else 0.0)
+    last_trade_time = int(records[-1].get("close_time") or 0) if records else None
+    recovery = recovered_score(score, last_trade_time, config)
+    score = float(recovery["score"])
+    if recovery["recovery_points"] > 0:
+        notes.append(f"自然恢复 +{recovery['recovery_points']:.1f}")
     status = _status_for_score(score)
     if status == "penalty" and penalty_until is None and records:
         close_time = int(records[-1].get("close_time") or 0)
@@ -213,7 +242,9 @@ def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict
         "consecutive_losses": consecutive_losses,
         "avg_hold_seconds": round(hold_sum / closed, 2) if closed else 0.0,
         "penalty_until": penalty_until.isoformat() if penalty_until else None,
-        "last_trade_time": int(records[-1].get("close_time") or 0) if records else None,
+        "last_trade_time": last_trade_time,
+        "recovery_points": recovery["recovery_points"],
+        "next_recovery_at": recovery["next_recovery_at"],
         "notes": notes[-6:],
     }
 
@@ -313,7 +344,21 @@ def rebuild_symbol_scores(config: dict[str, Any], lookback_hours: float | None =
     return sorted(results, key=lambda item: (item["score"], item["net_pnl"]), reverse=True)
 
 
-def list_live_scores(limit: int = 100) -> list[dict[str, Any]]:
+def enrich_live_score(item: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    recovery = recovered_score(float(item.get("score", DEFAULT_SCORE)), item.get("last_trade_time"), config)
+    item["raw_score"] = item.get("score")
+    item["score"] = recovery["score"]
+    item["recovery_points"] = recovery["recovery_points"]
+    item["next_recovery_at"] = recovery["next_recovery_at"]
+    item["status"] = _status_for_score(float(item["score"]))
+    item["status_label"] = status_label(item.get("status", ""))
+    item["risk_multiplier"] = round(live_credit_multiplier(item, config), 4)
+    item["cooldown_cap"] = round(cooldown_multiplier_cap(item, config), 4)
+    return item
+
+
+def list_live_scores(limit: int = 100, config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    config = config or {}
     init_live_learning_schema()
     with connect() as conn:
         rows = conn.execute(
@@ -327,8 +372,8 @@ def list_live_scores(limit: int = 100) -> list[dict[str, Any]]:
             item["notes"] = json.loads(item.get("notes") or "[]")
         except json.JSONDecodeError:
             item["notes"] = []
-        item["status_label"] = status_label(item.get("status", ""))
         item["last_trade_time_iso"] = _iso_from_ms(item.get("last_trade_time"))
+        item = enrich_live_score(item, config)
         results.append(item)
     return results
 
@@ -343,7 +388,7 @@ def live_score_for(symbol: str, direction: str, config: dict[str, Any]) -> dict[
             (symbol.upper(), direction.upper()),
         ).fetchone()
     if not row:
-        return {
+        item = {
             "enabled": True,
             "score": float(config.get("live_credit_default_score", DEFAULT_SCORE)),
             "status": "new",
@@ -359,14 +404,16 @@ def live_score_for(symbol: str, direction: str, config: dict[str, Any]) -> dict[
             "penalty_until": None,
             "notes": ["暂无实盘记录"],
         }
+        item["risk_multiplier"] = round(live_credit_multiplier(item, config), 4)
+        item["cooldown_cap"] = round(cooldown_multiplier_cap(item, config), 4)
+        return item
     item = dict(row)
     try:
         item["notes"] = json.loads(item.get("notes") or "[]")
     except json.JSONDecodeError:
         item["notes"] = []
     item["enabled"] = True
-    item["status_label"] = status_label(item.get("status", ""))
-    return item
+    return enrich_live_score(item, config)
 
 
 def penalty_active(score: dict[str, Any]) -> bool:
@@ -379,20 +426,25 @@ def penalty_active(score: dict[str, Any]) -> bool:
         return False
 
 
+def cooldown_multiplier_cap(score: dict[str, Any], config: dict[str, Any]) -> float:
+    if not penalty_active(score):
+        return float(config.get("live_credit_max_risk_multiplier", 2.0))
+    losses = int(score.get("consecutive_losses") or 0)
+    if losses >= 3:
+        return float(config.get("live_credit_three_loss_cooldown_cap", 0.10))
+    if losses >= 2:
+        return float(config.get("live_credit_two_loss_cooldown_cap", 0.25))
+    return float(config.get("live_credit_loss_cooldown_cap", 0.80))
+
+
 def live_credit_multiplier(score: dict[str, Any], config: dict[str, Any]) -> float:
     value = float(score.get("score", DEFAULT_SCORE))
-    status = str(score.get("status") or "")
-    if status == "new":
-        return 1.0
-    if status == "penalty" or value < float(config.get("live_credit_penalty_score", 30)):
-        return 0.0 if config.get("live_credit_penalty_observe_only", True) else 0.25
-    if value >= float(config.get("live_credit_strong_score", 80)):
-        return float(config.get("live_credit_max_risk_multiplier", 1.15))
-    if value >= float(config.get("live_credit_normal_score", 65)):
-        return 1.0
-    if value >= float(config.get("live_credit_observe_score", 45)):
-        return float(config.get("live_credit_observe_risk_multiplier", 0.70))
-    return float(config.get("live_credit_weak_risk_multiplier", 0.45))
+    if value <= float(config.get("live_credit_fuse_score", 2.0)):
+        return 0.0
+    divisor = max(1.0, float(config.get("live_credit_multiplier_divisor", DEFAULT_SCORE)))
+    max_multiplier = float(config.get("live_credit_max_risk_multiplier", 2.0))
+    base = max(0.0, min(max_multiplier, value / divisor))
+    return min(base, cooldown_multiplier_cap(score, config))
 
 
 def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -417,14 +469,11 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
         candidate["score"] = round(float(candidate["score"]) - float(config.get("live_credit_tail_score_penalty", 3.0)), 4)
         reasons.append(f"连续盈利后防追尾，仓位 {tail_mult:.2f}x")
     if penalty_active(credit):
+        reasons.append(f"冷却倍率上限 {cooldown_multiplier_cap(credit, config):.2f}x，冷却到 {credit.get('penalty_until')}")
+    if multiplier <= 0:
         candidate["passed"] = False
-        candidate["reason"] = "live_credit_cooldown"
-        candidate["decision_reason"] = f"实盘信用冷却中，暂停该币种方向到 {credit.get('penalty_until')}"
-        multiplier = 0.0
-    elif multiplier <= 0:
-        candidate["passed"] = False
-        candidate["reason"] = "live_credit_penalty"
-        candidate["decision_reason"] = "实盘信用进入惩罚区，暂时只观察不实盘"
+        candidate["reason"] = "live_credit_fuse"
+        candidate["decision_reason"] = "实盘信用接近 0 分，熔断等待自然恢复"
     else:
         candidate["risk_pct"] = float(candidate.get("risk_pct") or 0) * multiplier
         reasons.append(f"仓位倍率 {multiplier:.2f}x")

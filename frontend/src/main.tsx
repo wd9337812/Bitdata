@@ -418,21 +418,21 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
 
 function LiveLearningPanel({ rows, onSync }: { rows: any[]; onSync: () => Promise<void> }) {
   const totalNet = rows.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
-  const strong = rows.filter((row) => row.status === "strong").length;
-  const penalty = rows.filter((row) => row.status === "penalty").length;
+  const highPower = rows.filter((row) => Number(row.risk_multiplier || 0) >= 1).length;
+  const fuse = rows.filter((row) => Number(row.risk_multiplier || 0) <= 0).length;
   return (
     <section className="stack">
       <div className="metrics">
         <MetricCard title="已学习方向" value={String(rows.length)} sub="按币种 + 做多/做空分开统计" />
-        <MetricCard title="强信任方向" value={String(strong)} sub="会提高排序，小幅奖励仓位" />
-        <MetricCard title="惩罚区方向" value={String(penalty)} sub="默认只观察不实盘" tone={penalty ? "negative" : ""} />
+        <MetricCard title="正常以上倍率" value={String(highPower)} sub="倍率 >= 1，可按锦标赛正常火力执行" />
+        <MetricCard title="熔断方向" value={String(fuse)} sub="倍率为 0，等待自然恢复" tone={fuse ? "negative" : ""} />
         <MetricCard title="学习净盈亏" value={`${fmt(totalNet, 4)} U`} tone={totalNet >= 0 ? "positive" : "negative"} />
       </div>
       <div className="panel">
         <div className="panel-head">
           <div>
             <h2>币种实盘信用分</h2>
-            <p>系统根据真实成交、手续费、持仓时间和连续盈亏，自动奖励有效币种，惩罚伤害账户的币种。</p>
+            <p>信用分按线性倍率控制仓位：倍率 = 信用分 / 50，最高 2x；亏损会降仓，时间会自然恢复到 50 分。</p>
           </div>
           <button className="secondary" onClick={onSync}>同步历史信用分</button>
         </div>
@@ -443,6 +443,7 @@ function LiveLearningPanel({ rows, onSync }: { rows: any[]; onSync: () => Promis
                 <th>币种</th>
                 <th>方向</th>
                 <th>信用分</th>
+                <th>开仓倍率</th>
                 <th>状态</th>
                 <th>交易数</th>
                 <th>胜率</th>
@@ -450,6 +451,7 @@ function LiveLearningPanel({ rows, onSync }: { rows: any[]; onSync: () => Promis
                 <th>PF</th>
                 <th>连续盈亏</th>
                 <th>平均持仓</th>
+                <th>自然恢复</th>
                 <th>冷却结束</th>
                 <th>学习备注</th>
               </tr>
@@ -459,7 +461,8 @@ function LiveLearningPanel({ rows, onSync }: { rows: any[]; onSync: () => Promis
                 <tr key={`${row.symbol}-${row.direction}`}>
                   <td className="symbol">{row.symbol}</td>
                   <td>{signalLabel(row.direction)}</td>
-                  <td>{fmt(row.score, 1)}</td>
+                  <td>{fmt(row.score, 1)}{row.raw_score !== undefined && Number(row.recovery_points || 0) > 0 ? `（原 ${fmt(row.raw_score, 1)}）` : ""}</td>
+                  <td>{fmt(row.risk_multiplier, 2)}x</td>
                   <td><span className={row.status === "strong" ? "pill ok" : row.status === "penalty" ? "pill bad" : "pill"}>{row.status_label}</span></td>
                   <td>{row.closed_trades}</td>
                   <td>{fmt(row.win_rate, 1)}%</td>
@@ -467,6 +470,7 @@ function LiveLearningPanel({ rows, onSync }: { rows: any[]; onSync: () => Promis
                   <td>{fmt(row.profit_factor, 2)}</td>
                   <td>{row.consecutive_wins > 0 ? `连赢 ${row.consecutive_wins}` : row.consecutive_losses > 0 ? `连亏 ${row.consecutive_losses}` : "-"}</td>
                   <td>{fmt(Number(row.avg_hold_seconds || 0) / 60, 1)} 分钟</td>
+                  <td>{Number(row.recovery_points || 0) > 0 ? `已恢复 +${fmt(row.recovery_points, 1)}` : row.next_recovery_at ? new Date(row.next_recovery_at).toLocaleString("zh-CN") : "-"}</td>
                   <td>{row.penalty_until ? new Date(row.penalty_until).toLocaleString("zh-CN") : "-"}</td>
                   <td className="reason-cell">{(row.notes || []).join("；")}</td>
                 </tr>
@@ -652,10 +656,16 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
                 {toggle("live_credit_enabled", "启用实盘信用分", "按真实成交奖励有效币种，惩罚连续亏损或快速止损的币种方向")}
                 {number("live_credit_history_hours", "信用分历史窗口小时", "默认 96 小时；部署时会用这个窗口初始化")}
                 {number("live_credit_score_weight", "信用分排序权重", "默认 0.35；分数越高越偏向近期实盘表现")}
-                {number("live_credit_max_risk_multiplier", "强信任最大仓位倍率", "默认 1.15，不建议过高")}
-                {number("live_credit_observe_risk_multiplier", "观察区仓位倍率", "默认 0.70")}
-                {number("live_credit_weak_risk_multiplier", "弱信任仓位倍率", "默认 0.45")}
-                {toggle("live_credit_penalty_observe_only", "惩罚区只观察", "开启后惩罚区币种方向不会实盘开仓")}
+                {number("live_credit_multiplier_divisor", "信用倍率除数", "默认 50；倍率 = 信用分 / 50")}
+                {number("live_credit_max_risk_multiplier", "最高信用倍率", "默认 2.0；100 分约等于 2 倍风险")}
+                {number("live_credit_fuse_score", "熔断信用分", "默认 2；低于等于该分数才不开仓")}
+                {toggle("live_credit_recovery_enabled", "启用自然恢复", "亏损币种会随时间慢慢恢复到默认 50 分")}
+                {number("live_credit_recovery_interval_hours", "自然恢复间隔小时", "默认 6 小时")}
+                {number("live_credit_recovery_points", "每次恢复分数", "默认 +3 分")}
+                {number("live_credit_recovery_cap", "自然恢复上限", "默认 50；超过 50 必须靠实盘盈利")}
+                {number("live_credit_loss_cooldown_cap", "普通亏损冷却倍率上限", "默认 0.80")}
+                {number("live_credit_two_loss_cooldown_cap", "两连亏冷却倍率上限", "默认 0.25")}
+                {number("live_credit_three_loss_cooldown_cap", "三连亏冷却倍率上限", "默认 0.10")}
                 {number("live_credit_quick_stop_seconds", "快速止损秒数", "默认 60 秒；低于该持仓时间的亏损会重罚")}
                 {number("live_credit_two_loss_cooldown_hours", "同方向两连亏冷却小时", "默认 4 小时")}
                 {number("live_credit_tail_win_count", "连续盈利防追尾笔数", "默认 3 笔")}
