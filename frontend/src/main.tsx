@@ -700,7 +700,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("rank_pool_limit", "精排池上限", "默认 90；只有这些币会拉K线和轻回测")}
           {number("auction_pool_limit", "竞价池上限", "默认 15；限制盘口深度等高成本检查")}
           {number("scan_degrade_seconds", "扫描预算秒数", "默认 18 秒；超过后停止本轮后续精排")}
-          {number("scan_min_rank_symbols", "最低精排币数", "默认 25；先保证高分币被认真计算")}
+          {number("scan_min_rank_symbols", "最低精排币数", "默认 8；先保证最高分币被认真计算，2G VPS 更稳")}
           {number("max_scan_symbols", "候选展示上限", "控制 Dashboard 展示候选数量，不等于实际召回数量")}
           {number("min_24h_volume_usdt", "最低 24h 成交额", "过滤流动性差的币")}
           {toggle("auto_discover_symbols", "自动发现加密币", "只纳入 Binance U 本位永续币")}

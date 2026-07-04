@@ -1139,7 +1139,7 @@ def scan_growth_candidates(
     } | {int(mode["recent_days"])})
     max_depth_checks = min(int(config.get("depth_check_top_symbols", 8)), limits["auction"])
     degrade_seconds = float(config.get("scan_degrade_seconds", 18))
-    min_rank_symbols = min(int(config.get("scan_min_rank_symbols", 25)), len(ranked_symbols))
+    min_rank_symbols = min(int(config.get("scan_min_rank_symbols", 8)), len(ranked_symbols))
     depth_checks = 0
     depth_by_symbol: dict[str, dict[str, Any]] = {}
     live_losses_by_direction: dict[str, dict[str, Any]] = {}
