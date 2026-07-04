@@ -8,6 +8,10 @@ class TradingConfig(BaseModel):
     stage1_symbols: list[str] = Field(default_factory=lambda: ["SOLUSDT", "LABUSDT", "SUIUSDT", "AAVEUSDT", "WLDUSDT"])
     stage2_symbols: list[str] = Field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
     auto_discover_symbols: bool = True
+    recall_pool_limit: int = Field(default=600, ge=1, le=1000)
+    coarse_pool_limit: int = Field(default=220, ge=1, le=500)
+    rank_pool_limit: int = Field(default=90, ge=1, le=200)
+    auction_pool_limit: int = Field(default=15, ge=0, le=50)
     max_scan_symbols: int = Field(default=40, ge=1, le=120)
     min_24h_volume_usdt: float = Field(default=30_000_000, ge=0)
     max_observation_symbols: int = Field(default=45, ge=1, le=150)

@@ -27,7 +27,7 @@ import { api, fmt, modeLabel, stageLabel, statusLabel } from "./lib/api";
 import "./styles.css";
 
 type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any> };
-type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any }; stage2_grid: any[]; auth_error?: string };
+type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any; funnel?: any }; stage2_grid: any[]; auth_error?: string };
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
@@ -146,6 +146,7 @@ function App() {
   const candidates = data.decisions?.growth_scan?.candidates || [];
   const best = data.decisions?.growth_scan?.best || candidates[0];
   const mode = data.decisions?.growth_scan?.mode || {};
+  const funnel = data.decisions?.growth_scan?.funnel || {};
   const account = status?.account || {};
   const state = status?.state || {};
   const config = status?.config || {};
@@ -306,14 +307,25 @@ function App() {
         )}
 
         {active === "scan" && (
-          <section className="panel">
-            <div className="panel-head">
-              <div>
-                <h2>候选币排名</h2>
-                <p>系统会优先执行最高分且通过过滤的信号。当前回测窗口：{mode.recent_days || "-"} 天。</p>
+          <section className="stack">
+            <div className="panel">
+              <div className="panel-head">
+                <div>
+                  <h2>机会漏斗</h2>
+                  <p>系统先大范围召回，再逐层粗排、精排和竞价，只有最值得的币才消耗 K 线回测和盘口深度。</p>
+                </div>
               </div>
+              <FunnelPanel funnel={funnel} />
             </div>
-            <CandidateTable rows={candidates} />
+            <div className="panel">
+              <div className="panel-head">
+                <div>
+                  <h2>候选币排名</h2>
+                  <p>系统会优先执行最高分且通过过滤的信号。当前回测窗口：{mode.recent_days || "-"} 天。</p>
+                </div>
+              </div>
+              <CandidateTable rows={candidates} />
+            </div>
           </section>
         )}
 
@@ -369,6 +381,33 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
       </div>
       <p>{best.decision_reason || signal.reason || best.reason || "等待下一轮扫描。"}</p>
+    </div>
+  );
+}
+
+function FunnelPanel({ funnel }: { funnel: any }) {
+  const stages = [
+    ["recall", "大召回"],
+    ["coarse", "粗排"],
+    ["rank", "精排"],
+    ["auction", "竞价"],
+    ["candidates", "候选"],
+  ];
+  return (
+    <div className="metrics">
+      {stages.map(([key, label]) => {
+        const item = funnel?.[key] || {};
+        const value = key === "candidates"
+          ? `${fmt(item.displayed ?? item.count ?? 0, 0)} / ${fmt(item.count ?? 0, 0)}`
+          : `${fmt(item.count ?? 0, 0)} / ${fmt(item.limit ?? 0, 0)}`;
+        const sub = key === "auction"
+          ? "已查盘口深度 / 竞价预算"
+          : key === "candidates"
+            ? "展示候选 / 全部候选"
+            : `${item.label || label} / 预算`;
+        return <MetricCard key={key} title={label} value={value} sub={sub} />;
+      })}
+      <MetricCard title="本轮耗时" value={`${fmt(funnel?.elapsed_seconds, 3)} 秒`} sub="用于判断是否需要自动降级" />
     </div>
   );
 }
@@ -654,7 +693,11 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
         <div className="form-grid">
           {select("growth_mode", "增长模式", modeOptions, "50U 阶段建议锦标赛；系统也会按权益自动切换。")}
           <SymbolMultiPicker value={form.stage1_symbols} onChange={(symbols) => update("stage1_symbols", symbols)} />
-          {number("max_scan_symbols", "最大扫描币种", "2GB VPS 当前建议 40；观察池默认 45")}
+          {number("recall_pool_limit", "召回池上限", "默认 600；只做低成本预筛，不会全部回测")}
+          {number("coarse_pool_limit", "粗排池上限", "默认 220；用成交额和异动先筛选")}
+          {number("rank_pool_limit", "精排池上限", "默认 90；只有这些币会拉K线和轻回测")}
+          {number("auction_pool_limit", "竞价池上限", "默认 15；限制盘口深度等高成本检查")}
+          {number("max_scan_symbols", "候选展示上限", "控制 Dashboard 展示候选数量，不等于实际召回数量")}
           {number("min_24h_volume_usdt", "最低 24h 成交额", "过滤流动性差的币")}
           {toggle("auto_discover_symbols", "自动发现加密币", "只纳入 Binance U 本位永续币")}
           {toggle("auto_risk_by_equity", "按权益自动切换风险", "50U 自动锦标赛，100U 后进攻")}

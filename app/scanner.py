@@ -69,6 +69,15 @@ MODE_PRESETS: dict[str, dict[str, Any]] = {
 }
 
 
+PIPELINE_DEFAULTS: dict[str, dict[str, int]] = {
+    "conservative": {"recall": 180, "coarse": 70, "rank": 45, "auction": 8},
+    "balanced": {"recall": 250, "coarse": 100, "rank": 60, "auction": 10},
+    "attack": {"recall": 350, "coarse": 140, "rank": 70, "auction": 12},
+    "tournament": {"recall": 500, "coarse": 180, "rank": 80, "auction": 15},
+    "tournament_sprint": {"recall": 600, "coarse": 220, "rank": 90, "auction": 15},
+}
+
+
 def active_growth_mode(config: dict[str, Any], equity: float | None = None) -> str:
     configured = str(config.get("growth_mode", "balanced")).lower()
     if not config.get("auto_risk_by_equity", True):
@@ -99,6 +108,17 @@ def mode_config(config: dict[str, Any], equity: float | None = None) -> dict[str
     preset["min_pf"] = float(config.get("min_profit_factor", preset["min_pf"])) if mode in {"conservative", "balanced"} else preset["min_pf"]
     preset["min_trades"] = int(config.get("min_recent_trades", preset["min_trades"])) if mode in {"conservative", "balanced"} else preset["min_trades"]
     return preset
+
+
+def pipeline_limits(config: dict[str, Any], mode: dict[str, Any] | str) -> dict[str, int]:
+    mode_name = str(mode.get("mode") if isinstance(mode, dict) else mode)
+    defaults = PIPELINE_DEFAULTS.get(mode_name, PIPELINE_DEFAULTS["balanced"])
+    return {
+        "recall": int(config.get("recall_pool_limit", config.get("max_observation_symbols", defaults["recall"]))),
+        "coarse": int(config.get("coarse_pool_limit", defaults["coarse"])),
+        "rank": int(config.get("rank_pool_limit", defaults["rank"])),
+        "auction": int(config.get("auction_pool_limit", config.get("depth_check_top_symbols", defaults["auction"]))),
+    }
 
 
 def strategy_params_for_mode(
@@ -150,7 +170,7 @@ def discover_coin_symbols(client: BinanceFuturesClient, config: dict[str, Any]) 
     for symbol in manual + [symbol for symbol, _ in ranked]:
         if symbol in coin_symbols and symbol not in merged:
             merged.append(symbol)
-    limit = int(config.get("max_observation_symbols", config.get("max_scan_symbols", 30)))
+    limit = int(config.get("recall_pool_limit", config.get("max_observation_symbols", config.get("max_scan_symbols", 30))))
     return merged[:limit]
 
 
@@ -331,6 +351,53 @@ def _backtest_strategy_with_params(
         if "params" not in str(exc):
             raise
         return backtest_strategy(symbol, bars, strategy, days, direction=direction)
+
+
+def _coarse_rank_symbols(
+    symbols: list[str],
+    tickers: dict[str, dict[str, Any]],
+    config: dict[str, Any],
+    mode: dict[str, Any],
+) -> tuple[list[str], list[dict[str, Any]]]:
+    limits = pipeline_limits(config, mode)
+    manual = {symbol.upper() for symbol in config.get("stage1_symbols", [])}
+    min_volume = float(config.get("min_24h_volume_usdt", 0))
+    rows: list[dict[str, Any]] = []
+    for index, symbol in enumerate(symbols):
+        ticker = tickers.get(symbol, {})
+        quote_volume = float(ticker.get("quoteVolume", 0) or 0)
+        change_pct = float(ticker.get("priceChangePercent", 0) or 0)
+        last_price = float(ticker.get("lastPrice", 0) or 0)
+        volume_score = min(max(math.log10(max(quote_volume, 1)) - 6.5, 0.0) * 12.0, 35.0)
+        move_score = min(abs(change_pct) * 1.8, 28.0)
+        direction_bias = 4.0 if change_pct > 0 else 2.0 if change_pct < 0 else 0.0
+        manual_score = 30.0 if symbol in manual else 0.0
+        liquidity_penalty = 18.0 if quote_volume < min_volume else 0.0
+        new_tail_boost = max(0.0, 10.0 - index * 0.03)
+        score = volume_score + move_score + direction_bias + manual_score + new_tail_boost - liquidity_penalty
+        reasons = []
+        if symbol in manual:
+            reasons.append("manual")
+        if quote_volume >= min_volume:
+            reasons.append("liquid")
+        if abs(change_pct) >= 8:
+            reasons.append("large_move")
+        if quote_volume < min_volume:
+            reasons.append("low_volume")
+        rows.append(
+            {
+                "symbol": symbol,
+                "score": round(score, 4),
+                "quote_volume": quote_volume,
+                "change_pct": change_pct,
+                "last_price": last_price,
+                "reasons": reasons,
+            }
+        )
+    rows.sort(key=lambda item: (item["symbol"] in manual, item["score"]), reverse=True)
+    ranked = rows[: max(1, limits["coarse"])]
+    symbols_out = [item["symbol"] for item in ranked[: max(1, limits["rank"])]]
+    return symbols_out, ranked
 
 
 def _volume_spike_ratio(bars: list[list[Any]], lookback: int = 20) -> float:
@@ -1053,11 +1120,15 @@ def scan_growth_candidates(
     config: dict[str, Any],
     account_summary: dict[str, Any],
 ) -> dict[str, Any]:
+    started_at = time.perf_counter()
     equity = account_summary.get("equity")
     mode = mode_config(config, equity)
+    limits = pipeline_limits(config, mode)
     symbols = discover_coin_symbols(client, config)
     candidates = []
-    tickers = {item["symbol"]: item for item in client.ticker_24h(symbols)}
+    recalled_symbols = list(symbols)
+    tickers = {item["symbol"]: item for item in client.ticker_24h(recalled_symbols)}
+    symbols, coarse_rows = _coarse_rank_symbols(recalled_symbols, tickers, config, mode)
     fee_pct = StrategyParams().taker_fee * 2 * 100
     slippage_pct = float(config.get("estimated_slippage_pct", 0.04))
     cost_pct = fee_pct + slippage_pct
@@ -1066,7 +1137,7 @@ def scan_growth_candidates(
         for day in config.get("quality_backtest_days", [3, 5])
         if int(day) > 0
     } | {int(mode["recent_days"])})
-    max_depth_checks = int(config.get("depth_check_top_symbols", 8))
+    max_depth_checks = min(int(config.get("depth_check_top_symbols", 8)), limits["auction"])
     depth_checks = 0
     depth_by_symbol: dict[str, dict[str, Any]] = {}
     live_losses_by_direction: dict[str, dict[str, Any]] = {}
@@ -1273,6 +1344,7 @@ def scan_growth_candidates(
                         "leverage": mode["leverage"],
                         "margin_pct": mode["margin_pct"],
                         "thresholds": {"min_trades": min_trades, "min_pf": min_pf, "min_net_pct": min_net_pct},
+                        "coarse": next((row for row in coarse_rows if row["symbol"] == symbol), {}),
                     }
                 candidate = apply_live_credit_to_candidate(candidate, config)
                 candidates.append(candidate)
@@ -1300,9 +1372,40 @@ def scan_growth_candidates(
         for candidate in candidates
         if candidate.get("symbol_quality", {}).get("pool") == "observe"
     ][:max_candidates]
+    funnel = {
+        "recall": {
+            "count": len(recalled_symbols),
+            "limit": limits["recall"],
+            "label": "大召回",
+        },
+        "coarse": {
+            "count": len(coarse_rows),
+            "limit": limits["coarse"],
+            "label": "粗排",
+        },
+        "rank": {
+            "count": len(symbols),
+            "limit": limits["rank"],
+            "label": "精排",
+        },
+        "auction": {
+            "count": depth_checks,
+            "limit": max_depth_checks,
+            "label": "竞价",
+        },
+        "candidates": {
+            "count": len(candidates),
+            "displayed": min(max_candidates, len(candidates)),
+            "label": "候选",
+        },
+        "elapsed_seconds": round(time.perf_counter() - started_at, 3),
+        "coarse_top": _json_safe(coarse_rows[:20]),
+    }
     return {
         "mode": _json_safe(mode),
         "symbols": symbols,
+        "recalled_symbols": recalled_symbols,
+        "funnel": _json_safe(funnel),
         "trade_pool": trade_pool,
         "observe_pool": observe_pool,
         "candidates": candidates[:max_candidates],

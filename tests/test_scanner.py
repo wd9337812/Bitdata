@@ -1045,3 +1045,104 @@ def test_depth_checks_are_rate_limited(monkeypatch):
     assert client.depth_calls == 1
     assert sum(1 for candidate in result["candidates"] if candidate["depth_checked"]) == 1
     assert sum(1 for candidate in result["candidates"] if candidate["passed"]) == 1
+
+
+def test_scan_pipeline_coarse_rank_limits_expensive_klines(monkeypatch):
+    class FakeScanClient:
+        def __init__(self):
+            self.kline_symbols = []
+
+        def ticker_24h(self, symbols=None):
+            return [
+                {"symbol": "HOTUSDT", "lastPrice": "10", "quoteVolume": "900000000", "priceChangePercent": "18"},
+                {"symbol": "FASTUSDT", "lastPrice": "10", "quoteVolume": "700000000", "priceChangePercent": "-14"},
+                {"symbol": "MIDUSDT", "lastPrice": "10", "quoteVolume": "200000000", "priceChangePercent": "2"},
+                {"symbol": "SLOWUSDT", "lastPrice": "10", "quoteVolume": "40000000", "priceChangePercent": "1"},
+                {"symbol": "LOWUSDT", "lastPrice": "10", "quoteVolume": "1000000", "priceChangePercent": "0.5"},
+            ]
+
+        def klines_history(self, symbol, interval, days):
+            self.kline_symbols.append(symbol)
+            return [[i, 10, 10.4, 9.8, 10, 1000] for i in range(200)]
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["HOTUSDT", "FASTUSDT", "MIDUSDT", "SLOWUSDT", "LOWUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 10.0,
+            "atr": 0.1,
+            "stop": 9.9,
+            "take_profit": 10.2,
+            "expected_profit_pct": 2.0,
+            "trend": True,
+            "volatility_ok": True,
+            "entry_type": "standard",
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG", params=None: {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 8,
+            "wins": 5,
+            "win_rate": 62.5,
+            "net_pct": 5.0,
+            "profit_factor": 1.8,
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "score_symbol_quality",
+        lambda symbol, bars, ticker, signal, backtests, depth, config, mode=None: {
+            "score": 80,
+            "pool": "trade",
+            "allowed": True,
+            "quality_risk_multiplier": 1.0,
+            "quality_risk_reasons": [],
+            "components": {},
+            "market_passed": True,
+            "simulation": {"passed": True},
+            "market": {"atr_pct": 1.0, "spread_pct": 0.02, "depth_notional": 50_000},
+        },
+    )
+
+    client = FakeScanClient()
+    result = scan_growth_candidates(
+        client,
+        {
+            "growth_mode": "tournament_sprint",
+            "auto_risk_by_equity": False,
+            "rank_pool_limit": 2,
+            "coarse_pool_limit": 4,
+            "recall_pool_limit": 5,
+            "auction_pool_limit": 1,
+            "depth_check_top_symbols": 1,
+            "tournament_sprint_interval": "5m",
+            "tournament_sprint_recent_days": 3,
+            "tournament_sprint_risk_per_trade_pct": 18,
+            "tournament_sprint_max_leverage": 5,
+            "tournament_sprint_max_symbol_margin_pct": 95,
+            "tournament_sprint_long_min_profit_factor": 0.85,
+            "tournament_sprint_long_min_net_pct": -3,
+            "tournament_sprint_min_expected_profit_cost_ratio": 1.2,
+            "tournament_sprint_min_expected_profit_pct": 0.2,
+            "allow_short": False,
+            "estimated_slippage_pct": 0.04,
+            "min_depth_notional_usdt": 20_000,
+        },
+        {"equity": 69},
+    )
+
+    assert client.kline_symbols == ["HOTUSDT", "FASTUSDT"]
+    assert result["funnel"]["recall"]["count"] == 5
+    assert result["funnel"]["coarse"]["count"] == 4
+    assert result["funnel"]["rank"]["count"] == 2
+    assert len(result["candidates"]) == 2
