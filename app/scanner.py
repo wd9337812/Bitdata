@@ -372,6 +372,127 @@ def _simulation_quality(backtests: dict[int, dict[str, Any]], config: dict[str, 
     }
 
 
+QUALITY_WEIGHTS: dict[str, dict[str, float]] = {
+    "conservative": {
+        "volume": 16,
+        "volume_spike": 8,
+        "volatility": 11,
+        "spread_depth": 19,
+        "backtest_3d": 9,
+        "backtest_5d": 16,
+        "backtest_10d": 13,
+        "trend": 8,
+    },
+    "balanced": {
+        "volume": 15,
+        "volume_spike": 11,
+        "volatility": 13,
+        "spread_depth": 18,
+        "backtest_3d": 11,
+        "backtest_5d": 15,
+        "backtest_10d": 9,
+        "trend": 8,
+    },
+    "attack": {
+        "volume": 12,
+        "volume_spike": 14,
+        "volatility": 15,
+        "spread_depth": 17,
+        "backtest_3d": 14,
+        "backtest_5d": 13,
+        "backtest_10d": 6,
+        "trend": 9,
+    },
+    "tournament": {
+        "volume": 10,
+        "volume_spike": 16,
+        "volatility": 17,
+        "spread_depth": 16,
+        "backtest_3d": 16,
+        "backtest_5d": 11,
+        "backtest_10d": 4,
+        "trend": 10,
+    },
+    "tournament_sprint": {
+        "volume": 8,
+        "volume_spike": 20,
+        "volatility": 19,
+        "spread_depth": 18,
+        "backtest_3d": 15,
+        "backtest_5d": 8,
+        "backtest_10d": 1,
+        "trend": 11,
+    },
+}
+
+
+ATR_IDEAL_RANGES: dict[str, tuple[float, float, float]] = {
+    "conservative": (0.4, 2.5, 4.0),
+    "balanced": (0.5, 3.5, 5.0),
+    "attack": (0.8, 4.5, 7.0),
+    "tournament": (1.0, 5.5, 8.0),
+}
+
+
+def _mode_name(config: dict[str, Any], mode: dict[str, Any] | None = None) -> str:
+    name = str((mode or {}).get("mode") or config.get("growth_mode") or "balanced").lower()
+    return name if name in QUALITY_WEIGHTS else "balanced"
+
+
+def _score_volatility_for_mode(atr_pct: float, mode_name: str, config: dict[str, Any]) -> float:
+    if atr_pct <= 0:
+        return 0.0
+    if mode_name == "tournament_sprint":
+        ideal_min = float(config.get("sprint_atr_ideal_min_pct", 1.2))
+        ideal_max = float(config.get("sprint_atr_ideal_max_pct", 7.0))
+        high = float(config.get("sprint_atr_high_pct", 10.0))
+    else:
+        ideal_min, ideal_max, high = ATR_IDEAL_RANGES.get(mode_name, ATR_IDEAL_RANGES["balanced"])
+    if ideal_min <= atr_pct <= ideal_max:
+        return 1.0
+    if atr_pct < ideal_min:
+        return max(0.0, atr_pct / max(ideal_min, 0.0001))
+    if atr_pct <= high:
+        return max(0.45, 1.0 - (atr_pct - ideal_max) / max(high - ideal_max, 0.0001) * 0.4)
+    return max(0.0, 0.6 - (atr_pct - high) * 0.2)
+
+
+def _quality_risk_multiplier(
+    *,
+    mode_name: str,
+    pool: str,
+    atr_pct: float,
+    sample_low: bool,
+    sample_exempt: bool,
+    depth: dict[str, Any],
+    spike: float,
+    config: dict[str, Any],
+) -> tuple[float, list[str]]:
+    multiplier = 1.0
+    reasons: list[str] = []
+    if pool == "observe_hot":
+        hot_mult = float(config.get("sprint_hot_observe_risk_multiplier", 0.35))
+        multiplier *= hot_mult
+        reasons.append(f"热点观察小仓 {hot_mult:.2f}x")
+    if mode_name == "tournament_sprint":
+        ideal_max = float(config.get("sprint_atr_ideal_max_pct", 7.0))
+        high = float(config.get("sprint_atr_high_pct", 10.0))
+        if atr_pct > ideal_max:
+            atr_mult = float(config.get("sprint_high_atr_risk_multiplier", 0.6))
+            multiplier *= atr_mult
+            reasons.append(f"高ATR降仓 {atr_mult:.2f}x")
+        if atr_pct > high:
+            depth_notional = float(depth.get("depth_notional", 0))
+            extreme_depth = float(config.get("sprint_extreme_depth_notional_usdt", 50_000.0))
+            if depth_notional < extreme_depth or spike < float(config.get("sprint_sample_penalty_exempt_spike", 2.5)):
+                return 0.0, reasons + ["极端ATR且深度/放量不足，禁止"]
+    if mode_name == "tournament_sprint" and sample_low and not sample_exempt:
+        sample_mult = float(config.get("sprint_sample_low_risk_multiplier", 0.75))
+        multiplier *= sample_mult
+        reasons.append(f"样本偏少降仓 {sample_mult:.2f}x")
+    return max(0.0, min(multiplier, 1.0)), reasons
+
+
 def live_performance_summary(
     client: BinanceFuturesClient,
     symbol: str,
@@ -521,15 +642,19 @@ def score_symbol_quality(
     backtests: dict[int, dict[str, Any]],
     depth: dict[str, Any],
     config: dict[str, Any],
+    mode: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    mode_name = _mode_name(config, mode)
+    weights = QUALITY_WEIGHTS[mode_name] if config.get("quality_mode_weights_enabled", True) else QUALITY_WEIGHTS["tournament"]
     quote_volume = float(ticker.get("quoteVolume", 0))
-    volume_score = _score_volume(quote_volume)
+    volume_raw = _score_volume(quote_volume)
     spike = _volume_spike_ratio(bars)
-    spike_score = min(spike / max(float(config.get("volume_spike_ratio", 1.8)), 0.1), 1.0) * 15.0
+    spike_raw = min(spike / max(float(config.get("volume_spike_ratio", 1.8)), 0.1), 1.0) * 15.0
     price = float(signal.get("last_price") or ticker.get("lastPrice") or bars[-1][4] or 0)
     atr_pct = float(signal.get("atr") or 0) / price * 100 if price else 0.0
-    volatility_score = _score_volatility(atr_pct)
-    spread_depth_score = _score_spread_depth(depth, config)
+    volatility_raw = _score_volatility(atr_pct)
+    volatility_mode_ratio = _score_volatility_for_mode(atr_pct, mode_name, config)
+    spread_depth_raw = _score_spread_depth(depth, config)
     simulation = _simulation_quality(backtests, config)
     bt3 = backtests.get(3, {})
     bt5 = backtests.get(5, {})
@@ -540,30 +665,58 @@ def score_symbol_quality(
     trend_score = 5.0 if signal.get("trend") is True or signal.get("signal") in {"LONG", "SHORT"} else 0.0
     false_breakout_penalty = 0.0
     primary = backtests.get(5) or {}
-    if int(primary.get("trades", 0)) < int(config.get("min_simulated_trades", 5)):
-        false_breakout_penalty += 8.0
+    sample_low = int(primary.get("trades", 0)) < int(config.get("min_simulated_trades", 5))
+    sample_exempt = (
+        mode_name == "tournament_sprint"
+        and spike >= float(config.get("sprint_sample_penalty_exempt_spike", 2.5))
+        and bool(signal.get("trend") is True or signal.get("signal") in {"LONG", "SHORT"})
+        and float(depth.get("depth_notional", 0)) >= float(config.get("min_depth_notional_usdt", 20_000))
+    )
+    if sample_low and not sample_exempt:
+        false_breakout_penalty += (
+            float(config.get("sprint_sample_penalty", 1.0))
+            if mode_name == "tournament_sprint"
+            else {"conservative": 10.0, "balanced": 8.0, "attack": 5.0, "tournament": 3.0}.get(mode_name, 8.0)
+        )
     if float(primary.get("win_rate", 0)) < 35 and int(primary.get("trades", 0)) >= 5:
         false_breakout_penalty += 8.0
-    if atr_pct > 5.5:
-        false_breakout_penalty += 6.0
-    score = (
-        volume_score
-        + spike_score
-        + volatility_score
-        + spread_depth_score
-        + min(bt3_score, 15.0)
-        + min(bt5_score, 10.0)
-        + bt10_score
-        + trend_score
-        - min(false_breakout_penalty, 20.0)
-    )
+    high_atr_penalty = 0.0
+    if mode_name != "tournament_sprint" and atr_pct > 5.5:
+        high_atr_penalty = 6.0
+    elif mode_name == "tournament_sprint" and atr_pct > float(config.get("sprint_atr_high_pct", 10.0)):
+        high_atr_penalty = 2.0
+    if high_atr_penalty:
+        false_breakout_penalty += high_atr_penalty
+    component_ratios = {
+        "volume": min(volume_raw / 15.0, 1.0),
+        "volume_spike": min(spike_raw / 15.0, 1.0),
+        "volatility": volatility_mode_ratio,
+        "spread_depth": min(spread_depth_raw / 15.0, 1.0),
+        "backtest_3d": min(bt3_score / 15.0, 1.0),
+        "backtest_5d": min(bt5_score / 10.0, 1.0),
+        "backtest_10d": min(bt10_score / 5.0, 1.0) if bt10_score else 0.0,
+        "trend": min(trend_score / 5.0, 1.0),
+    }
+    weighted_components = {
+        key: component_ratios[key] * weight
+        for key, weight in weights.items()
+    }
+    score = sum(weighted_components.values()) - min(false_breakout_penalty, 20.0)
     score = max(0.0, min(score, 100.0))
-    trade_score = float(config.get("symbol_trade_score", 75.0))
-    small_score = float(config.get("symbol_small_trade_score", 65.0))
+    trade_score = float(config.get("sprint_symbol_trade_score", 68.0) if mode_name == "tournament_sprint" else config.get("symbol_trade_score", 75.0))
+    small_score = float(config.get("sprint_symbol_small_trade_score", 55.0) if mode_name == "tournament_sprint" else config.get("symbol_small_trade_score", 65.0))
+    hot_score = float(config.get("sprint_symbol_hot_observe_score", 45.0))
     observe_score = float(config.get("symbol_observe_score", 50.0))
     market_passed = (
         float(depth.get("spread_pct", 999)) <= float(config.get("max_spread_pct", 0.08))
         and float(depth.get("depth_notional", 0)) >= float(config.get("min_depth_notional_usdt", 20_000))
+    )
+    hot_observe = (
+        mode_name == "tournament_sprint"
+        and score >= hot_score
+        and market_passed
+        and spike >= float(config.get("sprint_sample_penalty_exempt_spike", 2.5))
+        and bool(signal.get("trend") is True or signal.get("signal") in {"LONG", "SHORT"})
     )
     if score >= trade_score and simulation["passed"] and market_passed:
         pool = "trade"
@@ -571,25 +724,54 @@ def score_symbol_quality(
     elif score >= small_score and simulation["passed"] and market_passed:
         pool = "small_trade"
         allowed = True
+    elif hot_observe:
+        pool = "observe_hot"
+        allowed = True
     elif score >= observe_score:
         pool = "observe"
         allowed = False
     else:
         pool = "disabled"
         allowed = False
+    quality_multiplier, quality_reasons = _quality_risk_multiplier(
+        mode_name=mode_name,
+        pool=pool,
+        atr_pct=atr_pct,
+        sample_low=sample_low,
+        sample_exempt=sample_exempt,
+        depth=depth,
+        spike=spike,
+        config=config,
+    )
+    if quality_multiplier <= 0:
+        allowed = False
     return {
         "score": round(score, 2),
         "pool": pool,
         "allowed": allowed,
+        "quality_risk_multiplier": round(quality_multiplier, 4),
+        "quality_risk_reasons": quality_reasons,
+        "mode": mode_name,
         "components": {
-            "volume": round(volume_score, 2),
-            "volume_spike": round(spike_score, 2),
-            "volatility": round(volatility_score, 2),
-            "spread_depth": round(spread_depth_score, 2),
-            "backtest_3d": round(min(bt3_score, 15.0), 2),
-            "backtest_5d": round(min(bt5_score, 10.0), 2),
-            "backtest_10d": round(bt10_score, 2),
-            "trend": round(trend_score, 2),
+            "volume": round(weighted_components["volume"], 2),
+            "volume_spike": round(weighted_components["volume_spike"], 2),
+            "volatility": round(weighted_components["volatility"], 2),
+            "spread_depth": round(weighted_components["spread_depth"], 2),
+            "backtest_3d": round(weighted_components["backtest_3d"], 2),
+            "backtest_5d": round(weighted_components["backtest_5d"], 2),
+            "backtest_10d": round(weighted_components["backtest_10d"], 2),
+            "trend": round(weighted_components["trend"], 2),
+            "false_breakout_penalty": round(false_breakout_penalty, 2),
+            "sample_penalty": round(0.0 if (not sample_low or sample_exempt) else false_breakout_penalty, 2),
+            "raw_volume": round(volume_raw, 2),
+            "raw_volume_spike": round(spike_raw, 2),
+            "raw_volatility": round(volatility_raw, 2),
+            "raw_spread_depth": round(spread_depth_raw, 2),
+        },
+        "penalties": {
+            "sample_low": sample_low,
+            "sample_exempt": sample_exempt,
+            "high_atr_penalty": round(high_atr_penalty, 2),
             "false_breakout_penalty": round(false_breakout_penalty, 2),
         },
         "market_passed": market_passed,
@@ -876,8 +1058,10 @@ def scan_growth_candidates(
                     if should_check_live
                     else {"enabled": False, "reason": "candidate_score_low"}
                 )
-                quality = score_symbol_quality(symbol, bars, ticker, signal, backtests, depth, config)
+                quality = score_symbol_quality(symbol, bars, ticker, signal, backtests, depth, config, mode)
                 quality = _apply_live_performance_quality(quality, live_perf, config)
+                quality_multiplier = float(quality.get("quality_risk_multiplier", 1.0))
+                risk_pct *= quality_multiplier
                 history_passed = (
                     recent["trades"] >= min_trades
                     and recent["profit_factor"] >= min_pf
@@ -1016,6 +1200,8 @@ def scan_growth_candidates(
                         "expected_profit_pct": expected_profit_pct,
                         "risk_pct": risk_pct,
                         "risk_adjustment": risk_adjustment,
+                        "quality_risk_multiplier": quality.get("quality_risk_multiplier", 1.0),
+                        "quality_risk_reasons": quality.get("quality_risk_reasons", []),
                         "base_risk_pct": mode["risk_pct"],
                         "leverage": mode["leverage"],
                         "margin_pct": mode["margin_pct"],
@@ -1040,7 +1226,7 @@ def scan_growth_candidates(
     trade_pool = [
         candidate
         for candidate in candidates
-        if candidate.get("symbol_quality", {}).get("pool") in {"trade", "small_trade", "adaptive_live"}
+        if candidate.get("symbol_quality", {}).get("pool") in {"trade", "small_trade", "adaptive_live", "observe_hot"}
     ][: int(config.get("max_trade_pool_symbols", 15))]
     observe_pool = [
         candidate

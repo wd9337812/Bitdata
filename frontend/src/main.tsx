@@ -389,6 +389,10 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
             {!compact && <th>距离触发</th>}
             {!compact && <th>胜率</th>}
             {!compact && <th>净收益</th>}
+            {!compact && <th>质量池</th>}
+            {!compact && <th>质量分</th>}
+            {!compact && <th>质量倍率</th>}
+            {!compact && <th>质量拆分</th>}
             <th>PF</th>
             <th>成本比</th>
             <th>风险%</th>
@@ -407,6 +411,10 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               {!compact && <td>{fmt(row.signal?.distance_to_trigger_pct, 3)}%</td>}
               {!compact && <td>{fmt(row.recent?.win_rate, 1)}%</td>}
               {!compact && <td>{fmt(row.recent?.net_pct, 2)}%</td>}
+              {!compact && <td>{qualityPoolLabel(row.symbol_quality?.pool)}</td>}
+              {!compact && <td>{fmt(row.symbol_quality?.score, 2)}</td>}
+              {!compact && <td>{fmt(row.quality_risk_multiplier ?? row.symbol_quality?.quality_risk_multiplier, 2)}x</td>}
+              {!compact && <td className="reason-cell">{qualitySummary(row.symbol_quality)}</td>}
               <td>{fmt(row.recent?.profit_factor, 2)}</td>
               <td>{fmt(row.cost_ratio, 2)}</td>
               <td>{fmt(row.risk_pct, 2)}%</td>
@@ -489,6 +497,34 @@ function signalLabel(value: string) {
   if (value === "LONG") return "做多";
   if (value === "SHORT") return "做空";
   return "等待";
+}
+
+function qualityPoolLabel(pool?: string) {
+  const labels: Record<string, string> = {
+    trade: "交易池",
+    small_trade: "小仓交易",
+    adaptive_live: "实盘加权",
+    observe_hot: "热点观察",
+    observe: "普通观察",
+    disabled: "禁用",
+  };
+  return labels[pool || ""] || pool || "-";
+}
+
+function qualitySummary(quality?: any) {
+  if (!quality) return "-";
+  const c = quality.components || {};
+  const reasons = quality.quality_risk_reasons || [];
+  const parts = [
+    `放量 ${fmt(c.volume_spike, 1)}`,
+    `波动 ${fmt(c.volatility, 1)}`,
+    `盘口 ${fmt(c.spread_depth, 1)}`,
+    `3天 ${fmt(c.backtest_3d, 1)}`,
+    `5天 ${fmt(c.backtest_5d, 1)}`,
+  ];
+  if (Number(c.false_breakout_penalty || 0) > 0) parts.push(`惩罚 -${fmt(c.false_breakout_penalty, 1)}`);
+  if (reasons.length) parts.push(reasons.join("；"));
+  return parts.join(" / ");
 }
 
 function MarketTable({ rows }: { rows: any[] }) {
@@ -648,6 +684,19 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("tournament_sprint_preemptive_risk_multiplier", "冲刺做多抢跑风险折扣", "默认 0.35")}
           {number("tournament_sprint_short_preemptive_risk_multiplier", "冲刺做空抢跑风险折扣", "默认 0.25")}
           {number("tournament_sprint_min_expected_profit_cost_ratio", "冲刺最低收益/成本比", "默认 1.35，低于此值不值得付手续费和滑点")}
+          {toggle("quality_mode_weights_enabled", "启用模式化质量评分", "不同模式使用不同权重；冲刺更看重放量、ATR、趋势和实盘表现")}
+          {number("sprint_symbol_trade_score", "冲刺交易池分数", "默认 68")}
+          {number("sprint_symbol_small_trade_score", "冲刺小仓交易分数", "默认 55")}
+          {number("sprint_symbol_hot_observe_score", "冲刺热点观察分数", "默认 45，满足放量和盘口时可小仓试探")}
+          {number("sprint_atr_ideal_min_pct", "冲刺ATR理想下限%", "默认 1.2")}
+          {number("sprint_atr_ideal_max_pct", "冲刺ATR理想上限%", "默认 7")}
+          {number("sprint_atr_high_pct", "冲刺ATR极端阈值%", "默认 10")}
+          {number("sprint_high_atr_risk_multiplier", "冲刺高ATR仓位倍率", "默认 0.6")}
+          {number("sprint_sample_penalty", "冲刺样本少惩罚", "默认 -1 分")}
+          {number("sprint_sample_penalty_exempt_spike", "样本少豁免放量倍数", "默认 2.5")}
+          {number("sprint_sample_low_risk_multiplier", "样本少仓位倍率", "默认 0.75")}
+          {number("sprint_hot_observe_risk_multiplier", "热点观察仓位倍率", "默认 0.35")}
+          {number("sprint_extreme_depth_notional_usdt", "极端波动最低深度", "默认 50000U")}
           {number("attack_loop_seconds", "进攻扫描秒数", "默认 60 秒")}
           {number("balanced_loop_seconds", "均衡扫描秒数", "默认 120 秒")}
           {number("tournament_risk_per_trade_pct", "锦标赛标准风险%")}

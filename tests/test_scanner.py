@@ -1,5 +1,5 @@
 from app import scanner
-from app.scanner import active_growth_mode, discover_coin_symbols, latest_strategy_signal, mode_config, scan_growth_candidates
+from app.scanner import active_growth_mode, discover_coin_symbols, latest_strategy_signal, mode_config, scan_growth_candidates, score_symbol_quality
 
 
 class FakeClient:
@@ -67,6 +67,48 @@ def test_mode_config_uses_mode_specific_interval():
     assert active["interval"] == "15m"
     assert active["recent_days"] == 10
     assert active["risk_pct"] == 5
+
+
+def test_sprint_quality_promotes_hot_observe_with_risk_discount():
+    bars = [make_bar(10, 10.2, 9.8, 10, 100, ) for _ in range(25)]
+    for index, bar in enumerate(bars):
+        bar[5] = 100
+        bar[0] = index
+    bars[-1][5] = 400
+    quality = score_symbol_quality(
+        "HOTUSDT",
+        bars,
+        {"quoteVolume": "800000000", "lastPrice": "10"},
+        {
+            "symbol": "HOTUSDT",
+            "signal": "WAIT",
+            "last_price": 10.0,
+            "atr": 0.8,
+            "trend": True,
+        },
+        {
+            3: {"trades": 2, "win_rate": 50, "profit_factor": 1.2, "net_pct": 3},
+            5: {"trades": 2, "win_rate": 50, "profit_factor": 1.0, "net_pct": 1},
+        },
+        {"spread_pct": 0.02, "depth_notional": 60_000},
+        {
+            "growth_mode": "tournament_sprint",
+            "volume_spike_ratio": 1.8,
+            "min_simulated_trades": 5,
+            "min_depth_notional_usdt": 20_000,
+            "max_spread_pct": 0.08,
+            "sprint_symbol_hot_observe_score": 45,
+            "sprint_sample_penalty_exempt_spike": 2.5,
+            "sprint_hot_observe_risk_multiplier": 0.35,
+            "sprint_high_atr_risk_multiplier": 0.6,
+        },
+        {"mode": "tournament_sprint"},
+    )
+
+    assert quality["pool"] == "observe_hot"
+    assert quality["allowed"] is True
+    assert quality["quality_risk_multiplier"] < 1
+    assert "热点观察" in "；".join(quality["quality_risk_reasons"])
 
 
 def test_discover_coin_symbols_excludes_equity_contracts():
@@ -218,7 +260,7 @@ def test_sprint_promotes_looser_near_trigger_to_preemptive(monkeypatch):
     monkeypatch.setattr(
         scanner,
         "score_symbol_quality",
-        lambda symbol, bars, ticker, signal, backtests, depth, config: {
+        lambda symbol, bars, ticker, signal, backtests, depth, config, mode=None: {
             "score": 80,
             "pool": "trade",
             "allowed": True,
