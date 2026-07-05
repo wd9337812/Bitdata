@@ -13,6 +13,47 @@ class RiskDecision:
     max_margin: float = 0.0
 
 
+def equity_guard_status(
+    config: dict[str, Any],
+    state: dict[str, Any],
+    equity: float | None,
+    mode: str | None = None,
+) -> dict[str, Any]:
+    if not config.get("equity_guard_enabled", True):
+        return {"enabled": False, "allowed": True, "risk_multiplier": 1.0, "drawdown_pct": 0.0}
+    if equity is None:
+        return {"enabled": True, "allowed": False, "risk_multiplier": 0.0, "drawdown_pct": 0.0, "reason": "account_unavailable"}
+    high_watermark = max(float(state.get("equity_high_watermark") or equity), float(equity))
+    drawdown_pct = max(0.0, (high_watermark - float(equity)) / high_watermark * 100) if high_watermark > 0 else 0.0
+    pause_key = "extreme_equity_guard_pause_drawdown_pct" if mode == "extreme_sprint" else "equity_guard_pause_drawdown_pct"
+    pause_pct = float(config.get(pause_key, config.get("equity_guard_pause_drawdown_pct", 35.0)))
+    if drawdown_pct >= pause_pct:
+        return {
+            "enabled": True,
+            "allowed": False,
+            "risk_multiplier": 0.0,
+            "drawdown_pct": round(drawdown_pct, 4),
+            "reason": "equity_guard_pause",
+        }
+    multiplier = 1.0
+    levels = [
+        (float(config.get("equity_guard_drawdown_3_pct", 25.0)), float(config.get("equity_guard_multiplier_3", 0.2))),
+        (float(config.get("equity_guard_drawdown_2_pct", 18.0)), float(config.get("equity_guard_multiplier_2", 0.45))),
+        (float(config.get("equity_guard_drawdown_1_pct", 10.0)), float(config.get("equity_guard_multiplier_1", 0.75))),
+    ]
+    for threshold, value in levels:
+        if drawdown_pct >= threshold:
+            multiplier = value
+            break
+    return {
+        "enabled": True,
+        "allowed": True,
+        "risk_multiplier": multiplier,
+        "drawdown_pct": round(drawdown_pct, 4),
+        "reason": "scaled" if multiplier < 1 else "ok",
+    }
+
+
 def direction_cooldown_key(symbol: str, direction: str | None) -> str:
     direction = (direction or "").upper()
     return f"{symbol.upper()}:{direction}" if direction in {"LONG", "SHORT"} else symbol.upper()

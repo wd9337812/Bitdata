@@ -58,6 +58,7 @@ const modeOptions = [
 ];
 
 modeOptions.push(["tournament_sprint", "锦标赛冲刺：5分钟，更高频、更高风险"]);
+modeOptions.push(["extreme_sprint", "极限冲刺：5分钟，强信号放大仓位，回撤自动降档"]);
 
 const defaultSymbolOptions = [
   "BTCUSDT",
@@ -622,9 +623,9 @@ function RiskPanel({ config, state, account }: { config: any; state: any; accoun
   return (
     <section className="stack">
       <div className="metrics">
-        <MetricCard title="标准风险" value={`${fmt(config.risk_per_trade_pct)}% / ${fmt(config.attack_risk_per_trade_pct)}% / ${fmt(config.tournament_risk_per_trade_pct)}% / ${fmt(config.tournament_sprint_risk_per_trade_pct)}%`} sub="稳健 / 进攻 / 锦标赛 / 冲刺" />
+        <MetricCard title="标准风险" value={`${fmt(config.risk_per_trade_pct)}% / ${fmt(config.attack_risk_per_trade_pct)}% / ${fmt(config.tournament_risk_per_trade_pct)}% / ${fmt(config.tournament_sprint_risk_per_trade_pct)}% / ${fmt(config.extreme_sprint_risk_per_trade_pct)}%`} sub="稳健 / 进攻 / 锦标赛 / 冲刺 / 极限" />
         <MetricCard title="抢跑风险折扣" value={`${fmt(config.preemptive_risk_multiplier, 2)} / ${fmt(config.short_preemptive_risk_multiplier, 2)}`} sub="做多 / 做空" />
-        <MetricCard title="每日亏损上限" value={`${fmt(config.daily_loss_limit_pct)}% / ${fmt(config.attack_daily_loss_limit_pct)}% / ${fmt(config.tournament_daily_loss_limit_pct)}% / ${fmt(config.tournament_sprint_daily_loss_limit_pct)}%`} />
+        <MetricCard title="每日亏损上限" value={`${fmt(config.daily_loss_limit_pct)}% / ${fmt(config.attack_daily_loss_limit_pct)}% / ${fmt(config.tournament_daily_loss_limit_pct)}% / ${fmt(config.tournament_sprint_daily_loss_limit_pct)}% / ${fmt(config.extreme_sprint_daily_loss_limit_pct)}%`} />
         <MetricCard title="最大回撤" value={`${fmt(config.max_drawdown_pct)}%`} />
         <MetricCard title="最大持仓" value={`${config.max_open_positions} / 冲刺 ${config.tournament_sprint_max_open_positions || 1}`} />
         <MetricCard title="同币冷却" value={`${fmt(config.symbol_cooldown_minutes, 0)} 分钟`} />
@@ -774,6 +775,33 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("tournament_sprint_momentum_stop_atr", "冲刺动量止损 ATR", "默认 0.8")}
           {number("tournament_sprint_momentum_take_profit_atr", "冲刺动量止盈 ATR", "默认 1.2")}
           {number("tournament_sprint_momentum_max_hold_bars", "冲刺动量最多K线", "默认 5 根 5m K线，回测使用")}
+          {toggle("extreme_sprint_enabled", "开启极限冲刺", "必须配合确认短语 ENABLE_EXTREME_SPRINT 才会生效")}
+          {text("extreme_sprint_confirmation", "极限冲刺确认短语", "填写 ENABLE_EXTREME_SPRINT 后，增长模式选择极限冲刺才会启用")}
+          {select("extreme_sprint_interval", "极限冲刺周期", intervalOptions)}
+          {number("extreme_sprint_loop_seconds", "极限扫描秒数", "默认 15 秒；更快寻找机会")}
+          {number("extreme_sprint_risk_per_trade_pct", "极限基础风险%", "默认 28%，高风险冲刺参数")}
+          {number("extreme_sprint_daily_loss_limit_pct", "极限每日亏损上限%", "默认 50%，触发后停止新开仓")}
+          {number("extreme_sprint_standard_min_score", "极限标准最低评分", "默认 88")}
+          {number("extreme_sprint_preemptive_min_score", "极限抢跑最低评分", "默认 72")}
+          {number("extreme_sprint_momentum_min_score", "极限动量最低评分", "默认 68")}
+          {number("extreme_sprint_min_expected_profit_cost_ratio", "极限最低收益/成本比", "默认 1.1，必须覆盖手续费和滑点")}
+          {number("extreme_sprint_high_score", "极限加仓评分", "默认 110；达到后提高仓位倍率")}
+          {number("extreme_sprint_super_score", "极限强加仓评分", "默认 135；达到后进一步放大仓位")}
+          {number("extreme_sprint_high_risk_multiplier", "极限加仓倍率", "默认 1.35")}
+          {number("extreme_sprint_super_risk_multiplier", "极限强加仓倍率", "默认 1.75")}
+          {toggle("equity_guard_enabled", "开启权益高点保护", "回撤越深，开仓倍率自动降低；极端回撤暂停")}
+          {number("equity_guard_drawdown_1_pct", "权益保护一档回撤%", "默认 10")}
+          {number("equity_guard_multiplier_1", "权益保护一档倍率", "默认 0.75")}
+          {number("equity_guard_drawdown_2_pct", "权益保护二档回撤%", "默认 18")}
+          {number("equity_guard_multiplier_2", "权益保护二档倍率", "默认 0.45")}
+          {number("equity_guard_drawdown_3_pct", "权益保护三档回撤%", "默认 25")}
+          {number("equity_guard_multiplier_3", "权益保护三档倍率", "默认 0.20")}
+          {number("extreme_equity_guard_pause_drawdown_pct", "极限模式暂停回撤%", "默认 40")}
+          {toggle("min_order_filter_enabled", "最小下单量前置过滤", "扫描阶段提前跳过下单量不足的币，避免启动后失败")}
+          {toggle("market_state_filter_enabled", "行情状态分类过滤", "识别趋势放量、插针、盘口薄等状态")}
+          {toggle("websocket_trigger_enabled", "WebSocket 事件触发入场", "实时K线异动会进入下一轮扫描优先级")}
+          {number("websocket_trigger_move_pct", "实时触发涨跌幅%", "默认 0.35")}
+          {number("websocket_trigger_quote_volume_usdt", "实时触发成交额U", "默认 250000")}
           {number("sprint_symbol_trade_score", "冲刺交易池分数", "默认 68")}
           {number("sprint_symbol_small_trade_score", "冲刺小仓交易分数", "默认 55")}
           {number("sprint_symbol_hot_observe_score", "冲刺热点观察分数", "默认 45，满足放量和盘口时可小仓试探")}

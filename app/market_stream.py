@@ -46,6 +46,7 @@ def _empty_state() -> dict[str, Any]:
         "tickers": {},
         "klines": {},
         "depths": {},
+        "triggers": [],
         "last_error": "",
     }
 
@@ -173,6 +174,16 @@ def stream_kline(symbol: str, interval: str, max_age_seconds: int = 20) -> list[
     return item.get("row")
 
 
+def stream_triggers(max_age_seconds: int = 180, limit: int = 40) -> list[dict[str, Any]]:
+    state = read_snapshot()
+    events = []
+    for event in state.get("triggers", []) or []:
+        if _fresh(event, max_age_seconds):
+            events.append(event)
+    events.sort(key=lambda item: item.get("updated_at") or "", reverse=True)
+    return events[:limit]
+
+
 def overlay_stream_kline(rows: list[list[Any]], symbol: str, interval: str) -> list[list[Any]]:
     row = stream_kline(symbol, interval)
     if not row:
@@ -241,6 +252,12 @@ def _symbols_from_config(config: dict[str, Any]) -> list[str]:
     if config.get("stream_include_positions", True):
         for symbol in sources.get("positions", []):
             _append_symbol(symbols, symbol)
+    if config.get("websocket_trigger_enabled", True):
+        for event in stream_triggers(
+            max_age_seconds=int(config.get("websocket_trigger_max_age_seconds", 180)),
+            limit=int(config.get("websocket_trigger_scan_limit", 40)),
+        ):
+            _append_symbol(symbols, str(event.get("symbol") or ""))
     for key in ("stage1_symbols", "symbols", "stage2_symbols"):
         for symbol in config.get(key, []) or []:
             _append_symbol(symbols, symbol)
@@ -329,6 +346,41 @@ def _kline_from_event(data: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     }
 
 
+def _append_trigger_event(
+    state: dict[str, Any],
+    symbol: str,
+    interval: str,
+    row: list[Any],
+    *,
+    move_pct_threshold: float,
+    quote_volume_threshold: float,
+    max_events: int,
+) -> None:
+    try:
+        open_price = float(row[1])
+        close = float(row[4])
+        quote_volume = float(row[7])
+    except (TypeError, ValueError, IndexError):
+        return
+    move_pct = abs(close - open_price) / close * 100 if close else 0.0
+    if move_pct < move_pct_threshold and quote_volume < quote_volume_threshold:
+        return
+    event = {
+        "symbol": symbol,
+        "interval": interval,
+        "type": "kline_trigger",
+        "move_pct": round(move_pct, 4),
+        "quote_volume": round(quote_volume, 4),
+        "updated_at": _now_iso(),
+        "source": "websocket",
+    }
+    existing = [
+        item for item in state.get("triggers", []) or []
+        if not (item.get("symbol") == symbol and item.get("interval") == interval)
+    ]
+    state["triggers"] = [event] + existing[: max(0, max_events - 1)]
+
+
 def _depth_from_event(data: dict[str, Any]) -> dict[str, Any]:
     bids = data.get("b") or []
     asks = data.get("a") or []
@@ -353,7 +405,17 @@ def _depth_from_event(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _consume_stream(url: str, symbols: list[str], state: dict[str, Any], max_session_seconds: int) -> None:
+async def _consume_stream(
+    url: str,
+    symbols: list[str],
+    state: dict[str, Any],
+    max_session_seconds: int,
+    *,
+    trigger_enabled: bool = True,
+    trigger_move_pct: float = 0.35,
+    trigger_quote_volume_usdt: float = 250_000,
+    trigger_max_events: int = 80,
+) -> None:
     started_at = time.time()
     async with websockets.connect(url, ping_interval=20, ping_timeout=10, close_timeout=5) as websocket:
         state.update({"connected": True, "symbols": symbols, "last_error": "", "updated_at": _now_iso()})
@@ -375,6 +437,16 @@ async def _consume_stream(url: str, symbols: list[str], state: dict[str, Any], m
                     symbol, kline_interval, item = _kline_from_event(data)
                     if symbol and kline_interval:
                         state.setdefault("klines", {}).setdefault(symbol, {})[kline_interval] = item
+                        if trigger_enabled:
+                            _append_trigger_event(
+                                state,
+                                symbol,
+                                kline_interval,
+                                item["row"],
+                                move_pct_threshold=trigger_move_pct,
+                                quote_volume_threshold=trigger_quote_volume_usdt,
+                                max_events=trigger_max_events,
+                            )
                 elif event_type == "depthUpdate" or payload.get("stream", "").endswith("depth5@500ms"):
                     symbol = str(data.get("s") or payload.get("stream", "").split("@")[0]).upper()
                     if symbol:
@@ -415,9 +487,15 @@ async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
         try:
             public_url = _public_stream_url(symbols)
             market_url = _market_stream_url(symbols, interval)
+            trigger_kwargs = {
+                "trigger_enabled": bool(config.get("websocket_trigger_enabled", True)),
+                "trigger_move_pct": float(config.get("websocket_trigger_move_pct", 0.35)),
+                "trigger_quote_volume_usdt": float(config.get("websocket_trigger_quote_volume_usdt", 250_000)),
+                "trigger_max_events": int(config.get("websocket_trigger_max_events", 80)),
+            }
             await asyncio.gather(
-                _consume_stream(public_url, symbols, state, rebuild_seconds),
-                _consume_stream(market_url, symbols, state, rebuild_seconds),
+                _consume_stream(public_url, symbols, state, rebuild_seconds, **trigger_kwargs),
+                _consume_stream(market_url, symbols, state, rebuild_seconds, **trigger_kwargs),
             )
         except Exception as exc:
             state = read_snapshot()

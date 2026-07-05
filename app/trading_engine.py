@@ -6,7 +6,7 @@ from typing import Any
 from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.grid import build_grid_orders, build_grid_plan
-from app.risk import assess_new_position, current_stage, live_trading_allowed, position_size_from_risk
+from app.risk import assess_new_position, current_stage, equity_guard_status, live_trading_allowed, position_size_from_risk
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates, strategy_params_for_mode
 from app.state_store import save_state
 from app.strategy import StrategyParams
@@ -225,6 +225,18 @@ def build_stage1_decision(
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "no_signal"}}
     if equity is None:
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "account_unavailable"}}
+    guard = equity_guard_status(config, state, equity, active_mode["mode"])
+    if not guard.get("allowed", True):
+        return {
+            "symbol": symbol,
+            "action": "WAIT",
+            "signal": signal,
+            "risk": {"allowed": False, "reason": guard.get("reason", "equity_guard")},
+            "equity_guard": guard,
+            "mode": active_mode["mode"],
+            "strategy": active_mode["strategy"],
+        }
+    active_mode["risk_pct"] = float(active_mode["risk_pct"]) * float(guard.get("risk_multiplier", 1.0))
 
     daily_loss_key = "daily_loss_limit_pct"
     if active_mode["mode"] == "attack":
@@ -233,19 +245,28 @@ def build_stage1_decision(
         daily_loss_key = "tournament_daily_loss_limit_pct"
     if active_mode["mode"] == "tournament_sprint":
         daily_loss_key = "tournament_sprint_daily_loss_limit_pct"
+    if active_mode["mode"] == "extreme_sprint":
+        daily_loss_key = "extreme_sprint_daily_loss_limit_pct"
     max_open_positions = config.get("max_open_positions", 1)
-    if active_mode["mode"] == "tournament_sprint":
+    if active_mode["mode"] in {"tournament_sprint", "extreme_sprint"}:
         max_open_positions = int(config.get("tournament_sprint_max_open_positions", max_open_positions))
         if equity is not None and float(equity) < float(config.get("tournament_sprint_second_position_equity", 100.0)):
             max_open_positions = min(max_open_positions, 1)
+        if active_mode["mode"] == "extreme_sprint":
+            max_open_positions = int(config.get("extreme_sprint_max_open_positions", max_open_positions))
+            if float(equity) < float(config.get("tournament_sprint_second_position_equity", 100.0)):
+                max_open_positions = min(max_open_positions, 1)
     overrides = {
         "direction": direction,
         "margin_pct": active_mode["margin_pct"],
         "leverage": active_mode["leverage"],
         "daily_loss_limit_pct": config.get(daily_loss_key, config.get("daily_loss_limit_pct", 3.0)),
-        "ignore_max_drawdown": active_mode["mode"] in {"tournament", "tournament_sprint"},
+        "ignore_max_drawdown": active_mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint"},
         "max_open_positions": max_open_positions,
         "max_consecutive_losses": (
+            config.get("extreme_sprint_max_consecutive_losses", config.get("max_consecutive_losses", 2))
+            if active_mode["mode"] == "extreme_sprint"
+            else
             config.get("tournament_sprint_max_consecutive_losses", config.get("max_consecutive_losses", 2))
             if active_mode["mode"] == "tournament_sprint"
             else config.get("max_consecutive_losses", 2)
@@ -280,6 +301,7 @@ def build_stage1_decision(
         "strategy": active_mode["strategy"],
         "entry_type": (scan_candidate or {}).get("entry_type", signal.get("entry_type", "standard")),
         "decision_reason": (scan_candidate or {}).get("decision_reason"),
+        "equity_guard": guard,
         "risk_pct": active_mode["risk_pct"],
         "leverage": active_mode["leverage"],
     }

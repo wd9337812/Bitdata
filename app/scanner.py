@@ -6,8 +6,9 @@ import time
 from typing import Any
 
 from app.binance_client import BinanceFuturesClient
+from app.exchange_filters import ExchangeFilters
 from app.live_learning import apply_live_credit_to_candidate, list_live_scores
-from app.market_stream import write_stream_intent
+from app.market_stream import stream_triggers, write_stream_intent
 from app.strategy import StrategyParams, atr, ema
 
 
@@ -67,6 +68,17 @@ MODE_PRESETS: dict[str, dict[str, Any]] = {
         "min_trades": 1,
         "recent_days": 3,
     },
+    "extreme_sprint": {
+        "strategy": "breakout",
+        "interval_key": "extreme_sprint_interval",
+        "recent_days_key": "extreme_sprint_recent_days",
+        "risk_key": "extreme_sprint_risk_per_trade_pct",
+        "leverage_key": "extreme_sprint_max_leverage",
+        "margin_key": "extreme_sprint_max_symbol_margin_pct",
+        "min_pf": 0.75,
+        "min_trades": 1,
+        "recent_days": 2,
+    },
 }
 
 
@@ -76,11 +88,21 @@ PIPELINE_DEFAULTS: dict[str, dict[str, int]] = {
     "attack": {"recall": 350, "coarse": 140, "rank": 70, "auction": 12},
     "tournament": {"recall": 500, "coarse": 180, "rank": 80, "auction": 15},
     "tournament_sprint": {"recall": 600, "coarse": 220, "rank": 90, "auction": 15},
+    "extreme_sprint": {"recall": 650, "coarse": 240, "rank": 110, "auction": 18},
 }
+
+
+def extreme_sprint_armed(config: dict[str, Any]) -> bool:
+    return (
+        config.get("extreme_sprint_enabled") is True
+        and str(config.get("extreme_sprint_confirmation", "")) == "ENABLE_EXTREME_SPRINT"
+    )
 
 
 def active_growth_mode(config: dict[str, Any], equity: float | None = None) -> str:
     configured = str(config.get("growth_mode", "balanced")).lower()
+    if configured == "extreme_sprint":
+        return "extreme_sprint" if extreme_sprint_armed(config) else "balanced"
     if not config.get("auto_risk_by_equity", True):
         return configured if configured in MODE_PRESETS else "balanced"
     if equity is None:
@@ -128,21 +150,146 @@ def strategy_params_for_mode(
     entry_type: str = "standard",
 ) -> StrategyParams | None:
     mode_name = str(mode.get("mode") if isinstance(mode, dict) else mode)
-    if mode_name != "tournament_sprint":
+    if mode_name not in {"tournament_sprint", "extreme_sprint"}:
         return None
     entry_key = "momentum" if entry_type == "momentum" else "preemptive" if entry_type == "preemptive" else "standard"
-    defaults = {
-        "standard": (0.9, 1.4, 6),
-        "preemptive": (0.75, 1.0, 4),
-        "momentum": (0.8, 1.2, 5),
-    }
+    if mode_name == "extreme_sprint":
+        defaults = {
+            "standard": (0.75, 1.05, 4),
+            "preemptive": (0.65, 0.9, 3),
+            "momentum": (0.7, 1.0, 3),
+        }
+    else:
+        defaults = {
+            "standard": (0.9, 1.4, 6),
+            "preemptive": (0.75, 1.0, 4),
+            "momentum": (0.8, 1.2, 5),
+        }
     default_stop, default_take, default_hold = defaults[entry_key]
+    prefix = "extreme_sprint" if mode_name == "extreme_sprint" else "tournament_sprint"
     return StrategyParams(
-        stop_atr=float(config.get(f"tournament_sprint_{entry_key}_stop_atr", default_stop)),
-        take_profit_atr=float(config.get(f"tournament_sprint_{entry_key}_take_profit_atr", default_take)),
-        max_hold_bars=int(config.get(f"tournament_sprint_{entry_key}_max_hold_bars", default_hold)),
+        stop_atr=float(config.get(f"{prefix}_{entry_key}_stop_atr", default_stop)),
+        take_profit_atr=float(config.get(f"{prefix}_{entry_key}_take_profit_atr", default_take)),
+        max_hold_bars=int(config.get(f"{prefix}_{entry_key}_max_hold_bars", default_hold)),
         min_atr_pct=0.006,
     )
+
+
+def _mode_key(mode: dict[str, Any], sprint_key: str, extreme_key: str) -> str:
+    return extreme_key if mode.get("mode") == "extreme_sprint" else sprint_key
+
+
+def classify_market_state(
+    symbol: str,
+    bars: list[list[Any]],
+    signal: dict[str, Any],
+    depth: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    if not config.get("market_state_filter_enabled", True):
+        return {"state": "neutral", "label": "未启用行情分类", "allows_entry": True, "risk_multiplier": 1.0}
+    if len(bars) < 5:
+        return {"state": "insufficient_data", "label": "K线不足", "allows_entry": False, "risk_multiplier": 0.0}
+    last = bars[-1]
+    try:
+        open_price = float(last[1])
+        high = float(last[2])
+        low = float(last[3])
+        close = float(last[4])
+    except (TypeError, ValueError, IndexError):
+        return {"state": "bad_kline", "label": "K线异常", "allows_entry": False, "risk_multiplier": 0.0}
+    body = abs(close - open_price)
+    upper_wick = max(0.0, high - max(open_price, close))
+    lower_wick = max(0.0, min(open_price, close) - low)
+    wick_ratio = max(upper_wick, lower_wick) / max(body, close * 0.0001, 0.00000001)
+    candle_move_pct = abs(close - open_price) / close * 100 if close else 0.0
+    atr_pct = float(signal.get("atr") or 0) / close * 100 if close else 0.0
+    volume_spike = _volume_spike_ratio(bars)
+    spread_pct = float(depth.get("spread_pct") or 999)
+    depth_notional = float(depth.get("depth_notional") or 0)
+    max_spread = float(config.get("max_spread_pct", 0.08))
+    min_depth = float(config.get("market_state_trap_max_depth_notional_usdt", 800))
+    depth_known = depth.get("reason") != "depth_not_checked" and depth.get("available", True) is not False
+    if depth_known and (spread_pct > max_spread * 2 or (depth_notional and depth_notional < min_depth)):
+        return {
+            "state": "liquidity_trap",
+            "label": "盘口薄/价差大",
+            "allows_entry": False,
+            "risk_multiplier": 0.0,
+            "wick_ratio": round(wick_ratio, 4),
+            "volume_spike": round(volume_spike, 4),
+            "atr_pct": round(atr_pct, 4),
+        }
+    if wick_ratio >= float(config.get("market_state_spike_wick_ratio", 2.2)) and candle_move_pct >= 0.25:
+        return {
+            "state": "spike_wick",
+            "label": "插针风险",
+            "allows_entry": False,
+            "risk_multiplier": 0.0,
+            "wick_ratio": round(wick_ratio, 4),
+            "volume_spike": round(volume_spike, 4),
+            "atr_pct": round(atr_pct, 4),
+        }
+    if signal.get("trend") and signal.get("volatility_ok") and volume_spike >= float(config.get("market_state_min_volume_spike", 1.2)):
+        return {
+            "state": "trend_breakout",
+            "label": "趋势放量",
+            "allows_entry": True,
+            "risk_multiplier": 1.12,
+            "wick_ratio": round(wick_ratio, 4),
+            "volume_spike": round(volume_spike, 4),
+            "atr_pct": round(atr_pct, 4),
+        }
+    if signal.get("trend") and signal.get("volatility_ok"):
+        return {
+            "state": "trend_continuation",
+            "label": "趋势延续",
+            "allows_entry": True,
+            "risk_multiplier": 1.0,
+            "wick_ratio": round(wick_ratio, 4),
+            "volume_spike": round(volume_spike, 4),
+            "atr_pct": round(atr_pct, 4),
+        }
+    return {
+        "state": "chop",
+        "label": "震荡等待",
+        "allows_entry": False,
+        "risk_multiplier": 0.0,
+        "wick_ratio": round(wick_ratio, 4),
+        "volume_spike": round(volume_spike, 4),
+        "atr_pct": round(atr_pct, 4),
+    }
+
+
+def execution_viability(
+    filters: ExchangeFilters | None,
+    symbol: str,
+    equity: float | None,
+    risk_pct: float,
+    entry: float,
+    stop: float,
+    max_notional: float,
+) -> dict[str, Any]:
+    if filters is None:
+        return {"enabled": False, "executable": True}
+    if equity is None or entry <= 0 or stop <= 0:
+        return {"enabled": True, "executable": False, "reason": "account_or_price_missing"}
+    raw_qty = (float(equity) * float(risk_pct) / 100) / abs(entry - stop) if abs(entry - stop) > 0 else 0.0
+    cap_qty = max_notional / entry if entry > 0 else 0.0
+    quantity = filters.quantity(symbol, min(raw_qty, cap_qty))
+    notional = quantity * entry
+    min_notional = filters.min_notional(symbol)
+    executable = quantity > 0 and notional >= min_notional
+    return {
+        "enabled": True,
+        "executable": executable,
+        "quantity": quantity,
+        "notional": round(notional, 8),
+        "min_notional": min_notional,
+        "raw_quantity": raw_qty,
+        "max_quantity": cap_qty,
+        "reason": "ok" if executable else "below_min_order",
+    }
 
 
 def discover_coin_symbols(client: BinanceFuturesClient, config: dict[str, Any]) -> list[str]:
@@ -1126,10 +1273,24 @@ def scan_growth_candidates(
     mode = mode_config(config, equity)
     limits = pipeline_limits(config, mode)
     symbols = discover_coin_symbols(client, config)
+    trigger_events = stream_triggers(
+        max_age_seconds=int(config.get("websocket_trigger_max_age_seconds", 180)),
+        limit=int(config.get("websocket_trigger_scan_limit", 40)),
+    ) if config.get("websocket_trigger_enabled", True) else []
+    for event in trigger_events:
+        trigger_symbol = str(event.get("symbol") or "").upper()
+        if trigger_symbol and trigger_symbol not in symbols:
+            symbols.append(trigger_symbol)
     candidates = []
     recalled_symbols = list(symbols)
     tickers = {item["symbol"]: item for item in client.ticker_24h(recalled_symbols)}
     ranked_symbols, coarse_rows = _coarse_rank_symbols(recalled_symbols, tickers, config, mode)
+    trigger_symbols = [str(event.get("symbol") or "").upper() for event in trigger_events]
+    ranked_symbols = sorted(
+        ranked_symbols,
+        key=lambda value: (value in trigger_symbols, -(trigger_symbols.index(value) if value in trigger_symbols else 999999)),
+        reverse=True,
+    )
     fee_pct = StrategyParams().taker_fee * 2 * 100
     slippage_pct = float(config.get("estimated_slippage_pct", 0.04))
     cost_pct = fee_pct + slippage_pct
@@ -1145,6 +1306,12 @@ def scan_growth_candidates(
     depth_by_symbol: dict[str, dict[str, Any]] = {}
     live_losses_by_direction: dict[str, dict[str, Any]] = {}
     processed_symbols: list[str] = []
+    exchange_filters = None
+    if config.get("min_order_filter_enabled", False):
+        try:
+            exchange_filters = ExchangeFilters(client.exchange_info())
+        except Exception:
+            exchange_filters = None
 
     for symbol in ranked_symbols:
         if len(processed_symbols) >= min_rank_symbols and time.perf_counter() - started_at >= degrade_seconds:
@@ -1154,7 +1321,8 @@ def scan_growth_candidates(
             bars = client.klines_history(symbol, mode["interval"], max(quality_days))
             directions = ["LONG", "SHORT"] if config.get("allow_short", False) else ["LONG"]
             for direction in directions:
-                is_sprint = mode["mode"] == "tournament_sprint"
+                is_sprint = mode["mode"] in {"tournament_sprint", "extreme_sprint"}
+                fast_prefix = "extreme_sprint" if mode["mode"] == "extreme_sprint" else "tournament_sprint"
                 signal_params = strategy_params_for_mode(config, mode, "standard")
                 signal = latest_strategy_signal(symbol, bars, mode["strategy"], params=signal_params, direction=direction)
                 backtests = {
@@ -1204,8 +1372,10 @@ def scan_growth_candidates(
                 )
                 quality = score_symbol_quality(symbol, bars, ticker, signal, backtests, depth, config, mode)
                 quality = _apply_live_performance_quality(quality, live_perf, config)
+                market_state = classify_market_state(symbol, bars, signal, depth, config)
                 quality_multiplier = float(quality.get("quality_risk_multiplier", 1.0))
                 risk_pct *= quality_multiplier
+                risk_pct *= float(market_state.get("risk_multiplier", 1.0))
                 history_passed = (
                     recent["trades"] >= min_trades
                     and recent["profit_factor"] >= min_pf
@@ -1215,8 +1385,9 @@ def scan_growth_candidates(
                     signal.get("signal") == direction
                     and history_passed
                     and quality["allowed"]
-                    and expected_profit_pct >= float(config.get("tournament_sprint_min_expected_profit_pct", 0.22) if is_sprint else config.get("min_expected_profit_pct", 0.35))
-                    and cost_ratio >= float(config.get("tournament_sprint_min_expected_profit_cost_ratio", 1.35) if is_sprint else config.get("min_expected_profit_cost_ratio", 3.0))
+                    and market_state.get("allows_entry", True)
+                    and expected_profit_pct >= float(config.get(f"{fast_prefix}_min_expected_profit_pct", 0.22) if is_sprint else config.get("min_expected_profit_pct", 0.35))
+                    and cost_ratio >= float(config.get(f"{fast_prefix}_min_expected_profit_cost_ratio", 1.35) if is_sprint else config.get("min_expected_profit_cost_ratio", 3.0))
                 )
                 current_score = _current_signal_score(signal, direction, cost_ratio, recent)
                 score = 0.0
@@ -1230,7 +1401,7 @@ def scan_growth_candidates(
                 score -= 1.5 if direction == "SHORT" else 0
 
                 entry_type = "standard" if standard_passed else "watch"
-                standard_min_score = float(config.get("tournament_sprint_standard_min_score", 72.0) if is_sprint else config.get("standard_min_score", 85.0))
+                standard_min_score = float(config.get(f"{fast_prefix}_standard_min_score", 72.0) if is_sprint else config.get("standard_min_score", 85.0))
                 passed = standard_passed and score >= standard_min_score
                 risk_adjustment: dict[str, Any] | None = None
                 decision_reason = "标准突破信号通过" if passed else "等待触发"
@@ -1256,30 +1427,30 @@ def scan_growth_candidates(
                         decision_reason = "观察池高分标准突破，允许折扣仓位试单" if passed else "观察池标准突破评分不足"
                     else:
                         decision_reason = f"币种质量未达实盘准入：{quality['pool']}，评分 {quality['score']}"
-                preemptive_enabled = mode["mode"] in {"tournament", "tournament_sprint"} and config.get("preemptive_entries_enabled", True)
-                if not passed and preemptive_enabled and history_passed and quality["allowed"] and signal.get("signal") == "WAIT":
+                preemptive_enabled = mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint"} and config.get("preemptive_entries_enabled", True)
+                if not passed and preemptive_enabled and history_passed and quality["allowed"] and market_state.get("allows_entry", True) and signal.get("signal") == "WAIT":
                     distance_pct = float(signal.get("distance_to_trigger_pct") or 999)
-                    max_distance = float(config.get("tournament_sprint_preemptive_max_distance_pct", 0.55) if is_sprint else config.get("preemptive_max_distance_pct", 0.35))
-                    min_candle_pct = float(config.get("tournament_sprint_momentum_min_candle_pct", 0.10)) if is_sprint else 0.12
+                    max_distance = float(config.get(f"{fast_prefix}_preemptive_max_distance_pct", 0.55) if is_sprint else config.get("preemptive_max_distance_pct", 0.35))
+                    min_candle_pct = float(config.get(f"{fast_prefix}_momentum_min_candle_pct", 0.10)) if is_sprint else 0.12
                     near_trigger = (
                         signal.get("trend") is True
                         and signal.get("volatility_ok") is True
                         and distance_pct <= max_distance
                     )
                     strong_momentum = (
-                        (config.get("tournament_sprint_momentum_enabled", True) if is_sprint else True)
+                        (config.get(f"{fast_prefix}_momentum_enabled", True) if is_sprint else True)
                         and signal.get("trend") is True
                         and signal.get("volatility_ok") is True
                         and float(signal.get("candle_move_pct") or 0) >= max(min_candle_pct, distance_pct)
                     )
-                    min_preempt_score = float(config.get("tournament_sprint_preemptive_min_score", 58.0) if is_sprint else config.get("preemptive_min_score", 72.0))
-                    min_momentum_score = float(config.get("tournament_sprint_momentum_min_score", min_preempt_score) if is_sprint else min_preempt_score)
+                    min_preempt_score = float(config.get(f"{fast_prefix}_preemptive_min_score", 58.0) if is_sprint else config.get("preemptive_min_score", 72.0))
+                    min_momentum_score = float(config.get(f"{fast_prefix}_momentum_min_score", min_preempt_score) if is_sprint else min_preempt_score)
                     if (near_trigger and score >= min_preempt_score) or (strong_momentum and score >= min_momentum_score):
                         entry_type = "momentum" if strong_momentum and not near_trigger else "preemptive"
                         risk_multiplier = (
-                            float(config.get("tournament_sprint_short_preemptive_risk_multiplier", 0.25) if is_sprint else config.get("short_preemptive_risk_multiplier", 0.18))
+                            float(config.get(f"{fast_prefix}_short_preemptive_risk_multiplier", 0.25) if is_sprint else config.get("short_preemptive_risk_multiplier", 0.18))
                             if direction == "SHORT"
-                            else float(config.get("tournament_sprint_preemptive_risk_multiplier", 0.35) if is_sprint else config.get("preemptive_risk_multiplier", 0.24))
+                            else float(config.get(f"{fast_prefix}_preemptive_risk_multiplier", 0.35) if is_sprint else config.get("preemptive_risk_multiplier", 0.24))
                         )
                         if quality["pool"] == "small_trade":
                             risk_multiplier *= float(config.get("small_trade_risk_multiplier", 0.5))
@@ -1289,9 +1460,9 @@ def scan_growth_candidates(
                         cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
                         risk_pct *= risk_multiplier
                         passed = (
-                            expected_profit_pct >= float(config.get("tournament_sprint_min_expected_profit_pct", 0.22) if is_sprint else config.get("min_expected_profit_pct", 0.35))
+                            expected_profit_pct >= float(config.get(f"{fast_prefix}_min_expected_profit_pct", 0.22) if is_sprint else config.get("min_expected_profit_pct", 0.35))
                             and cost_ratio >= (
-                                float(config.get("tournament_sprint_min_expected_profit_cost_ratio", 1.35))
+                                float(config.get(f"{fast_prefix}_min_expected_profit_cost_ratio", 1.35))
                                 if is_sprint
                                 else max(1.5, float(config.get("min_expected_profit_cost_ratio", 3.0)) * 0.65)
                             )
@@ -1313,6 +1484,14 @@ def scan_growth_candidates(
                             misses.append("综合评分不足")
                         decision_reason = "、".join(misses) or "等待触发"
 
+                extreme_risk_multiplier = 1.0
+                if mode["mode"] == "extreme_sprint" and passed:
+                    if score >= float(config.get("extreme_sprint_super_score", 135.0)):
+                        extreme_risk_multiplier = float(config.get("extreme_sprint_super_risk_multiplier", 1.75))
+                    elif score >= float(config.get("extreme_sprint_high_score", 110.0)):
+                        extreme_risk_multiplier = float(config.get("extreme_sprint_high_risk_multiplier", 1.35))
+                    risk_pct *= extreme_risk_multiplier
+
                 candidate = {
                         "symbol": symbol,
                         "direction": direction,
@@ -1327,6 +1506,7 @@ def scan_growth_candidates(
                         "symbol_quality": quality,
                         "symbol_pool": quality["pool"],
                         "live_performance": live_perf,
+                        "market_state": market_state,
                         "depth_checked": depth.get("reason") != "depth_not_checked",
                         "simulation_passed": quality["simulation"]["passed"],
                         "current_score": round(current_score, 2),
@@ -1344,6 +1524,7 @@ def scan_growth_candidates(
                         "estimated_cost_pct": cost_pct,
                         "expected_profit_pct": expected_profit_pct,
                         "risk_pct": risk_pct,
+                        "extreme_risk_multiplier": extreme_risk_multiplier,
                         "risk_adjustment": risk_adjustment,
                         "quality_risk_multiplier": quality.get("quality_risk_multiplier", 1.0),
                         "quality_risk_reasons": quality.get("quality_risk_reasons", []),
@@ -1354,6 +1535,20 @@ def scan_growth_candidates(
                         "coarse": next((row for row in coarse_rows if row["symbol"] == symbol), {}),
                     }
                 candidate = apply_live_credit_to_candidate(candidate, config)
+                viability = execution_viability(
+                    exchange_filters,
+                    symbol,
+                    equity,
+                    float(candidate.get("risk_pct") or 0),
+                    float(signal.get("last_price") or 0),
+                    float(signal.get("stop") or 0),
+                    float(mode["margin_pct"]) / 100 * float(equity or 0) * float(mode["leverage"]),
+                )
+                candidate["execution_filter"] = viability
+                if candidate.get("passed") and viability.get("enabled") and not viability.get("executable"):
+                    candidate["passed"] = False
+                    candidate["reason"] = "min_order_not_executable"
+                    candidate["decision_reason"] = "低于币安最小下单量，跳过避免启动后失败"
                 candidates.append(candidate)
         except Exception as exc:
             candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})

@@ -145,6 +145,20 @@ def _penalty_until_for(record: dict[str, Any], consecutive_losses: int, config: 
     return datetime.fromtimestamp(close_time / 1000, timezone.utc).replace(tzinfo=timezone.utc) + timedelta(hours=hours)
 
 
+def _time_decay_multiplier(record: dict[str, Any], config: dict[str, Any]) -> float:
+    if not config.get("live_credit_time_decay_enabled", False):
+        return 1.0
+    close_time = int(record.get("close_time") or 0)
+    if close_time <= 0:
+        return 1.0
+    age_hours = max(0.0, (datetime.now(timezone.utc).timestamp() - close_time / 1000) / 3600)
+    if age_hours <= 3:
+        return float(config.get("live_credit_recent_3h_multiplier", 1.5))
+    if age_hours <= 24:
+        return float(config.get("live_credit_recent_24h_multiplier", 1.0))
+    return float(config.get("live_credit_old_multiplier", 0.6))
+
+
 def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
     records = sorted(records, key=lambda item: int(item.get("close_time") or 0))
     score = float(config.get("live_credit_default_score", DEFAULT_SCORE))
@@ -191,6 +205,7 @@ def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict
                 delta += 1.0
             if hold_seconds >= float(config.get("live_credit_min_quality_hold_seconds", 90)):
                 delta += 1.0
+            delta *= _time_decay_multiplier(record, config)
             score += delta
             notes.append(f"盈利奖励 +{delta:.1f}")
         else:
@@ -211,6 +226,7 @@ def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict
                 delta -= 15.0
             if abs(net_ratio) < 0.3 and fee > abs(net) * 0.20:
                 delta -= 2.0
+            delta *= _time_decay_multiplier(record, config)
             score += delta
             notes.append(f"亏损惩罚 {delta:.1f}")
             until = _penalty_until_for(record, consecutive_losses, config)

@@ -48,6 +48,24 @@ def test_score_records_rewards_winners_and_punishes_quick_losses():
     assert tlm["penalty_until"]
 
 
+def test_score_records_applies_time_decay_to_recent_trades():
+    now = int(datetime.now(timezone.utc).timestamp() * 1000)
+    recent_win = [
+        {"symbol": "LABUSDT", "direction": "SHORT", "open_time": now - 300_000, "close_time": now - 60_000, "open_notional": 90, "net_pnl": 1.0, "commission": 0.01, "hold_seconds": 120},
+    ]
+    old_win = [
+        {"symbol": "LABUSDT", "direction": "SHORT", "open_time": now - 30 * 3600_000, "close_time": now - 29 * 3600_000, "open_notional": 90, "net_pnl": 1.0, "commission": 0.01, "hold_seconds": 120},
+    ]
+    config = {
+        "live_credit_time_decay_enabled": True,
+        "live_credit_recent_3h_multiplier": 1.5,
+        "live_credit_old_multiplier": 0.5,
+        "live_credit_recovery_enabled": False,
+    }
+
+    assert score_records(recent_win, config)["score"] > score_records(old_win, config)["score"]
+
+
 def test_live_credit_uses_linear_multiplier_instead_of_blocking(monkeypatch):
     penalty_until = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat()
 

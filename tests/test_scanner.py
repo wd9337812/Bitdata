@@ -1,5 +1,6 @@
 from app import scanner
-from app.scanner import active_growth_mode, discover_coin_symbols, latest_strategy_signal, mode_config, scan_growth_candidates, score_symbol_quality, strategy_params_for_mode
+from app.exchange_filters import ExchangeFilters
+from app.scanner import active_growth_mode, discover_coin_symbols, execution_viability, latest_strategy_signal, mode_config, scan_growth_candidates, score_symbol_quality, strategy_params_for_mode
 
 
 class FakeClient:
@@ -49,6 +50,47 @@ def test_tournament_sprint_uses_fast_protection_defaults():
     assert momentum.take_profit_atr == 1.2
     assert momentum.max_hold_bars == 5
     assert strategy_params_for_mode({}, {"mode": "tournament"}, "standard") is None
+
+
+def test_extreme_sprint_requires_confirmation_and_uses_fast_protection():
+    assert active_growth_mode({"auto_risk_by_equity": False, "growth_mode": "extreme_sprint"}, 50) == "balanced"
+    assert active_growth_mode(
+        {
+            "auto_risk_by_equity": True,
+            "growth_mode": "extreme_sprint",
+            "extreme_sprint_enabled": True,
+            "extreme_sprint_confirmation": "ENABLE_EXTREME_SPRINT",
+        },
+        50,
+    ) == "extreme_sprint"
+
+    standard = strategy_params_for_mode({}, {"mode": "extreme_sprint"}, "standard")
+    assert standard.stop_atr == 0.75
+    assert standard.take_profit_atr == 1.05
+    assert standard.max_hold_bars == 4
+
+
+def test_execution_viability_blocks_below_min_notional():
+    filters = ExchangeFilters(
+        {
+            "symbols": [
+                {
+                    "symbol": "TINYUSDT",
+                    "filters": [
+                        {"filterType": "LOT_SIZE", "stepSize": "1"},
+                        {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                    ],
+                }
+            ]
+        }
+    )
+
+    blocked = execution_viability(filters, "TINYUSDT", 50, 1, 1.0, 0.99, 2)
+    allowed = execution_viability(filters, "TINYUSDT", 50, 10, 1.0, 0.99, 50)
+
+    assert blocked["executable"] is False
+    assert blocked["reason"] == "below_min_order"
+    assert allowed["executable"] is True
 
 
 def test_tournament_sprint_scan_passes_fast_protection_to_signal_and_backtest(monkeypatch):

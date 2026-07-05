@@ -139,3 +139,20 @@ def test_dynamic_stream_symbols_prioritize_positions_and_hot_intent(monkeypatch,
 
 def test_symbol_change_pct_counts_symmetric_difference():
     assert market_stream._symbol_change_pct(["AUSDT", "BUSDT"], ["AUSDT", "CUSDT"]) == 100.0
+
+
+def test_kline_trigger_event_is_recorded_for_fast_move():
+    state = {"triggers": []}
+
+    market_stream._append_trigger_event(
+        state,
+        "FASTUSDT",
+        "5m",
+        [1000, "10", "10.5", "9.9", "10.4", "100", 1999, "500000", 0, "0", "0", "0"],
+        move_pct_threshold=0.3,
+        quote_volume_threshold=250_000,
+        max_events=5,
+    )
+
+    assert state["triggers"][0]["symbol"] == "FASTUSDT"
+    assert state["triggers"][0]["type"] == "kline_trigger"
