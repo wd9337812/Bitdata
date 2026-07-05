@@ -85,6 +85,46 @@ def test_live_credit_multiplier_is_score_divided_by_50():
     assert live_credit_multiplier({"score": 1.5, "penalty_until": None}, config) == 0.0
 
 
+def test_quick_loss_cooldown_caps_risk_and_marks_bypass(monkeypatch):
+    penalty_until = (datetime.now(timezone.utc) + timedelta(minutes=30)).replace(microsecond=0).isoformat()
+
+    monkeypatch.setattr(
+        "app.live_learning.live_score_for",
+        lambda symbol, direction, config: {
+            "enabled": True,
+            "score": 50,
+            "status": "observe",
+            "status_label": "observe",
+            "penalty_until": penalty_until,
+            "consecutive_wins": 0,
+            "consecutive_losses": 1,
+            "last_hold_seconds": 30,
+            "notes": ["quick stop"],
+        },
+    )
+    config = {
+        "live_credit_enabled": True,
+        "live_credit_multiplier_divisor": 50,
+        "live_credit_max_risk_multiplier": 2.0,
+        "live_credit_fuse_score": 2,
+        "live_credit_quick_stop_seconds": 60,
+        "live_credit_quick_loss_cooldown_cap": 0.4,
+        "live_credit_cooldown_bypass_enabled": True,
+        "live_credit_cooldown_bypass_min_score": 95,
+        "live_credit_cooldown_bypass_min_cost_ratio": 18,
+    }
+
+    candidate = apply_live_credit_to_candidate(
+        {"symbol": "LABUSDT", "direction": "LONG", "score": 120, "cost_ratio": 21, "passed": True, "risk_pct": 18},
+        config,
+    )
+
+    assert candidate["risk_pct"] == 18 * 0.4
+    assert candidate["live_credit_adjustment"]["risk_multiplier"] == 0.4
+    assert candidate["live_credit_adjustment"]["cooldown"]["kind"] == "quick_loss"
+    assert candidate["live_credit_adjustment"]["cooldown_bypass"] is True
+
+
 def test_live_credit_natural_recovery_caps_at_default():
     old = int((datetime.now(timezone.utc) - timedelta(hours=24)).timestamp() * 1000)
 

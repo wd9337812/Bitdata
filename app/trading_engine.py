@@ -239,6 +239,7 @@ def build_stage1_decision(
         if equity is not None and float(equity) < float(config.get("tournament_sprint_second_position_equity", 100.0)):
             max_open_positions = min(max_open_positions, 1)
     overrides = {
+        "direction": direction,
         "margin_pct": active_mode["margin_pct"],
         "leverage": active_mode["leverage"],
         "daily_loss_limit_pct": config.get(daily_loss_key, config.get("daily_loss_limit_pct", 3.0)),

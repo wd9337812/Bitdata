@@ -11,6 +11,7 @@ from app.binance_rate import BinanceRateLimitError, rate_status
 from app.config_store import load_config
 from app.live_learning import sync_live_learning_from_binance
 from app.market_stream import start_market_stream_thread
+from app.risk import direction_cooldown_key
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
@@ -29,9 +30,21 @@ def loop_seconds_for(config: dict, mode: str | None) -> int:
 
 
 def set_symbol_cooldown(state: dict, symbol: str, minutes: float) -> None:
+    if minutes <= 0:
+        return
     cooldowns = dict(state.get("symbol_cooldowns") or {})
     cooldowns[symbol.upper()] = (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()
     save_state({"symbol_cooldowns": cooldowns})
+
+
+def set_symbol_direction_cooldown(state: dict, symbol: str, direction: str, minutes: float) -> None:
+    if minutes <= 0:
+        return
+    cooldowns = dict(state.get("symbol_direction_cooldowns") or {})
+    cooldowns[direction_cooldown_key(symbol, direction)] = (
+        datetime.now(timezone.utc) + timedelta(minutes=minutes)
+    ).isoformat()
+    save_state({"symbol_direction_cooldowns": cooldowns})
 
 
 def set_rotation_cooldown(state: dict, symbol: str, minutes: float) -> None:
@@ -125,7 +138,16 @@ def run_once() -> dict:
     decision = build_best_growth_decision(client, config, state, account)
     result = execute_stage1_market_order(client, decision, config)
     if result.get("mode") in {"live", "rotation_live"} and decision.get("symbol"):
-        set_symbol_cooldown(state, decision["symbol"], float(config.get("symbol_cooldown_minutes", 15)))
+        cooldown_minutes = float(config.get("symbol_cooldown_minutes", 0))
+        if config.get("directional_cooldown_enabled", True):
+            set_symbol_direction_cooldown(
+                state,
+                decision["symbol"],
+                str(decision.get("direction") or (decision.get("signal") or {}).get("signal") or "LONG"),
+                cooldown_minutes,
+            )
+        elif config.get("legacy_symbol_cooldown_blocks", False):
+            set_symbol_cooldown(state, decision["symbol"], cooldown_minutes)
     if result.get("mode") == "rotation_live":
         rotation_from = ((decision.get("rotation") or {}).get("from") or {}).get("symbol")
         rotation_minutes = float(config.get("rotation_cooldown_minutes", 45))

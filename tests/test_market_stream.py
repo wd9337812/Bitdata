@@ -93,7 +93,8 @@ def test_stream_ticker_overrides_symbol_subset(monkeypatch, tmp_path):
     assert ticker["quoteVolume"] == "999"
 
 
-def test_stream_symbols_auto_discover_extends_manual_list(monkeypatch):
+def test_stream_symbols_auto_discover_extends_manual_list(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     monkeypatch.setattr(market_stream, "_discover_stream_symbols", lambda config, limit: ["ETHUSDT", "SOLUSDT", "AAVEUSDT"])
 
     symbols = market_stream._symbols_from_config(

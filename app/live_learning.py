@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -59,6 +60,7 @@ def init_live_learning_schema() -> None:
                 consecutive_wins INTEGER NOT NULL,
                 consecutive_losses INTEGER NOT NULL,
                 avg_hold_seconds REAL NOT NULL,
+                last_hold_seconds REAL DEFAULT 0,
                 penalty_until TEXT,
                 last_trade_time INTEGER,
                 notes TEXT,
@@ -67,6 +69,10 @@ def init_live_learning_schema() -> None:
             )
             """
         )
+        try:
+            conn.execute("ALTER TABLE symbol_live_scores ADD COLUMN last_hold_seconds REAL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         conn.commit()
 
 
@@ -216,6 +222,7 @@ def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict
     closed = len(records)
     profit_factor = gross_profit / gross_loss if gross_loss else (999.0 if gross_profit > 0 else 0.0)
     last_trade_time = int(records[-1].get("close_time") or 0) if records else None
+    last_hold_seconds = float(records[-1].get("hold_seconds") or 0) if records else 0.0
     recovery = recovered_score(score, last_trade_time, config)
     score = float(recovery["score"])
     if recovery["recovery_points"] > 0:
@@ -241,6 +248,7 @@ def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict
         "consecutive_wins": consecutive_wins,
         "consecutive_losses": consecutive_losses,
         "avg_hold_seconds": round(hold_sum / closed, 2) if closed else 0.0,
+        "last_hold_seconds": round(last_hold_seconds, 2),
         "penalty_until": penalty_until.isoformat() if penalty_until else None,
         "last_trade_time": last_trade_time,
         "recovery_points": recovery["recovery_points"],
@@ -314,8 +322,9 @@ def rebuild_symbol_scores(config: dict[str, Any], lookback_hours: float | None =
                     symbol, direction, score, status, closed_trades, wins, losses,
                     win_rate, net_pnl, commission, funding_fee, profit_factor,
                     consecutive_wins, consecutive_losses, avg_hold_seconds,
+                    last_hold_seconds,
                     penalty_until, last_trade_time, notes, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     symbol,
@@ -333,6 +342,7 @@ def rebuild_symbol_scores(config: dict[str, Any], lookback_hours: float | None =
                     score["consecutive_wins"],
                     score["consecutive_losses"],
                     score["avg_hold_seconds"],
+                    score["last_hold_seconds"],
                     score["penalty_until"],
                     score["last_trade_time"],
                     json.dumps(score["notes"], ensure_ascii=False),
@@ -354,6 +364,7 @@ def enrich_live_score(item: dict[str, Any], config: dict[str, Any]) -> dict[str,
     item["status_label"] = status_label(item.get("status", ""))
     item["risk_multiplier"] = round(live_credit_multiplier(item, config), 4)
     item["cooldown_cap"] = round(cooldown_multiplier_cap(item, config), 4)
+    item["cooldown"] = live_credit_cooldown_summary(item, config)
     return item
 
 
@@ -401,11 +412,13 @@ def live_score_for(symbol: str, direction: str, config: dict[str, Any]) -> dict[
             "profit_factor": 0.0,
             "consecutive_wins": 0,
             "consecutive_losses": 0,
+            "last_hold_seconds": 0.0,
             "penalty_until": None,
             "notes": ["暂无实盘记录"],
         }
         item["risk_multiplier"] = round(live_credit_multiplier(item, config), 4)
         item["cooldown_cap"] = round(cooldown_multiplier_cap(item, config), 4)
+        item["cooldown"] = live_credit_cooldown_summary(item, config)
         return item
     item = dict(row)
     try:
@@ -434,7 +447,33 @@ def cooldown_multiplier_cap(score: dict[str, Any], config: dict[str, Any]) -> fl
         return float(config.get("live_credit_three_loss_cooldown_cap", 0.10))
     if losses >= 2:
         return float(config.get("live_credit_two_loss_cooldown_cap", 0.25))
-    return float(config.get("live_credit_loss_cooldown_cap", 0.80))
+    last_hold = float(score.get("last_hold_seconds") or score.get("avg_hold_seconds") or 0)
+    if last_hold and last_hold <= float(config.get("live_credit_quick_stop_seconds", 60)):
+        return float(config.get("live_credit_quick_loss_cooldown_cap", 0.40))
+    return float(config.get("live_credit_loss_cooldown_cap", 0.60))
+
+
+def live_credit_cooldown_summary(score: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    active = penalty_active(score)
+    cap = cooldown_multiplier_cap(score, config)
+    losses = int(score.get("consecutive_losses") or 0)
+    last_hold = float(score.get("last_hold_seconds") or 0)
+    kind = "none"
+    if active:
+        if losses >= 3:
+            kind = "three_loss"
+        elif losses >= 2:
+            kind = "two_loss"
+        elif last_hold and last_hold <= float(config.get("live_credit_quick_stop_seconds", 60)):
+            kind = "quick_loss"
+        else:
+            kind = "loss"
+    return {
+        "active": active,
+        "kind": kind,
+        "cap": round(cap, 4),
+        "penalty_until": score.get("penalty_until"),
+    }
 
 
 def live_credit_multiplier(score: dict[str, Any], config: dict[str, Any]) -> float:
@@ -484,6 +523,63 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
     candidate["live_credit_adjustment"] = {
         "score_delta": round(score_delta, 4),
         "risk_multiplier": round(multiplier, 4),
+        "reasons": reasons,
+    }
+    return candidate
+
+
+def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    if not config.get("live_credit_enabled", True):
+        return candidate
+    symbol = str(candidate.get("symbol") or "").upper()
+    direction = str(candidate.get("direction") or "").upper()
+    if not symbol or direction not in {"LONG", "SHORT"}:
+        return candidate
+    credit = live_score_for(symbol, direction, config)
+    score = float(credit.get("score", DEFAULT_SCORE))
+    weight = float(config.get("live_credit_score_weight", 0.35))
+    score_delta = (score - float(config.get("live_credit_default_score", DEFAULT_SCORE))) * weight
+    candidate = dict(candidate)
+    candidate["live_credit"] = credit
+    candidate["score"] = round(float(candidate.get("score") or 0) + score_delta, 4)
+
+    reasons = [f"实盘信用 {score:.1f} 分（{credit.get('status_label', '-')}）"]
+    multiplier = live_credit_multiplier(credit, config)
+    cooldown = live_credit_cooldown_summary(credit, config)
+    if int(credit.get("consecutive_wins") or 0) >= int(config.get("live_credit_tail_win_count", 3)):
+        tail_mult = float(config.get("live_credit_tail_risk_multiplier", 0.75))
+        multiplier *= tail_mult
+        candidate["score"] = round(float(candidate["score"]) - float(config.get("live_credit_tail_score_penalty", 3.0)), 4)
+        reasons.append(f"连续盈利后防追尾，仓位乘以 {tail_mult:.2f}x")
+
+    bypass_allowed = False
+    if cooldown["active"]:
+        reasons.append(f"冷却倍率上限 {cooldown['cap']:.2f}x，冷却到 {credit.get('penalty_until')}")
+        bypass_allowed = (
+            config.get("live_credit_cooldown_bypass_enabled", True)
+            and float(candidate.get("score") or 0) >= float(config.get("live_credit_cooldown_bypass_min_score", 95.0))
+            and float(candidate.get("cost_ratio") or 0) >= float(config.get("live_credit_cooldown_bypass_min_cost_ratio", 18.0))
+            and multiplier > 0
+        )
+        if bypass_allowed:
+            reasons.append("强信号穿透冷却，仓位仍受冷却倍率限制")
+
+    if multiplier <= 0:
+        candidate["passed"] = False
+        candidate["reason"] = "live_credit_fuse"
+        candidate["decision_reason"] = "实盘信用接近 0 分，熔断等待自然恢复"
+    else:
+        candidate["risk_pct"] = float(candidate.get("risk_pct") or 0) * multiplier
+        reasons.append(f"仓位倍率 {multiplier:.2f}x")
+        if not candidate.get("decision_reason"):
+            candidate["decision_reason"] = "；".join(reasons)
+        else:
+            candidate["decision_reason"] = f"{candidate['decision_reason']}；{'；'.join(reasons)}"
+    candidate["live_credit_adjustment"] = {
+        "score_delta": round(score_delta, 4),
+        "risk_multiplier": round(multiplier, 4),
+        "cooldown": cooldown,
+        "cooldown_bypass": bypass_allowed,
         "reasons": reasons,
     }
     return candidate
