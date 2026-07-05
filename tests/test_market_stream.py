@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from app.binance_client import BinanceFuturesClient
 from app import market_stream
-from app.market_stream import overlay_stream_kline, write_snapshot
+from app.market_stream import overlay_stream_kline, write_snapshot, write_stream_intent
 
 
 def test_stream_depth_overrides_rest(monkeypatch, tmp_path):
@@ -107,3 +107,34 @@ def test_stream_symbols_auto_discover_extends_manual_list(monkeypatch):
     )
 
     assert symbols == ["SOLUSDT", "LABUSDT", "ETHUSDT"]
+
+
+def test_dynamic_stream_symbols_prioritize_positions_and_hot_intent(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    monkeypatch.setattr(market_stream, "_discover_stream_symbols", lambda config, limit: ["ETHUSDT", "SOLUSDT", "AAVEUSDT"])
+    write_stream_intent(
+        position_symbols=["POSUSDT"],
+        candidate_symbols=["HOTUSDT", "FASTUSDT"],
+        hot_symbols=["MOVEUSDT"],
+        live_credit_symbols=["CREDITUSDT"],
+    )
+
+    symbols = market_stream._symbols_from_config(
+        {
+            "stage1_symbols": ["SOLUSDT"],
+            "symbols": [],
+            "stage2_symbols": [],
+            "market_stream_dynamic_enabled": True,
+            "market_stream_max_symbols": 5,
+            "market_stream_auto_discover": True,
+            "stream_hot_symbols_limit": 3,
+            "stream_include_positions": True,
+            "stream_include_live_credit": True,
+        }
+    )
+
+    assert symbols == ["POSUSDT", "SOLUSDT", "HOTUSDT", "FASTUSDT", "MOVEUSDT"]
+
+
+def test_symbol_change_pct_counts_symmetric_difference():
+    assert market_stream._symbol_change_pct(["AUSDT", "BUSDT"], ["AUSDT", "CUSDT"]) == 100.0

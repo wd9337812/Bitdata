@@ -26,7 +26,7 @@ import {
 import { api, fmt, modeLabel, stageLabel, statusLabel } from "./lib/api";
 import "./styles.css";
 
-type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any> };
+type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any> };
 type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any; funnel?: any }; stage2_grid: any[]; auth_error?: string };
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
@@ -150,6 +150,7 @@ function App() {
   const account = status?.account || {};
   const state = status?.state || {};
   const config = status?.config || {};
+  const stream = status?.market_stream || {};
 
   const chartData = useMemo(
     () =>
@@ -308,6 +309,7 @@ function App() {
 
         {active === "scan" && (
           <section className="stack">
+            <ScanSummary funnel={funnel} candidates={candidates} stream={stream} />
             <div className="panel">
               <div className="panel-head">
                 <div>
@@ -360,6 +362,33 @@ function App() {
         {active === "config" && <ConfigPanel config={config} onSave={saveConfig} onTestApi={testBinanceApi} />}
         {active === "logs" && <LogsPanel rows={data.logs} />}
       </main>
+    </div>
+  );
+}
+
+function ScanSummary({ funnel, candidates, stream }: { funnel: any; candidates: any[]; stream: any }) {
+  const passed = candidates.filter((item) => item.passed).length;
+  const conclusion = passed > 0
+    ? `发现 ${passed} 个可执行信号，系统会按风控选择最高优先级。`
+    : "本轮暂无可执行开仓，系统继续盯盘等待触发。";
+  const degraded = funnel?.rank?.degraded ? "本轮已按 VPS 时间预算自动降级，优先分析最高分币。" : "本轮未触发扫描降级。";
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>本轮扫描结论</h2>
+          <p>
+            已扫描 {fmt(funnel?.recall?.count, 0)} 个币，重点分析 {fmt(funnel?.rank?.count, 0)} 个，
+            发现 {fmt(funnel?.candidates?.count, 0)} 个候选。{conclusion}
+          </p>
+          <p>{degraded}</p>
+        </div>
+      </div>
+      <div className="metrics">
+        <MetricCard title="WebSocket 状态" value={stream.connected ? "实时盯盘中" : "未连接"} sub={stream.last_error || `数据年龄 ${fmt(stream.age_seconds, 0)} 秒`} tone={stream.connected ? "positive" : "negative"} />
+        <MetricCard title="实时订阅币数" value={`${fmt((stream.symbols || []).length, 0)} 个`} sub={`动态目标 ${fmt(stream.intent_count, 0)} 个`} />
+        <MetricCard title="实时行情" value={`${fmt(stream.ticker_count, 0)} / ${fmt(stream.depth_count, 0)} / ${fmt(stream.kline_count, 0)}`} sub="Ticker / 盘口 / K线" />
+      </div>
     </div>
   );
 }
@@ -704,6 +733,10 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("max_scan_symbols", "候选展示上限", "控制 Dashboard 展示候选数量，不等于实际召回数量")}
           {number("min_24h_volume_usdt", "最低 24h 成交额", "过滤流动性差的币")}
           {toggle("auto_discover_symbols", "自动发现加密币", "只纳入 Binance U 本位永续币")}
+          {toggle("market_stream_dynamic_enabled", "动态 WebSocket 机会池", "粗排热点、候选币、持仓币会自动进入实时盯盘池")}
+          {number("market_stream_max_symbols", "实时盯盘币数上限", "2G VPS 默认 50；越高越实时，但连接和写入压力越大")}
+          {number("market_stream_rebuild_seconds", "实时盯盘重建间隔", "默认 60 秒；避免 WebSocket 频繁重连")}
+          {number("stream_hot_symbols_limit", "热点进入盯盘数量", "默认 25；来自漏斗粗排和候选")}
           {toggle("auto_risk_by_equity", "按权益自动切换风险", "50U 自动锦标赛，100U 后进攻")}
           {toggle("dry_run", "模拟交易", "开启时不会真实下单")}
           {toggle("live_trading_enabled", "允许实盘交易", "还需要确认短语才会实盘")}

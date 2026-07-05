@@ -30,6 +30,10 @@ def snapshot_path() -> Path:
     return data_dir() / "market_stream.json"
 
 
+def intent_path() -> Path:
+    return data_dir() / "stream_symbols.json"
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -70,6 +74,7 @@ def write_snapshot(state: dict[str, Any]) -> None:
 
 def stream_status(max_age_seconds: int = 15) -> dict[str, Any]:
     state = read_snapshot()
+    intent = read_stream_intent()
     updated_at = state.get("updated_at")
     age = None
     if updated_at:
@@ -87,7 +92,52 @@ def stream_status(max_age_seconds: int = 15) -> dict[str, Any]:
         "kline_count": sum(len(value) for value in (state.get("klines", {}) or {}).values()),
         "last_error": state.get("last_error", ""),
         "updated_at": updated_at,
+        "intent_symbols": intent.get("symbols", []),
+        "intent_count": len(intent.get("symbols", [])),
+        "intent_updated_at": intent.get("updated_at"),
     }
+
+
+def read_stream_intent() -> dict[str, Any]:
+    try:
+        path = intent_path()
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return {
+                "symbols": [str(symbol).upper() for symbol in data.get("symbols", [])],
+                "sources": data.get("sources", {}),
+                "updated_at": data.get("updated_at"),
+            }
+    except Exception:
+        pass
+    return {"symbols": [], "sources": {}, "updated_at": None}
+
+
+def write_stream_intent(
+    *,
+    hot_symbols: list[str] | None = None,
+    candidate_symbols: list[str] | None = None,
+    position_symbols: list[str] | None = None,
+    live_credit_symbols: list[str] | None = None,
+) -> None:
+    sources = {
+        "hot": _dedupe_symbols(hot_symbols or []),
+        "candidates": _dedupe_symbols(candidate_symbols or []),
+        "positions": _dedupe_symbols(position_symbols or []),
+        "live_credit": _dedupe_symbols(live_credit_symbols or []),
+    }
+    symbols = _dedupe_symbols(
+        sources["positions"]
+        + sources["candidates"]
+        + sources["hot"]
+        + sources["live_credit"]
+    )
+    payload = {"symbols": symbols, "sources": sources, "updated_at": _now_iso()}
+    path = intent_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
 
 
 def _fresh(item: dict[str, Any] | None, max_age_seconds: int) -> bool:
@@ -145,6 +195,13 @@ def _append_symbol(symbols: list[str], symbol: str) -> None:
         symbols.append(upper)
 
 
+def _dedupe_symbols(symbols: list[str]) -> list[str]:
+    result: list[str] = []
+    for symbol in symbols:
+        _append_symbol(result, symbol)
+    return result
+
+
 def _discover_stream_symbols(config: dict[str, Any], limit: int) -> list[str]:
     base_url = str(config.get("binance_base_url", "https://fapi.binance.com")).rstrip("/")
     min_volume = float(config.get("min_24h_volume_usdt", 30_000_000))
@@ -178,16 +235,37 @@ def _discover_stream_symbols(config: dict[str, Any], limit: int) -> list[str]:
 
 def _symbols_from_config(config: dict[str, Any]) -> list[str]:
     symbols: list[str] = []
+    limit = int(config.get("market_stream_max_symbols", config.get("max_scan_symbols", 30)))
+    intent = read_stream_intent() if config.get("market_stream_dynamic_enabled", True) else {"symbols": [], "sources": {}}
+    sources = intent.get("sources") or {}
+    if config.get("stream_include_positions", True):
+        for symbol in sources.get("positions", []):
+            _append_symbol(symbols, symbol)
     for key in ("stage1_symbols", "symbols", "stage2_symbols"):
         for symbol in config.get(key, []) or []:
             _append_symbol(symbols, symbol)
-    limit = int(config.get("market_stream_max_symbols", config.get("max_scan_symbols", 30)))
+    hot_limit = int(config.get("stream_hot_symbols_limit", 25))
+    for symbol in (sources.get("candidates", []) + sources.get("hot", []))[:hot_limit]:
+        _append_symbol(symbols, symbol)
+    if config.get("stream_include_live_credit", True):
+        for symbol in sources.get("live_credit", []):
+            _append_symbol(symbols, symbol)
     if config.get("market_stream_auto_discover", True):
         for symbol in _discover_stream_symbols(config, limit):
             _append_symbol(symbols, symbol)
             if len(symbols) >= limit:
                 break
     return symbols[:limit]
+
+
+def _symbol_change_pct(old: list[str], new: list[str]) -> float:
+    old_set = set(old)
+    new_set = set(new)
+    if not old_set and not new_set:
+        return 0.0
+    changed = len(old_set.symmetric_difference(new_set))
+    base = max(len(old_set), len(new_set), 1)
+    return changed / base * 100
 
 
 def _combined_url(path: str, streams: list[str]) -> str:
@@ -275,12 +353,15 @@ def _depth_from_event(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _consume_stream(url: str, symbols: list[str], state: dict[str, Any]) -> None:
+async def _consume_stream(url: str, symbols: list[str], state: dict[str, Any], max_session_seconds: int) -> None:
+    started_at = time.time()
     async with websockets.connect(url, ping_interval=20, ping_timeout=10, close_timeout=5) as websocket:
         state.update({"connected": True, "symbols": symbols, "last_error": "", "updated_at": _now_iso()})
         write_snapshot(state)
         last_flush = 0.0
         while not _STOP.is_set():
+            if time.time() - started_at >= max_session_seconds:
+                return
             raw = await asyncio.wait_for(websocket.recv(), timeout=35)
             payload = json.loads(raw)
             data = payload.get("data") or {}
@@ -306,6 +387,7 @@ async def _consume_stream(url: str, symbols: list[str], state: dict[str, Any]) -
 
 
 async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
+    previous_symbols: list[str] = []
     while not _STOP.is_set():
         config = config_provider()
         if not config.get("market_stream_enabled", True):
@@ -315,6 +397,14 @@ async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
             await asyncio.sleep(30)
             continue
         symbols = _symbols_from_config(config)
+        rebuild_seconds = int(config.get("market_stream_rebuild_seconds", 60))
+        threshold = float(config.get("market_stream_rotation_threshold_pct", 20.0))
+        intent = read_stream_intent()
+        required_positions = set((intent.get("sources") or {}).get("positions", []))
+        missing_required = bool(required_positions - set(previous_symbols))
+        if previous_symbols and not missing_required and _symbol_change_pct(previous_symbols, symbols) < threshold:
+            symbols = previous_symbols
+        previous_symbols = symbols
         interval = str(config.get("tournament_interval") or config.get("interval") or "5m")
         state = read_snapshot()
         state.update({"symbols": symbols, "connected": False, "updated_at": _now_iso()})
@@ -326,8 +416,8 @@ async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
             public_url = _public_stream_url(symbols)
             market_url = _market_stream_url(symbols, interval)
             await asyncio.gather(
-                _consume_stream(public_url, symbols, state),
-                _consume_stream(market_url, symbols, state),
+                _consume_stream(public_url, symbols, state, rebuild_seconds),
+                _consume_stream(market_url, symbols, state, rebuild_seconds),
             )
         except Exception as exc:
             state = read_snapshot()

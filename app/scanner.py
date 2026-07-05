@@ -6,7 +6,8 @@ import time
 from typing import Any
 
 from app.binance_client import BinanceFuturesClient
-from app.live_learning import apply_live_credit_to_candidate
+from app.live_learning import apply_live_credit_to_candidate, list_live_scores
+from app.market_stream import write_stream_intent
 from app.strategy import StrategyParams, atr, ema
 
 
@@ -1378,6 +1379,7 @@ def scan_growth_candidates(
         for candidate in candidates
         if candidate.get("symbol_quality", {}).get("pool") == "observe"
     ][:max_candidates]
+    _publish_stream_intent(config, account_summary, coarse_rows, candidates, trade_pool)
     funnel = {
         "recall": {
             "count": len(recalled_symbols),
@@ -1421,6 +1423,51 @@ def scan_growth_candidates(
         "candidates": candidates[:max_candidates],
         "best": candidates[0] if candidates else None,
     }
+
+
+def _publish_stream_intent(
+    config: dict[str, Any],
+    account_summary: dict[str, Any],
+    coarse_rows: list[dict[str, Any]],
+    candidates: list[dict[str, Any]],
+    trade_pool: list[dict[str, Any]],
+) -> None:
+    if not config.get("market_stream_dynamic_enabled", True):
+        return
+    try:
+        hot_limit = int(config.get("stream_hot_symbols_limit", 25))
+        hot_symbols = [str(row.get("symbol", "")) for row in coarse_rows[:hot_limit]]
+        candidate_symbols = [
+            str(item.get("symbol", ""))
+            for item in sorted(
+                candidates,
+                key=lambda row: (
+                    row.get("passed", False),
+                    row.get("symbol_quality", {}).get("allowed", False),
+                    row.get("score", -999),
+                ),
+                reverse=True,
+            )[:hot_limit]
+        ]
+        candidate_symbols = [str(item.get("symbol", "")) for item in trade_pool] + candidate_symbols
+        position_symbols = [
+            str(position.get("symbol", ""))
+            for position in account_summary.get("positions", []) or []
+            if abs(float(position.get("positionAmt") or position.get("position_amount") or 0)) > 0
+        ]
+        live_credit_symbols = [
+            str(item.get("symbol", ""))
+            for item in list_live_scores(int(config.get("live_credit_sync_max_symbols", 20)), config)
+            if float(item.get("risk_multiplier") or 0) > 0
+        ]
+        write_stream_intent(
+            hot_symbols=hot_symbols,
+            candidate_symbols=candidate_symbols,
+            position_symbols=position_symbols,
+            live_credit_symbols=live_credit_symbols,
+        )
+    except Exception:
+        return
 
 
 def _json_safe(value: Any) -> Any:

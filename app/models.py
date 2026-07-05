@@ -21,8 +21,14 @@ class TradingConfig(BaseModel):
     depth_check_top_symbols: int = Field(default=10, ge=0, le=50)
     depth_check_min_current_score: float = Field(default=38.0, ge=0, le=200)
     market_stream_enabled: bool = True
-    market_stream_max_symbols: int = Field(default=40, ge=1, le=200)
+    market_stream_dynamic_enabled: bool = True
+    market_stream_max_symbols: int = Field(default=50, ge=1, le=200)
     market_stream_auto_discover: bool = True
+    market_stream_rebuild_seconds: int = Field(default=60, ge=15, le=1800)
+    market_stream_rotation_threshold_pct: float = Field(default=20.0, ge=0, le=100)
+    stream_hot_symbols_limit: int = Field(default=25, ge=0, le=200)
+    stream_include_positions: bool = True
+    stream_include_live_credit: bool = True
     symbol_trade_score: float = Field(default=75.0, ge=0, le=100)
     symbol_small_trade_score: float = Field(default=65.0, ge=0, le=100)
     symbol_observe_score: float = Field(default=50.0, ge=0, le=100)
