@@ -156,10 +156,36 @@ def test_equity_guard_scales_then_pauses_on_high_watermark_drawdown():
     }
     state = {"equity_high_watermark": 100}
 
-    scaled = equity_guard_status(config, state, 80, "extreme_sprint")
-    paused = equity_guard_status(config, state, 58, "extreme_sprint")
+    scaled = equity_guard_status(config, state, 80, "balanced")
+    paused = equity_guard_status(config, state, 58, "balanced")
 
     assert scaled["allowed"] is True
     assert scaled["risk_multiplier"] == 0.45
     assert paused["allowed"] is False
     assert paused["reason"] == "equity_guard_pause"
+
+
+def test_extreme_equity_guard_uses_mode_high_watermark_not_global_history():
+    config = {
+        **base_config(),
+        "equity_guard_enabled": True,
+        "equity_guard_drawdown_1_pct": 10,
+        "equity_guard_multiplier_1": 0.75,
+        "equity_guard_drawdown_2_pct": 18,
+        "equity_guard_multiplier_2": 0.45,
+        "equity_guard_drawdown_3_pct": 25,
+        "equity_guard_multiplier_3": 0.2,
+        "extreme_equity_guard_pause_drawdown_pct": 40,
+    }
+    state = {
+        "equity_high_watermark": 100,
+        "extreme_sprint_start_equity": 60,
+        "extreme_sprint_equity_high_watermark": 62,
+    }
+
+    guard = equity_guard_status(config, state, 60, "extreme_sprint")
+
+    assert guard["allowed"] is True
+    assert guard["risk_multiplier"] == 1.0
+    assert guard["baseline_mode"] == "extreme_sprint"
+    assert guard["high_watermark"] == 62

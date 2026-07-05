@@ -17,6 +17,7 @@ from app.config_store import load_config, save_config
 from app.live_learning import list_live_scores, sync_live_learning_from_binance
 from app.models import BotControlPayload, ExecutePayload, TradingConfig
 from app.market_stream import stream_status
+from app.scanner import mode_config
 from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
 from app.binance_rate import cache_status, rate_status
@@ -221,6 +222,8 @@ def control(payload: BotControlPayload) -> dict[str, Any]:
         if payload.confirmation != "START_BOT":
             raise HTTPException(status_code=400, detail="Use confirmation START_BOT.")
         config = load_config()
+        state = load_state()
+        start_updates: dict[str, Any] = {"bot_status": "running", "last_error": ""}
         live_mode = (
             not config.get("dry_run", True)
             and config.get("live_trading_enabled") is True
@@ -232,7 +235,13 @@ def control(payload: BotControlPayload) -> dict[str, Any]:
                 offset_ms = client.time_offset_ms()
                 if abs(offset_ms) >= 3000:
                     raise HTTPException(status_code=400, detail=f"VPS 时间偏差过大：{offset_ms}ms，请先同步时间。")
-                client.account()
+                account_summary = summarize_account(client.account())
+                equity = account_summary.get("equity")
+                if equity is not None and mode_config(config, equity).get("mode") == "extreme_sprint":
+                    if state.get("equity_guard_mode") != "extreme_sprint" or float(state.get("extreme_sprint_equity_high_watermark") or 0) <= 0:
+                        start_updates["extreme_sprint_start_equity"] = float(equity)
+                        start_updates["extreme_sprint_equity_high_watermark"] = float(equity)
+                    start_updates["equity_guard_mode"] = "extreme_sprint"
             except Exception as exc:
                 if isinstance(exc, HTTPException):
                     raise exc
@@ -240,7 +249,7 @@ def control(payload: BotControlPayload) -> dict[str, Any]:
                 record_event("error", "binance_auth", error)
                 raise HTTPException(status_code=400, detail=error) from exc
         record_event("warning", "control", "用户启动机器人")
-        return {"state": save_state({"bot_status": "running", "last_error": ""})}
+        return {"state": save_state(start_updates)}
     if action == "pause":
         record_event("warning", "control", "用户暂停机器人")
         return {"state": save_state({"bot_status": "paused"})}

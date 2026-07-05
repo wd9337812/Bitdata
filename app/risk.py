@@ -23,7 +23,12 @@ def equity_guard_status(
         return {"enabled": False, "allowed": True, "risk_multiplier": 1.0, "drawdown_pct": 0.0}
     if equity is None:
         return {"enabled": True, "allowed": False, "risk_multiplier": 0.0, "drawdown_pct": 0.0, "reason": "account_unavailable"}
-    high_watermark = max(float(state.get("equity_high_watermark") or equity), float(equity))
+    baseline_mode = "global"
+    high_watermark_key = "equity_high_watermark"
+    if mode == "extreme_sprint":
+        baseline_mode = "extreme_sprint"
+        high_watermark_key = "extreme_sprint_equity_high_watermark"
+    high_watermark = max(float(state.get(high_watermark_key) or equity), float(equity))
     drawdown_pct = max(0.0, (high_watermark - float(equity)) / high_watermark * 100) if high_watermark > 0 else 0.0
     pause_key = "extreme_equity_guard_pause_drawdown_pct" if mode == "extreme_sprint" else "equity_guard_pause_drawdown_pct"
     pause_pct = float(config.get(pause_key, config.get("equity_guard_pause_drawdown_pct", 35.0)))
@@ -34,6 +39,8 @@ def equity_guard_status(
             "risk_multiplier": 0.0,
             "drawdown_pct": round(drawdown_pct, 4),
             "reason": "equity_guard_pause",
+            "baseline_mode": baseline_mode,
+            "high_watermark": round(high_watermark, 8),
         }
     multiplier = 1.0
     levels = [
@@ -51,6 +58,8 @@ def equity_guard_status(
         "risk_multiplier": multiplier,
         "drawdown_pct": round(drawdown_pct, 4),
         "reason": "scaled" if multiplier < 1 else "ok",
+        "baseline_mode": baseline_mode,
+        "high_watermark": round(high_watermark, 8),
     }
 
 

@@ -191,6 +191,18 @@ def sync_stage(config: dict[str, Any], state: dict[str, Any], account_summary: d
             updates["daily_start_equity"] = float(equity)
     stage = current_stage(config, state, equity)
     updates["stage"] = stage
+    active_mode = mode_config(config, equity).get("mode")
+    if equity is not None and active_mode == "extreme_sprint":
+        existing_mode = state.get("equity_guard_mode")
+        current_extreme_high = float(state.get("extreme_sprint_equity_high_watermark") or 0)
+        if existing_mode != "extreme_sprint" or current_extreme_high <= 0:
+            updates["extreme_sprint_start_equity"] = float(equity)
+            updates["extreme_sprint_equity_high_watermark"] = float(equity)
+        else:
+            updates["extreme_sprint_equity_high_watermark"] = max(current_extreme_high, float(equity))
+        updates["equity_guard_mode"] = "extreme_sprint"
+    elif active_mode:
+        updates["equity_guard_mode"] = active_mode
     return save_state(updates) if updates else state
 
 
