@@ -259,6 +259,35 @@ def test_sprint_quality_promotes_hot_observe_with_risk_discount():
     assert "热点观察" in "；".join(quality["quality_risk_reasons"])
 
 
+def test_extreme_sprint_quality_uses_extreme_weights():
+    bars = [make_bar(10, 10.3, 9.8, 10.2, i) for i in range(30)]
+    for bar in bars:
+        bar[5] = 100
+    bars[-1][5] = 500
+
+    quality = score_symbol_quality(
+        "FASTUSDT",
+        bars,
+        {"quoteVolume": "300000000", "lastPrice": "10.2"},
+        {"symbol": "FASTUSDT", "signal": "LONG", "last_price": 10.2, "atr": 0.3, "trend": True},
+        {
+            2: {"trades": 4, "win_rate": 55, "profit_factor": 1.5, "net_pct": 4},
+            3: {"trades": 5, "win_rate": 55, "profit_factor": 1.5, "net_pct": 5},
+            5: {"trades": 6, "win_rate": 55, "profit_factor": 1.4, "net_pct": 6},
+        },
+        {"spread_pct": 0.02, "depth_notional": 60_000},
+        {
+            "quality_mode_weights_enabled": True,
+            "min_simulated_trades": 1,
+            "min_depth_notional_usdt": 20_000,
+            "max_spread_pct": 0.08,
+        },
+        {"mode": "extreme_sprint"},
+    )
+
+    assert quality["mode"] == "extreme_sprint"
+
+
 def test_discover_coin_symbols_excludes_equity_contracts():
     symbols = discover_coin_symbols(
         FakeClient(),

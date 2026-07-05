@@ -695,6 +695,16 @@ QUALITY_WEIGHTS: dict[str, dict[str, float]] = {
         "backtest_10d": 1,
         "trend": 11,
     },
+    "extreme_sprint": {
+        "volume": 7,
+        "volume_spike": 22,
+        "volatility": 20,
+        "spread_depth": 17,
+        "backtest_3d": 16,
+        "backtest_5d": 7,
+        "backtest_10d": 0,
+        "trend": 11,
+    },
 }
 
 
@@ -703,6 +713,7 @@ ATR_IDEAL_RANGES: dict[str, tuple[float, float, float]] = {
     "balanced": (0.5, 3.5, 5.0),
     "attack": (0.8, 4.5, 7.0),
     "tournament": (1.0, 5.5, 8.0),
+    "extreme_sprint": (1.2, 8.0, 11.0),
 }
 
 
@@ -714,10 +725,10 @@ def _mode_name(config: dict[str, Any], mode: dict[str, Any] | None = None) -> st
 def _score_volatility_for_mode(atr_pct: float, mode_name: str, config: dict[str, Any]) -> float:
     if atr_pct <= 0:
         return 0.0
-    if mode_name == "tournament_sprint":
+    if mode_name in {"tournament_sprint", "extreme_sprint"}:
         ideal_min = float(config.get("sprint_atr_ideal_min_pct", 1.2))
-        ideal_max = float(config.get("sprint_atr_ideal_max_pct", 7.0))
-        high = float(config.get("sprint_atr_high_pct", 10.0))
+        ideal_max = float(config.get("sprint_atr_ideal_max_pct", 8.0 if mode_name == "extreme_sprint" else 7.0))
+        high = float(config.get("sprint_atr_high_pct", 11.0 if mode_name == "extreme_sprint" else 10.0))
     else:
         ideal_min, ideal_max, high = ATR_IDEAL_RANGES.get(mode_name, ATR_IDEAL_RANGES["balanced"])
     if ideal_min <= atr_pct <= ideal_max:
@@ -746,7 +757,7 @@ def _quality_risk_multiplier(
         hot_mult = float(config.get("sprint_hot_observe_risk_multiplier", 0.35))
         multiplier *= hot_mult
         reasons.append(f"热点观察小仓 {hot_mult:.2f}x")
-    if mode_name == "tournament_sprint":
+    if mode_name in {"tournament_sprint", "extreme_sprint"}:
         ideal_max = float(config.get("sprint_atr_ideal_max_pct", 7.0))
         high = float(config.get("sprint_atr_high_pct", 10.0))
         if atr_pct > ideal_max:
@@ -758,7 +769,7 @@ def _quality_risk_multiplier(
             extreme_depth = float(config.get("sprint_extreme_depth_notional_usdt", 50_000.0))
             if depth_notional < extreme_depth or spike < float(config.get("sprint_sample_penalty_exempt_spike", 2.5)):
                 return 0.0, reasons + ["极端ATR且深度/放量不足，禁止"]
-    if mode_name == "tournament_sprint" and sample_low and not sample_exempt:
+    if mode_name in {"tournament_sprint", "extreme_sprint"} and sample_low and not sample_exempt:
         sample_mult = float(config.get("sprint_sample_low_risk_multiplier", 0.75))
         multiplier *= sample_mult
         reasons.append(f"样本偏少降仓 {sample_mult:.2f}x")
