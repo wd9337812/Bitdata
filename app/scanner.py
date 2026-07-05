@@ -152,7 +152,7 @@ def strategy_params_for_mode(
     mode_name = str(mode.get("mode") if isinstance(mode, dict) else mode)
     if mode_name not in {"tournament_sprint", "extreme_sprint"}:
         return None
-    entry_key = "momentum" if entry_type == "momentum" else "preemptive" if entry_type == "preemptive" else "standard"
+    entry_key = "momentum" if entry_type == "momentum" else "preemptive" if entry_type in {"preemptive", "extreme_probe"} else "standard"
     if mode_name == "extreme_sprint":
         defaults = {
             "standard": (0.75, 1.05, 4),
@@ -306,6 +306,8 @@ def discover_coin_symbols(client: BinanceFuturesClient, config: dict[str, Any]) 
         and item.get("quoteAsset") == "USDT"
     }
     min_volume = float(config.get("min_24h_volume_usdt", 100_000_000))
+    if config.get("growth_mode") == "extreme_sprint" and config.get("extreme_v2_enabled", True):
+        min_volume = min(min_volume, float(config.get("extreme_firecracker_min_quote_volume_usdt", 30_000_000)))
     tickers = client.ticker_24h()
     ranked = [
         (item["symbol"], float(item.get("quoteVolume", 0)))
@@ -518,6 +520,9 @@ def _coarse_rank_symbols(
         last_price = float(ticker.get("lastPrice", 0) or 0)
         volume_score = min(max(math.log10(max(quote_volume, 1)) - 6.5, 0.0) * 12.0, 35.0)
         move_score = min(abs(change_pct) * 1.8, 28.0)
+        if mode.get("mode") == "extreme_sprint" and config.get("extreme_v2_enabled", True):
+            move_score = min(abs(change_pct) * float(config.get("extreme_firecracker_move_score_weight", 2.4)), 40.0)
+            volume_score = min(max(math.log10(max(quote_volume, 1)) - 6.5, 0.0) * float(config.get("extreme_firecracker_volume_score_weight", 12.0)), 38.0)
         direction_bias = 4.0 if change_pct > 0 else 2.0 if change_pct < 0 else 0.0
         manual_score = 30.0 if symbol in manual else 0.0
         liquidity_penalty = 18.0 if quote_volume < min_volume else 0.0
@@ -532,6 +537,10 @@ def _coarse_rank_symbols(
             reasons.append("large_move")
         if quote_volume < min_volume:
             reasons.append("low_volume")
+        firecracker_score = firecracker_opportunity_score(ticker, config, mode)
+        if firecracker_score.get("is_firecracker"):
+            reasons.append("firecracker")
+            score += float(firecracker_score.get("score", 0)) * 0.25
         rows.append(
             {
                 "symbol": symbol,
@@ -540,9 +549,13 @@ def _coarse_rank_symbols(
                 "change_pct": change_pct,
                 "last_price": last_price,
                 "reasons": reasons,
+                "firecracker": firecracker_score,
             }
         )
-    rows.sort(key=lambda item: (item["symbol"] in manual, item["score"]), reverse=True)
+    if mode.get("mode") == "extreme_sprint" and config.get("extreme_v2_enabled", True):
+        rows.sort(key=lambda item: item["score"], reverse=True)
+    else:
+        rows.sort(key=lambda item: (item["symbol"] in manual, item["score"]), reverse=True)
     ranked = rows[: max(1, limits["coarse"])]
     symbols_out = [item["symbol"] for item in ranked[: max(1, limits["rank"])]]
     return symbols_out, ranked
@@ -558,6 +571,174 @@ def _volume_spike_ratio(bars: list[list[Any]], lookback: int = 20) -> float:
     ]
     average = sum(history) / len(history) if history else 0
     return current / average if average > 0 else 1.0
+
+
+def firecracker_opportunity_score(
+    ticker: dict[str, Any],
+    config: dict[str, Any],
+    mode: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if not config.get("extreme_firecracker_enabled", True):
+        return {"enabled": False, "score": 0.0, "is_firecracker": False, "reasons": ["disabled"]}
+    if (mode or {}).get("mode") != "extreme_sprint" or not config.get("extreme_v2_enabled", True):
+        return {"enabled": False, "score": 0.0, "is_firecracker": False, "reasons": ["not_extreme_v2"]}
+    quote_volume = float(ticker.get("quoteVolume", 0) or 0)
+    change_pct = float(ticker.get("priceChangePercent", 0) or 0)
+    trade_count = float(ticker.get("count", 0) or 0)
+    min_volume = float(config.get("extreme_firecracker_min_quote_volume_usdt", 30_000_000))
+    min_move = float(config.get("extreme_firecracker_min_abs_change_pct", 8.0))
+    volume_score = min(max(math.log10(max(quote_volume, 1)) - 6.5, 0.0) * 12.0, 35.0)
+    move_score = min(abs(change_pct) * 2.4, 42.0)
+    activity_score = min(math.log10(max(trade_count, 1)) * 4.0, 18.0)
+    score = volume_score + move_score + activity_score
+    reasons: list[str] = []
+    if quote_volume >= min_volume:
+        reasons.append("volume_ok")
+    else:
+        reasons.append("volume_low")
+        score -= 15
+    if abs(change_pct) >= min_move:
+        reasons.append("large_move")
+    if quote_volume >= min_volume * 4:
+        reasons.append("high_liquidity")
+        score += 5
+    score = max(0.0, min(score, 100.0))
+    is_firecracker = score >= float(config.get("extreme_firecracker_min_score", 55.0)) and quote_volume >= min_volume and abs(change_pct) >= min_move
+    return {
+        "enabled": True,
+        "score": round(score, 2),
+        "is_firecracker": is_firecracker,
+        "quote_volume": quote_volume,
+        "change_pct": change_pct,
+        "trade_count": trade_count,
+        "reasons": reasons,
+    }
+
+
+def squeeze_signal(bars: list[list[Any]], config: dict[str, Any]) -> dict[str, Any]:
+    if not config.get("extreme_squeeze_enabled", True):
+        return {"enabled": False, "active": False, "released": False, "score": 0.0}
+    lookback = int(config.get("extreme_squeeze_lookback", 20))
+    if len(bars) < lookback + 5:
+        return {"enabled": True, "active": False, "released": False, "score": 0.0, "reason": "not_enough_data"}
+    closes = [float(row[4]) for row in bars]
+    recent = closes[-lookback:]
+    mean = sum(recent) / len(recent)
+    variance = sum((value - mean) ** 2 for value in recent) / len(recent)
+    stdev = math.sqrt(variance)
+    atr_values = atr(bars, 20)
+    atr_value = float(atr_values[-1] or 0)
+    width_pct = (stdev * 4) / mean * 100 if mean else 0.0
+    atr_width_pct = (atr_value * 3) / mean * 100 if mean else 0.0
+    compression = width_pct < atr_width_pct and width_pct <= 3.0
+    last = closes[-1]
+    previous_high = max(float(row[2]) for row in bars[-lookback - 1:-1])
+    previous_low = min(float(row[3]) for row in bars[-lookback - 1:-1])
+    released_long = compression and last > previous_high
+    released_short = compression and last < previous_low
+    score = float(config.get("extreme_squeeze_bonus", 8.0)) if released_long or released_short else (float(config.get("extreme_squeeze_bonus", 8.0)) * 0.5 if compression else 0.0)
+    return {
+        "enabled": True,
+        "active": compression,
+        "released": released_long or released_short,
+        "direction": "LONG" if released_long else "SHORT" if released_short else None,
+        "score": round(score, 2),
+        "width_pct": round(width_pct, 4),
+        "atr_width_pct": round(atr_width_pct, 4),
+    }
+
+
+def derivative_confirmation(
+    client: BinanceFuturesClient,
+    symbol: str,
+    direction: str,
+    ticker: dict[str, Any],
+    funding: dict[str, Any] | None,
+    config: dict[str, Any],
+    enabled: bool = True,
+) -> dict[str, Any]:
+    if not enabled or not config.get("extreme_derivatives_enabled", True):
+        return {"enabled": False, "confirmed": False, "score_delta": 0.0, "risk_multiplier": 1.0, "reasons": ["disabled"]}
+    reasons: list[str] = []
+    oi_growth_pct = 0.0
+    try:
+        hist = client.open_interest_hist(symbol, str(config.get("extreme_sprint_interval", "5m")), 12)
+        if len(hist) >= 2:
+            first = float(hist[0].get("sumOpenInterest", hist[0].get("sumOpenInterestValue", 0)) or 0)
+            last = float(hist[-1].get("sumOpenInterest", hist[-1].get("sumOpenInterestValue", 0)) or 0)
+            if first > 0:
+                oi_growth_pct = (last - first) / first * 100
+    except Exception as exc:
+        reasons.append(f"oi_failed:{exc}")
+    change_pct = float(ticker.get("priceChangePercent", 0) or 0)
+    funding_rate_pct = float((funding or {}).get("lastFundingRate", 0) or 0) * 100
+    min_growth = float(config.get("extreme_oi_min_growth_pct", 1.5))
+    strong_growth = float(config.get("extreme_oi_strong_growth_pct", 4.0))
+    crowded = abs(funding_rate_pct) >= float(config.get("extreme_funding_abs_crowded_pct", 0.05))
+    direction_aligned = change_pct > 0 if direction == "LONG" else change_pct < 0
+    confirmed = oi_growth_pct >= min_growth and direction_aligned
+    score_delta = 0.0
+    risk_multiplier = 1.0
+    if confirmed:
+        score_delta += float(config.get("extreme_derivative_confirm_bonus", 10.0))
+        reasons.append("oi_price_confirmed")
+        if oi_growth_pct >= strong_growth:
+            score_delta += float(config.get("extreme_derivative_confirm_bonus", 10.0)) * 0.5
+            risk_multiplier *= 1.12
+            reasons.append("strong_oi")
+    elif oi_growth_pct <= 0 and abs(change_pct) >= float(config.get("extreme_firecracker_min_abs_change_pct", 8.0)):
+        penalty = float(config.get("extreme_derivative_divergence_penalty", 12.0))
+        score_delta -= penalty
+        risk_multiplier *= 0.65
+        reasons.append("price_without_oi")
+    if crowded:
+        reasons.append("funding_crowded")
+        if (direction == "LONG" and funding_rate_pct > 0) or (direction == "SHORT" and funding_rate_pct < 0):
+            score_delta -= float(config.get("extreme_derivative_divergence_penalty", 12.0)) * 0.5
+            risk_multiplier *= 0.75
+        else:
+            score_delta += 3.0
+    return {
+        "enabled": True,
+        "confirmed": confirmed,
+        "score_delta": round(score_delta, 2),
+        "risk_multiplier": round(max(0.0, min(risk_multiplier, 1.25)), 4),
+        "oi_growth_pct": round(oi_growth_pct, 4),
+        "funding_rate_pct": round(funding_rate_pct, 5),
+        "reasons": reasons,
+    }
+
+
+def spot_proxy_confirmation(
+    bars: list[list[Any]],
+    direction: str,
+    signal: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    if not config.get("extreme_spot_proxy_enabled", True):
+        return {"enabled": False, "confirmed": False, "score_delta": 0.0, "risk_multiplier": 1.0}
+    spike = _volume_spike_ratio(bars)
+    candle_move = float(signal.get("candle_move_pct") or 0)
+    confirmed = spike >= float(config.get("extreme_spot_proxy_min_volume_spike", 1.1)) and candle_move >= 0.15
+    if confirmed:
+        return {
+            "enabled": True,
+            "confirmed": True,
+            "score_delta": float(config.get("extreme_spot_proxy_bonus", 6.0)),
+            "risk_multiplier": 1.05,
+            "volume_spike": round(spike, 4),
+            "candle_move_pct": round(candle_move, 4),
+            "reason": "volume_price_confirmed",
+        }
+    return {
+        "enabled": True,
+        "confirmed": False,
+        "score_delta": -float(config.get("extreme_spot_proxy_penalty", 8.0)) if candle_move >= 0.3 else 0.0,
+        "risk_multiplier": 0.82 if candle_move >= 0.3 else 1.0,
+        "volume_spike": round(spike, 4),
+        "candle_move_pct": round(candle_move, 4),
+        "reason": "weak_volume_confirmation",
+    }
 
 
 def _depth_metrics(client: BinanceFuturesClient, symbol: str) -> dict[str, float | bool | str]:
@@ -950,7 +1131,7 @@ def score_symbol_quality(
     primary = backtests.get(5) or {}
     sample_low = int(primary.get("trades", 0)) < int(config.get("min_simulated_trades", 5))
     sample_exempt = (
-        mode_name == "tournament_sprint"
+        mode_name in {"tournament_sprint", "extreme_sprint"}
         and spike >= float(config.get("sprint_sample_penalty_exempt_spike", 2.5))
         and bool(signal.get("trend") is True or signal.get("signal") in {"LONG", "SHORT"})
         and float(depth.get("depth_notional", 0)) >= float(config.get("min_depth_notional_usdt", 20_000))
@@ -958,7 +1139,7 @@ def score_symbol_quality(
     if sample_low and not sample_exempt:
         false_breakout_penalty += (
             float(config.get("sprint_sample_penalty", 1.0))
-            if mode_name == "tournament_sprint"
+            if mode_name in {"tournament_sprint", "extreme_sprint"}
             else {"conservative": 10.0, "balanced": 8.0, "attack": 5.0, "tournament": 3.0}.get(mode_name, 8.0)
         )
     if float(primary.get("win_rate", 0)) < 35 and int(primary.get("trades", 0)) >= 5:
@@ -966,7 +1147,7 @@ def score_symbol_quality(
     high_atr_penalty = 0.0
     if mode_name != "tournament_sprint" and atr_pct > 5.5:
         high_atr_penalty = 6.0
-    elif mode_name == "tournament_sprint" and atr_pct > float(config.get("sprint_atr_high_pct", 10.0)):
+    elif mode_name in {"tournament_sprint", "extreme_sprint"} and atr_pct > float(config.get("sprint_atr_high_pct", 10.0)):
         high_atr_penalty = 2.0
     if high_atr_penalty:
         false_breakout_penalty += high_atr_penalty
@@ -986,8 +1167,8 @@ def score_symbol_quality(
     }
     score = sum(weighted_components.values()) - min(false_breakout_penalty, 20.0)
     score = max(0.0, min(score, 100.0))
-    trade_score = float(config.get("sprint_symbol_trade_score", 68.0) if mode_name == "tournament_sprint" else config.get("symbol_trade_score", 75.0))
-    small_score = float(config.get("sprint_symbol_small_trade_score", 55.0) if mode_name == "tournament_sprint" else config.get("symbol_small_trade_score", 65.0))
+    trade_score = float(config.get("sprint_symbol_trade_score", 68.0) if mode_name in {"tournament_sprint", "extreme_sprint"} else config.get("symbol_trade_score", 75.0))
+    small_score = float(config.get("sprint_symbol_small_trade_score", 55.0) if mode_name in {"tournament_sprint", "extreme_sprint"} else config.get("symbol_small_trade_score", 65.0))
     hot_score = float(config.get("sprint_symbol_hot_observe_score", 45.0))
     observe_score = float(config.get("symbol_observe_score", 50.0))
     market_passed = (
@@ -995,7 +1176,7 @@ def score_symbol_quality(
         and float(depth.get("depth_notional", 0)) >= float(config.get("min_depth_notional_usdt", 20_000))
     )
     hot_observe = (
-        mode_name == "tournament_sprint"
+        mode_name in {"tournament_sprint", "extreme_sprint"}
         and score >= hot_score
         and market_passed
         and spike >= float(config.get("sprint_sample_penalty_exempt_spike", 2.5))
@@ -1295,6 +1476,10 @@ def scan_growth_candidates(
     candidates = []
     recalled_symbols = list(symbols)
     tickers = {item["symbol"]: item for item in client.ticker_24h(recalled_symbols)}
+    try:
+        funding_by_symbol = {item["symbol"]: item for item in client.premium_index(recalled_symbols)}
+    except Exception:
+        funding_by_symbol = {}
     ranked_symbols, coarse_rows = _coarse_rank_symbols(recalled_symbols, tickers, config, mode)
     trigger_symbols = [str(event.get("symbol") or "").upper() for event in trigger_events]
     ranked_symbols = sorted(
@@ -1317,6 +1502,7 @@ def scan_growth_candidates(
     depth_by_symbol: dict[str, dict[str, Any]] = {}
     live_losses_by_direction: dict[str, dict[str, Any]] = {}
     processed_symbols: list[str] = []
+    derivative_checks = 0
     exchange_filters = None
     if config.get("min_order_filter_enabled", False):
         try:
@@ -1384,14 +1570,47 @@ def scan_growth_candidates(
                 quality = score_symbol_quality(symbol, bars, ticker, signal, backtests, depth, config, mode)
                 quality = _apply_live_performance_quality(quality, live_perf, config)
                 market_state = classify_market_state(symbol, bars, signal, depth, config)
+                firecracker = firecracker_opportunity_score(ticker, config, mode)
+                squeeze = squeeze_signal(bars, config) if mode["mode"] == "extreme_sprint" else {"enabled": False, "score": 0.0}
+                check_derivatives = (
+                    mode["mode"] == "extreme_sprint"
+                    and config.get("extreme_v2_enabled", True)
+                    and derivative_checks < int(config.get("extreme_oi_check_top_symbols", 12))
+                    and (
+                        firecracker.get("is_firecracker")
+                        or signal.get("signal") == direction
+                        or current_score >= float(config.get("depth_check_min_current_score", 38.0))
+                    )
+                )
+                derivatives = derivative_confirmation(
+                    client,
+                    symbol,
+                    direction,
+                    ticker,
+                    funding_by_symbol.get(symbol),
+                    config,
+                    enabled=check_derivatives,
+                )
+                if check_derivatives:
+                    derivative_checks += 1
+                spot_proxy = spot_proxy_confirmation(bars, direction, signal, config) if mode["mode"] == "extreme_sprint" else {"enabled": False, "score_delta": 0.0, "risk_multiplier": 1.0}
                 quality_multiplier = float(quality.get("quality_risk_multiplier", 1.0))
                 risk_pct *= quality_multiplier
                 risk_pct *= float(market_state.get("risk_multiplier", 1.0))
+                risk_pct *= float(derivatives.get("risk_multiplier", 1.0))
+                risk_pct *= float(spot_proxy.get("risk_multiplier", 1.0))
                 history_passed = (
                     recent["trades"] >= min_trades
                     and recent["profit_factor"] >= min_pf
                     and recent["net_pct"] > min_net_pct
                 )
+                if mode["mode"] == "extreme_sprint" and config.get("extreme_v2_enabled", True):
+                    history_passed = history_passed or (
+                        firecracker.get("is_firecracker")
+                        and int(recent.get("trades", 0)) >= 1
+                        and float(recent.get("net_pct", 0)) > -8.0
+                        and float(recent.get("profit_factor", 0)) >= 0.45
+                    )
                 standard_passed = (
                     signal.get("signal") == direction
                     and history_passed
@@ -1408,6 +1627,10 @@ def scan_growth_candidates(
                 score += recent["win_rate"] * 0.05
                 score += current_score
                 score += quality["score"] * 0.25
+                score += float(firecracker.get("score", 0)) * 0.15 if firecracker.get("is_firecracker") else 0
+                score += float(derivatives.get("score_delta", 0))
+                score += float(spot_proxy.get("score_delta", 0))
+                score += float(squeeze.get("score", 0))
                 score += 3 if standard_passed else 0
                 score -= 1.5 if direction == "SHORT" else 0
 
@@ -1439,6 +1662,51 @@ def scan_growth_candidates(
                     else:
                         decision_reason = f"币种质量未达实盘准入：{quality['pool']}，评分 {quality['score']}"
                 preemptive_enabled = mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint"} and config.get("preemptive_entries_enabled", True)
+                if (
+                    not passed
+                    and mode["mode"] == "extreme_sprint"
+                    and config.get("extreme_v2_enabled", True)
+                    and config.get("extreme_probe_enabled", True)
+                    and firecracker.get("is_firecracker")
+                    and score >= float(config.get("extreme_probe_min_score", 78.0))
+                    and float(firecracker.get("score", 0)) >= float(config.get("extreme_probe_min_firecracker_score", 55.0))
+                    and market_state.get("state") not in {"liquidity_trap", "spike_wick"}
+                    and float(derivatives.get("risk_multiplier", 1.0)) > 0
+                ):
+                    probe_signal_ok = signal.get("signal") == direction or (
+                        signal.get("trend") is True
+                        and signal.get("volatility_ok") is True
+                        and (
+                            float(signal.get("distance_to_trigger_pct") or 999) <= float(config.get("extreme_sprint_preemptive_max_distance_pct", 0.55)) * 2
+                            or bool(squeeze.get("active"))
+                            or bool(squeeze.get("released"))
+                        )
+                    )
+                    if probe_signal_ok:
+                        if signal.get("signal") != direction:
+                            signal = _promote_wait_signal(
+                                signal,
+                                direction,
+                                "extreme_probe",
+                                float(config.get("extreme_probe_risk_multiplier", 0.22)),
+                                params=strategy_params_for_mode(config, mode, "extreme_probe"),
+                            )
+                            expected_profit_pct = float(signal.get("expected_profit_pct") or 0)
+                            cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
+                        probe_cost_ok = cost_ratio >= float(config.get("extreme_probe_min_expected_profit_cost_ratio", 1.05))
+                        recent_ok = float(recent.get("net_pct", 0)) > -12.0 and float(recent.get("profit_factor", 0)) >= 0.2
+                        if probe_cost_ok and recent_ok:
+                            entry_type = "extreme_probe"
+                            passed = True
+                            risk_pct = min(
+                                float(mode["risk_pct"]) * float(config.get("extreme_probe_risk_multiplier", 0.22)) * quality_multiplier * float(derivatives.get("risk_multiplier", 1.0)) * float(spot_proxy.get("risk_multiplier", 1.0)),
+                                float(config.get("extreme_probe_max_risk_pct", 6.0)),
+                            )
+                            if market_state.get("state") == "chop":
+                                risk_pct *= 0.8
+                            decision_reason = "极限V2火药桶小仓试探：放量/异动满足，先用小仓积累机会"
+                        else:
+                            decision_reason = "极限V2试探未通过：成本比或近期表现不足"
                 if not passed and preemptive_enabled and history_passed and quality["allowed"] and market_state.get("allows_entry", True) and signal.get("signal") == "WAIT":
                     distance_pct = float(signal.get("distance_to_trigger_pct") or 999)
                     max_distance = float(config.get(f"{fast_prefix}_preemptive_max_distance_pct", 0.55) if is_sprint else config.get("preemptive_max_distance_pct", 0.35))
@@ -1496,7 +1764,7 @@ def scan_growth_candidates(
                         decision_reason = "、".join(misses) or "等待触发"
 
                 extreme_risk_multiplier = 1.0
-                if mode["mode"] == "extreme_sprint" and passed:
+                if mode["mode"] == "extreme_sprint" and passed and entry_type != "extreme_probe":
                     if score >= float(config.get("extreme_sprint_super_score", 135.0)):
                         extreme_risk_multiplier = float(config.get("extreme_sprint_super_risk_multiplier", 1.75))
                     elif score >= float(config.get("extreme_sprint_high_score", 110.0)):
@@ -1518,6 +1786,11 @@ def scan_growth_candidates(
                         "symbol_pool": quality["pool"],
                         "live_performance": live_perf,
                         "market_state": market_state,
+                        "firecracker": firecracker,
+                        "derivatives": derivatives,
+                        "spot_proxy": spot_proxy,
+                        "squeeze": squeeze,
+                        "v2_tier": "冲刺" if passed and entry_type in {"standard", "small_standard", "adaptive_live_standard"} else "试探" if entry_type == "extreme_probe" else "观察",
                         "depth_checked": depth.get("reason") != "depth_not_checked",
                         "simulation_passed": quality["simulation"]["passed"],
                         "current_score": round(current_score, 2),
@@ -1579,12 +1852,25 @@ def scan_growth_candidates(
         candidate
         for candidate in candidates
         if candidate.get("symbol_quality", {}).get("pool") in {"trade", "small_trade", "adaptive_live", "observe_hot"}
+        or candidate.get("entry_type") == "extreme_probe"
     ][: int(config.get("max_trade_pool_symbols", 15))]
     observe_pool = [
         candidate
         for candidate in candidates
         if candidate.get("symbol_quality", {}).get("pool") == "observe"
     ][:max_candidates]
+    firecracker_count = sum(1 for candidate in candidates if candidate.get("firecracker", {}).get("is_firecracker"))
+    probe_count = sum(1 for candidate in candidates if candidate.get("entry_type") == "extreme_probe")
+    sprint_count = sum(1 for candidate in candidates if candidate.get("passed") and candidate.get("entry_type") != "extreme_probe")
+    blocked_reasons: dict[str, int] = {}
+    for candidate in candidates:
+        if candidate.get("passed"):
+            continue
+        reason = str(candidate.get("reason") or "unknown")
+        market_reason = str(candidate.get("market_state", {}).get("state") or "")
+        pool_reason = str(candidate.get("symbol_quality", {}).get("pool") or "")
+        key = market_reason if market_reason in {"chop", "liquidity_trap", "spike_wick"} else pool_reason if pool_reason == "disabled" else reason
+        blocked_reasons[key] = blocked_reasons.get(key, 0) + 1
     _publish_stream_intent(config, account_summary, coarse_rows, candidates, trade_pool)
     funnel = {
         "recall": {
@@ -1613,6 +1899,14 @@ def scan_growth_candidates(
             "count": len(candidates),
             "displayed": min(max_candidates, len(candidates)),
             "label": "候选",
+        },
+        "extreme_v2": {
+            "enabled": bool(mode.get("mode") == "extreme_sprint" and config.get("extreme_v2_enabled", True)),
+            "firecracker": firecracker_count,
+            "probe": probe_count,
+            "sprint": sprint_count,
+            "blocked_reasons": blocked_reasons,
+            "label": "极限V2",
         },
         "elapsed_seconds": round(time.perf_counter() - started_at, 3),
         "degrade_seconds": degrade_seconds,

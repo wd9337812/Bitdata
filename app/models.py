@@ -145,6 +145,34 @@ class TradingConfig(BaseModel):
     extreme_sprint_super_risk_multiplier: float = Field(default=1.75, ge=0.1, le=5)
     extreme_sprint_max_consecutive_losses: int = Field(default=5, ge=1, le=20)
     extreme_sprint_daily_loss_limit_pct: float = Field(default=50.0, ge=0.1, le=95)
+    extreme_v2_enabled: bool = True
+    extreme_v2_profile: str = "standard"
+    extreme_firecracker_enabled: bool = True
+    extreme_firecracker_min_abs_change_pct: float = Field(default=8.0, ge=0, le=200)
+    extreme_firecracker_min_quote_volume_usdt: float = Field(default=30_000_000.0, ge=0)
+    extreme_firecracker_volume_score_weight: float = Field(default=12.0, ge=0, le=100)
+    extreme_firecracker_move_score_weight: float = Field(default=2.4, ge=0, le=20)
+    extreme_firecracker_min_score: float = Field(default=55.0, ge=0, le=200)
+    extreme_probe_enabled: bool = True
+    extreme_probe_min_score: float = Field(default=78.0, ge=0, le=300)
+    extreme_probe_min_firecracker_score: float = Field(default=55.0, ge=0, le=200)
+    extreme_probe_risk_multiplier: float = Field(default=0.22, ge=0.01, le=1)
+    extreme_probe_max_risk_pct: float = Field(default=6.0, ge=0.1, le=100)
+    extreme_probe_min_expected_profit_cost_ratio: float = Field(default=1.05, ge=0, le=100)
+    extreme_derivatives_enabled: bool = True
+    extreme_oi_check_top_symbols: int = Field(default=12, ge=0, le=100)
+    extreme_oi_min_growth_pct: float = Field(default=1.5, ge=-100, le=1000)
+    extreme_oi_strong_growth_pct: float = Field(default=4.0, ge=-100, le=1000)
+    extreme_funding_abs_crowded_pct: float = Field(default=0.05, ge=0, le=5)
+    extreme_derivative_confirm_bonus: float = Field(default=10.0, ge=0, le=100)
+    extreme_derivative_divergence_penalty: float = Field(default=12.0, ge=0, le=100)
+    extreme_spot_proxy_enabled: bool = True
+    extreme_spot_proxy_min_volume_spike: float = Field(default=1.1, ge=0, le=20)
+    extreme_spot_proxy_bonus: float = Field(default=6.0, ge=0, le=100)
+    extreme_spot_proxy_penalty: float = Field(default=8.0, ge=0, le=100)
+    extreme_squeeze_enabled: bool = True
+    extreme_squeeze_lookback: int = Field(default=20, ge=10, le=200)
+    extreme_squeeze_bonus: float = Field(default=8.0, ge=0, le=100)
     daily_loss_limit_pct: float = Field(default=3.0, ge=0.1, le=60)
     attack_daily_loss_limit_pct: float = Field(default=10.0, ge=0.1, le=60)
     tournament_daily_loss_limit_pct: float = Field(default=25.0, ge=0.1, le=80)

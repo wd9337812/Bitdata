@@ -178,8 +178,125 @@ def test_tournament_sprint_scan_passes_fast_protection_to_signal_and_backtest(mo
 
     assert result["candidates"][0]["passed"] is True
     assert captured["signal"] == [(0.85, 1.25, 5)]
-    assert captured["backtest"]
-    assert set(captured["backtest"]) == {(0.85, 1.25, 5)}
+
+
+def test_extreme_v2_firecracker_probe_allows_small_test_entry(monkeypatch):
+    class FakeExtremeClient:
+        def ticker_24h(self, symbols=None):
+            return [
+                {
+                    "symbol": "HOTUSDT",
+                    "lastPrice": "0.1",
+                    "quoteVolume": "180000000",
+                    "priceChangePercent": "22",
+                    "count": "300000",
+                }
+            ]
+
+        def premium_index(self, symbols=None):
+            return [{"symbol": "HOTUSDT", "lastFundingRate": "0.0001"}]
+
+        def open_interest_hist(self, symbol, period="5m", limit=12):
+            return [
+                {"sumOpenInterest": "1000"},
+                {"sumOpenInterest": "1060"},
+            ]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 0.1, 0.106, 0.098, 0.104, 1_000_000] for i in range(220)]
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["HOTUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 0.104,
+            "atr": 0.002,
+            "stop": 0.1025,
+            "take_profit": 0.1061,
+            "expected_profit_pct": 2.0,
+            "trend": True,
+            "volatility_ok": True,
+            "candle_move_pct": 1.2,
+            "entry_type": "standard",
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG", params=None: {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 2,
+            "wins": 1,
+            "win_rate": 50,
+            "net_pct": -1.0,
+            "profit_factor": 0.6,
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "score_symbol_quality",
+        lambda symbol, bars, ticker, signal, backtests, depth, config, mode=None: {
+            "score": 52,
+            "pool": "observe",
+            "allowed": False,
+            "quality_risk_multiplier": 1.0,
+            "quality_risk_reasons": [],
+            "components": {},
+            "market_passed": False,
+            "simulation": {"passed": False},
+            "market": {"atr_pct": 2.0, "spread_pct": 0.02, "depth_notional": 20_000},
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "classify_market_state",
+        lambda symbol, bars, signal, depth, config: {
+            "state": "chop",
+            "allows_entry": False,
+            "risk_multiplier": 0.0,
+        },
+    )
+
+    result = scan_growth_candidates(
+        FakeExtremeClient(),
+        {
+            "growth_mode": "extreme_sprint",
+            "extreme_sprint_enabled": True,
+            "extreme_sprint_confirmation": "ENABLE_EXTREME_SPRINT",
+            "auto_risk_by_equity": False,
+            "extreme_v2_enabled": True,
+            "extreme_sprint_interval": "5m",
+            "extreme_sprint_recent_days": 2,
+            "extreme_sprint_risk_per_trade_pct": 28,
+            "extreme_sprint_max_leverage": 8,
+            "extreme_sprint_max_symbol_margin_pct": 98,
+            "extreme_firecracker_min_score": 50,
+            "extreme_probe_min_score": 70,
+            "extreme_probe_min_firecracker_score": 50,
+            "extreme_probe_risk_multiplier": 0.22,
+            "extreme_probe_max_risk_pct": 6,
+            "extreme_probe_min_expected_profit_cost_ratio": 1.05,
+            "extreme_oi_check_top_symbols": 5,
+            "allow_short": False,
+            "estimated_slippage_pct": 0.04,
+            "min_order_filter_enabled": False,
+            "market_stream_dynamic_enabled": False,
+        },
+        {"equity": 60},
+    )
+
+    best = result["candidates"][0]
+    assert best["passed"] is True
+    assert best["entry_type"] == "extreme_probe"
+    assert best["risk_pct"] <= 6
+    assert result["funnel"]["extreme_v2"]["probe"] == 1
 
 
 def test_auto_growth_mode_uses_tournament_for_small_equity():

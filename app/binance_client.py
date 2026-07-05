@@ -177,6 +177,29 @@ class BinanceFuturesClient:
             data = [item for item in data if item["symbol"] in allowed]
         return data
 
+    def open_interest(self, symbol: str) -> dict[str, Any]:
+        symbol = symbol.upper()
+        key = f"open_interest:{symbol}"
+        cached = cache_get(key, 20)
+        if cached:
+            return cached.value
+        data = self.public_get("/fapi/v1/openInterest", {"symbol": symbol})
+        cache_set(key, data)
+        return data
+
+    def open_interest_hist(self, symbol: str, period: str = "5m", limit: int = 12) -> list[dict[str, Any]]:
+        symbol = symbol.upper()
+        key = f"open_interest_hist:{symbol}:{period}:{limit}"
+        cached = cache_get(key, 60)
+        if cached:
+            return cached.value
+        data = self.public_get(
+            "/futures/data/openInterestHist",
+            {"symbol": symbol, "period": period, "limit": limit},
+        )
+        cache_set(key, data)
+        return data
+
     def depth(self, symbol: str, limit: int = 5) -> Any:
         item = stream_depth(symbol)
         if item and item.get("bids") and item.get("asks"):
