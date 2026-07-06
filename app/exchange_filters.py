@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 from typing import Any
 
 
@@ -18,6 +18,15 @@ def round_step(value: float, step: str) -> float:
     return float(round(rounded, _decimal_places(step)))
 
 
+def ceil_step(value: float, step: str) -> float:
+    decimal_value = Decimal(str(value))
+    decimal_step = Decimal(step)
+    if decimal_step <= 0:
+        return float(decimal_value)
+    rounded = (decimal_value / decimal_step).to_integral_value(rounding=ROUND_UP) * decimal_step
+    return float(round(rounded, _decimal_places(step)))
+
+
 class ExchangeFilters:
     def __init__(self, exchange_info: dict[str, Any]) -> None:
         self.symbols = {item["symbol"]: item for item in exchange_info.get("symbols", [])}
@@ -30,6 +39,16 @@ class ExchangeFilters:
         filters = self.filters_for(symbol)
         lot = filters.get("LOT_SIZE", {})
         return round_step(quantity, lot.get("stepSize", "0.001"))
+
+    def min_quantity_for_notional(self, symbol: str, entry_price: float) -> float:
+        if entry_price <= 0:
+            return 0.0
+        filters = self.filters_for(symbol)
+        lot = filters.get("LOT_SIZE", {})
+        step = lot.get("stepSize", "0.001")
+        min_qty = float(lot.get("minQty", 0) or 0)
+        min_notional_qty = self.min_notional(symbol) / entry_price
+        return ceil_step(max(min_qty, min_notional_qty), step)
 
     def price(self, symbol: str, price: float) -> float:
         filters = self.filters_for(symbol)

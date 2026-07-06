@@ -153,6 +153,51 @@ def test_execute_closes_entry_when_protection_fails():
     assert ("MARKET", "BUY", 1.0, "SHORT") in client.orders
 
 
+def test_execute_lifts_tiny_order_to_exchange_minimum_when_risk_cap_allows():
+    client = FakeFiltersClient()
+    decision = {
+        "symbol": "TESTUSDT",
+        "action": "OPEN_SHORT",
+        "direction": "SHORT",
+        "quantity": 0.01,
+        "leverage": 3,
+        "risk": {"max_notional": 20},
+        "signal": {"last_price": 100.0, "stop": 102.0, "take_profit": 96.0},
+    }
+
+    result = execute_stage1_market_order(
+        client,
+        decision,
+        {"dry_run": False, "live_trading_enabled": True, "live_trading_confirmation": "ENABLE_LIVE_TRADING"},
+    )
+
+    assert result["mode"] == "live"
+    assert ("MARKET", "SELL", 0.05, "SHORT") in client.orders
+
+
+def test_execute_keeps_block_when_exchange_minimum_exceeds_risk_cap():
+    client = FakeFiltersClient()
+    decision = {
+        "symbol": "TESTUSDT",
+        "action": "OPEN_SHORT",
+        "direction": "SHORT",
+        "quantity": 0.01,
+        "leverage": 3,
+        "risk": {"max_notional": 2},
+        "signal": {"last_price": 100.0, "stop": 102.0, "take_profit": 96.0},
+    }
+
+    result = execute_stage1_market_order(
+        client,
+        decision,
+        {"dry_run": False, "live_trading_enabled": True, "live_trading_confirmation": "ENABLE_LIVE_TRADING"},
+    )
+
+    assert result["mode"] == "blocked"
+    assert result["message"] == "Quantity is below exchange minimum."
+    assert not any(order[0] == "MARKET" for order in client.orders)
+
+
 def test_execute_rotation_closes_old_position_before_new_entry():
     client = FakeFiltersClient()
     decision = {

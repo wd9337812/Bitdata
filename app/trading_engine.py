@@ -471,8 +471,16 @@ def execute_stage1_market_order(
     quantity = filters.quantity(symbol, float(decision["quantity"]))
     stop = filters.price(symbol, float(decision["signal"]["stop"]))
     take_profit = filters.price(symbol, float(decision["signal"]["take_profit"]))
-    notional = quantity * float(decision["signal"]["last_price"])
+    entry_price = float(decision["signal"]["last_price"])
+    notional = quantity * entry_price
     min_notional = filters.min_notional(symbol)
+    max_notional = float((decision.get("risk") or {}).get("max_notional") or 0)
+    if 0 < notional < min_notional:
+        min_quantity = filters.min_quantity_for_notional(symbol, entry_price)
+        min_quantity_notional = min_quantity * entry_price
+        if min_quantity > quantity and (max_notional <= 0 or min_quantity_notional <= max_notional):
+            quantity = min_quantity
+            notional = min_quantity_notional
     direction = str(decision.get("direction") or decision.get("signal", {}).get("signal") or "LONG").upper()
     entry_side = "SELL" if direction == "SHORT" else "BUY"
     close_side = "BUY" if direction == "SHORT" else "SELL"
