@@ -6,10 +6,12 @@ from typing import Any
 from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.grid import build_grid_orders, build_grid_plan
+from app.position_sizing import explain_position_sizing
 from app.risk import assess_new_position, current_stage, equity_guard_status, live_trading_allowed, position_size_from_risk
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates, strategy_params_for_mode
 from app.state_store import save_state
 from app.strategy import StrategyParams
+from app.target import target_progress, target_state_updates
 
 
 def position_direction(position: dict[str, Any]) -> str:
@@ -255,6 +257,7 @@ def sync_stage(config: dict[str, Any], state: dict[str, Any], account_summary: d
             updates["daily_start_equity"] = float(equity)
     stage = current_stage(config, state, equity)
     updates["stage"] = stage
+    updates.update(target_state_updates(config, state, account_summary))
     active_mode = mode_config(config, equity).get("mode")
     if equity is not None and active_mode == "extreme_sprint":
         existing_mode = state.get("equity_guard_mode")
@@ -302,6 +305,7 @@ def build_stage1_decision(
     if equity is None:
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "account_unavailable"}}
     guard = equity_guard_status(config, state, equity, active_mode["mode"])
+    target = target_progress(config, state, account_summary)
     if not guard.get("allowed", True):
         return {
             "symbol": symbol,
@@ -309,10 +313,12 @@ def build_stage1_decision(
             "signal": signal,
             "risk": {"allowed": False, "reason": guard.get("reason", "equity_guard")},
             "equity_guard": guard,
+            "target_progress": target,
             "mode": active_mode["mode"],
             "strategy": active_mode["strategy"],
         }
     active_mode["risk_pct"] = float(active_mode["risk_pct"]) * float(guard.get("risk_multiplier", 1.0))
+    active_mode["risk_pct"] = float(active_mode["risk_pct"]) * float(target.get("effective_risk_multiplier", 1.0))
 
     daily_loss_key = "daily_loss_limit_pct"
     if active_mode["mode"] == "attack":
@@ -365,12 +371,22 @@ def build_stage1_decision(
     )
     max_qty = risk.max_notional / float(signal["last_price"]) if signal.get("last_price") else 0
     quantity = min(quantity, max_qty)
+    risk_dict = risk.__dict__
+    sizing = explain_position_sizing(
+        base_risk_pct=float((scan_candidate or {}).get("base_risk_pct") or (scan_candidate or {}).get("risk_pct") or active_mode["risk_pct"]),
+        candidate=scan_candidate,
+        guard=guard,
+        target=target,
+        final_risk_pct=float(active_mode["risk_pct"]),
+        risk=risk_dict,
+    )
     return {
         "symbol": symbol,
         "action": f"OPEN_{direction}" if risk.allowed and quantity > 0 else "WAIT",
         "direction": direction,
         "signal": signal,
-        "risk": risk.__dict__,
+        "risk": risk_dict,
+        "position_sizing": sizing,
         "quantity": quantity,
         "estimated_notional": quantity * float(signal["last_price"]),
         "mode": active_mode["mode"],
@@ -378,6 +394,7 @@ def build_stage1_decision(
         "entry_type": (scan_candidate or {}).get("entry_type", signal.get("entry_type", "standard")),
         "decision_reason": (scan_candidate or {}).get("decision_reason"),
         "equity_guard": guard,
+        "target_progress": target,
         "risk_pct": active_mode["risk_pct"],
         "leverage": active_mode["leverage"],
     }

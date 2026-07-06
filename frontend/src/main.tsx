@@ -26,7 +26,7 @@ import {
 import { api, fmt, modeLabel, stageLabel, statusLabel } from "./lib/api";
 import "./styles.css";
 
-type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any> };
+type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; target_progress?: Record<string, any> };
 type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any; funnel?: any }; stage2_grid: any[]; auth_error?: string };
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
@@ -152,6 +152,7 @@ function App() {
   const state = status?.state || {};
   const config = status?.config || {};
   const stream = status?.market_stream || {};
+  const target = status?.target_progress || {};
 
   const chartData = useMemo(
     () =>
@@ -294,6 +295,7 @@ function App() {
                 sub={data.health?.offsetMs !== undefined ? `时间偏差 ${fmt(data.health.offsetMs, 0)} ms` : data.health?.error}
               />
             </div>
+            <TargetProgressPanel target={target} />
             <SignalExplain best={best} />
             <div className="grid-two">
               <div className="panel">
@@ -389,6 +391,38 @@ function ScanSummary({ funnel, candidates, stream }: { funnel: any; candidates: 
         <MetricCard title="WebSocket 状态" value={stream.connected ? "实时盯盘中" : "未连接"} sub={stream.last_error || `数据年龄 ${fmt(stream.age_seconds, 0)} 秒`} tone={stream.connected ? "positive" : "negative"} />
         <MetricCard title="实时订阅币数" value={`${fmt((stream.symbols || []).length, 0)} 个`} sub={`动态目标 ${fmt(stream.intent_count, 0)} 个`} />
         <MetricCard title="实时行情" value={`${fmt(stream.ticker_count, 0)} / ${fmt(stream.depth_count, 0)} / ${fmt(stream.kline_count, 0)}`} sub="Ticker / 盘口 / K线" />
+      </div>
+    </div>
+  );
+}
+
+function TargetProgressPanel({ target }: { target: Record<string, any> }) {
+  if (!target?.enabled && target?.status !== "completed") return null;
+  const tone = target.status === "ahead" || target.status === "completed" ? "positive" : target.status === "critical" ? "negative" : "";
+  const statusText: Record<string, string> = {
+    ahead: "领先目标",
+    on_track: "接近目标",
+    behind: "落后目标",
+    critical: "严重落后",
+    completed: "已完成",
+    account_unavailable: "账户不可用",
+  };
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>目标进度</h2>
+          <p>{target.reason || "系统会根据 30 天滚仓目标计算当前进度；默认只展示，不自动放大实盘仓位。"}</p>
+        </div>
+      </div>
+      <div className="metrics">
+        <MetricCard title="当前阶段" value={target.stage || "-"} sub={target.phase_label || "-"} tone={tone} />
+        <MetricCard title="目标权益" value={`${fmt(target.target_equity, 2)} U`} sub={`当前完成 ${fmt(Number(target.target_completion_ratio || 0) * 100, 2)}%`} />
+        <MetricCard title="目标曲线应到" value={`${fmt(target.expected_equity, 4)} U`} sub={`进度比 ${fmt(Number(target.progress_ratio || 0) * 100, 2)}%`} />
+        <MetricCard title="剩余天数" value={`${fmt(target.remaining_days, 2)} 天`} sub={`已过 ${fmt(target.elapsed_days, 2)} 天`} />
+        <MetricCard title="今日所需收益" value={`${fmt(target.required_daily_return_pct, 2)}%`} sub="按剩余时间倒推" />
+        <MetricCard title="目标风险倍率" value={`${fmt(target.risk_multiplier, 2)}x`} sub={target.risk_adjustment_enabled ? "已参与仓位" : "仅展示，未放大仓位"} tone={target.risk_adjustment_enabled ? tone : ""} />
+        <MetricCard title="进度状态" value={statusText[target.status] || target.status || "-"} sub={target.hard_floor_hit ? "已触发硬底线" : `硬底线 ${fmt(target.hard_floor, 4)} U`} tone={tone} />
       </div>
     </div>
   );
@@ -739,6 +773,12 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("market_stream_rebuild_seconds", "实时盯盘重建间隔", "默认 60 秒；避免 WebSocket 频繁重连")}
           {number("stream_hot_symbols_limit", "热点进入盯盘数量", "默认 25；来自漏斗粗排和候选")}
           {toggle("auto_risk_by_equity", "按权益自动切换风险", "50U 自动锦标赛，100U 后进攻")}
+          {toggle("target_controller_enabled", "开启目标进度控制器", "按 30 天到 1万、再 30 天到 10万、再 30 天到 100万计算进度")}
+          {toggle("target_risk_adjustment_enabled", "目标进度参与仓位", "默认关闭；开启后系统会根据领先或落后目标曲线调整风险倍率")}
+          {number("target_phase_a_equity", "阶段A目标权益", "默认 10000U")}
+          {number("target_phase_b_equity", "阶段B目标权益", "默认 100000U")}
+          {number("target_phase_c_equity", "阶段C目标权益", "默认 1000000U")}
+          {number("target_phase_days", "每阶段天数", "默认 30 天")}
           {toggle("dry_run", "模拟交易", "开启时不会真实下单")}
           {toggle("live_trading_enabled", "允许实盘交易", "还需要确认短语才会实盘")}
         </div>

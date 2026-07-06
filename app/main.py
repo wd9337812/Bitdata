@@ -20,6 +20,7 @@ from app.market_stream import stream_status
 from app.scanner import mode_config
 from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
+from app.target import target_progress
 from app.binance_rate import cache_status, rate_status
 from app.telemetry import (
     heartbeat,
@@ -136,6 +137,7 @@ def status() -> dict[str, Any]:
         "config": load_config(include_secret=False),
         "state": state,
         "account": account_summary,
+        "target_progress": target_progress(config, state, account_summary),
         "binance_rate": rate_status(),
         "cache": cache_status(),
         "market_stream": stream_status(),

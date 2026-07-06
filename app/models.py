@@ -111,6 +111,21 @@ class TradingConfig(BaseModel):
     limit: int = Field(default=1000, ge=100, le=1500)
     stage1_target_equity: float = Field(default=10000.0, gt=0)
     stage2_activation: str = "manual"
+    target_controller_enabled: bool = True
+    target_risk_adjustment_enabled: bool = False
+    target_phase_a_equity: float = Field(default=10000.0, ge=1)
+    target_phase_b_equity: float = Field(default=100000.0, ge=1)
+    target_phase_c_equity: float = Field(default=1000000.0, ge=1)
+    target_phase_days: int = Field(default=30, ge=1, le=365)
+    target_progress_ahead_multiplier: float = Field(default=0.75, ge=0.01, le=5)
+    target_progress_on_track_multiplier: float = Field(default=1.0, ge=0.01, le=5)
+    target_progress_behind_multiplier: float = Field(default=1.2, ge=0.01, le=5)
+    target_progress_critical_multiplier: float = Field(default=1.5, ge=0.01, le=5)
+    target_progress_max_multiplier: float = Field(default=1.8, ge=0.01, le=10)
+    target_progress_min_multiplier: float = Field(default=0.5, ge=0.01, le=5)
+    target_hard_floor_pct: float = Field(default=35.0, ge=0, le=100)
+    target_critical_gap_pct: float = Field(default=35.0, ge=0, le=100)
+    target_ahead_gap_pct: float = Field(default=15.0, ge=0, le=100)
     growth_mode: str = "balanced"
     tournament_stop_equity: float = Field(default=30.0, ge=0)
     auto_risk_by_equity: bool = True
