@@ -9,9 +9,11 @@ from dotenv import load_dotenv
 from app.binance_client import BinanceFuturesClient
 from app.binance_rate import BinanceRateLimitError, rate_status
 from app.config_store import load_config
+from app.learning_report import save_daily_learning_report
 from app.live_learning import sync_live_learning_from_binance
 from app.market_stream import start_market_stream_thread
 from app.risk import direction_cooldown_key
+from app.runtime_protection import manage_runtime_protection
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
@@ -88,6 +90,21 @@ def maybe_sync_live_learning(client: BinanceFuturesClient, config: dict, state: 
         record_event("warning", "live_learning", f"实盘信用分同步失败：{exc}")
 
 
+
+def maybe_generate_daily_report(config: dict, state: dict) -> None:
+    if not config.get("daily_learning_report_enabled", True):
+        return
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    if state.get("last_daily_learning_report_date") == today:
+        return
+    try:
+        report = save_daily_learning_report(now)
+        save_state({"last_daily_learning_report_date": today, "last_daily_learning_report_path": report.get("path")})
+        record_event("info", "daily_learning_report", "daily learning report generated", {"path": report.get("path")})
+    except Exception as exc:
+        record_event("warning", "daily_learning_report", f"daily report failed: {exc}")
+
 def is_timestamp_error(exc: Exception) -> bool:
     message = str(exc)
     return "-1021" in message or "recvWindow" in message or "Timestamp for this request" in message
@@ -118,6 +135,10 @@ def run_once() -> dict:
         raise RuntimeError("实盘模式需要先配置 Binance API Key 和 Secret。")
     state = sync_stage(config, state, account)
     maybe_sync_live_learning(client, config, state)
+    protection_status = manage_runtime_protection(client, config, state, account)
+    if protection_status.get("actions"):
+        record_event("info", "runtime_protection", "runtime protection checked", protection_status)
+    maybe_generate_daily_report(config, state)
 
     if state.get("stage") == "grid":
         results = []

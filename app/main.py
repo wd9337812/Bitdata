@@ -14,11 +14,16 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from app.binance_client import BinanceFuturesClient
 from app.config_store import load_config, save_config
+from app.learning_report import latest_daily_learning_report, save_daily_learning_report
 from app.live_learning import list_live_scores, sync_live_learning_from_binance
 from app.models import BotControlPayload, ExecutePayload, TradingConfig
 from app.market_stream import stream_status
 from app.opportunity_queue import opportunity_status
+from app.product_completion import product_completion_summary
+from app.runtime_protection import manage_runtime_protection
 from app.scanner import mode_config
+from app.stage_modes import stage_profile_for_equity
+from app.stage_simulation import simulate_stage_path
 from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
 from app.target import target_progress
@@ -139,6 +144,8 @@ def status() -> dict[str, Any]:
         "state": state,
         "account": account_summary,
         "target_progress": target_progress(config, state, account_summary),
+        "stage_profile": stage_profile_for_equity(account_summary.get("equity"), config),
+        "product_completion": product_completion_summary(config),
         "binance_rate": rate_status(),
         "cache": cache_status(),
         "market_stream": stream_status(),
@@ -173,6 +180,37 @@ def equity_snapshot() -> dict[str, Any]:
 @app.get("/api/logs", dependencies=[Depends(require_auth)])
 def logs(limit: int = 200, category: str | None = None) -> dict[str, Any]:
     return {"events": list_events(limit, category)}
+
+
+@app.get("/api/product/completion", dependencies=[Depends(require_auth)])
+def product_completion() -> dict[str, Any]:
+    return product_completion_summary(load_config())
+
+
+@app.get("/api/simulation/stage", dependencies=[Depends(require_auth)])
+def stage_simulation(start_equity: float | None = None, target_equity: float | None = None, days: int | None = None) -> dict[str, Any]:
+    return simulate_stage_path(load_config(), start_equity=start_equity, target_equity=target_equity, days=days)
+
+
+@app.get("/api/reports/latest", dependencies=[Depends(require_auth)])
+def report_latest() -> dict[str, Any]:
+    return latest_daily_learning_report()
+
+
+@app.post("/api/reports/daily", dependencies=[Depends(require_auth)])
+def report_daily() -> dict[str, Any]:
+    return save_daily_learning_report()
+
+
+@app.post("/api/protection/runtime-check", dependencies=[Depends(require_auth)])
+def runtime_protection_check() -> dict[str, Any]:
+    config = load_config()
+    state = load_state()
+    if config.get("dry_run", True):
+        account = synthetic_account()
+    else:
+        account = summarize_account(client_from_config().account_live())
+    return manage_runtime_protection(client_from_config(), config, state, account)
 
 
 @app.get("/api/strategy-runs", dependencies=[Depends(require_auth)])

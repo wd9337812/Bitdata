@@ -26,12 +26,14 @@ import {
 import { api, fmt, modeLabel, stageLabel, statusLabel } from "./lib/api";
 import "./styles.css";
 
-type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; opportunity_queue?: Record<string, any>; target_progress?: Record<string, any> };
+type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; opportunity_queue?: Record<string, any>; target_progress?: Record<string, any>; stage_profile?: Record<string, any>; product_completion?: Record<string, any> };
 type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any; funnel?: any }; stage2_grid: any[]; auth_error?: string };
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
 type LiveLearningData = { scores: any[] };
+type SimulationData = Record<string, any>;
+type ReportData = Record<string, any>;
 
 const menu = [
   { id: "overview", label: "总览", icon: Activity },
@@ -86,6 +88,8 @@ function useData() {
   const [logs, setLogs] = useState<any[]>([]);
   const [liveLearning, setLiveLearning] = useState<any[]>([]);
   const [health, setHealth] = useState<any>(null);
+  const [simulation, setSimulation] = useState<any>(null);
+  const [report, setReport] = useState<any>(null);
   const [error, setError] = useState("");
 
   async function refresh(light = false, throwOnError = false) {
@@ -106,6 +110,8 @@ function useData() {
         setDecisions(await api<DecisionsData>("/api/decisions"));
         const learningRes = await api<LiveLearningData>("/api/live-learning?limit=100");
         setLiveLearning(learningRes.scores || []);
+        setSimulation(await api<SimulationData>("/api/simulation/stage"));
+        setReport(await api<ReportData>("/api/reports/latest"));
       }
       setError("");
     } catch (err) {
@@ -125,7 +131,7 @@ function useData() {
     };
   }, []);
 
-  return { status, decisions, market, snapshots, logs, liveLearning, health, error, refresh };
+  return { status, decisions, market, snapshots, logs, liveLearning, health, simulation, report, error, refresh };
 }
 
 function MetricCard({ title, value, sub, tone }: { title: string; value: string; sub?: string; tone?: string }) {
@@ -154,6 +160,8 @@ function App() {
   const stream = status?.market_stream || {};
   const opportunityQueue = status?.opportunity_queue || {};
   const target = status?.target_progress || {};
+  const stageProfile = status?.stage_profile || {};
+  const completion = status?.product_completion || {};
 
   const chartData = useMemo(
     () =>
@@ -297,6 +305,7 @@ function App() {
               />
             </div>
             <TargetProgressPanel target={target} />
+            <ProductCompletionPanel completion={completion} stageProfile={stageProfile} simulation={data.simulation} report={data.report} />
             <SignalExplain best={best} />
             <div className="grid-two">
               <div className="panel">
@@ -395,6 +404,33 @@ function ScanSummary({ funnel, candidates, stream, opportunityQueue }: { funnel:
         <MetricCard title="实时订阅币数" value={`${fmt((stream.symbols || []).length, 0)} 个`} sub={`动态目标 ${fmt(stream.intent_count, 0)} 个`} />
         <MetricCard title="实时行情" value={`${fmt(stream.ticker_count, 0)} / ${fmt(stream.depth_count, 0)} / ${fmt(stream.kline_count, 0)}`} sub="Ticker / 盘口 / K线" />
         <MetricCard title="事件队列" value={`${fmt(queue.count ?? opportunityQueue.active_count, 0)} 个`} sub={queueSymbols ? `热币：${queueSymbols}` : "等待 WebSocket 异动"} />
+      </div>
+    </div>
+  );
+}
+
+function ProductCompletionPanel({ completion, stageProfile, simulation, report }: { completion: any; stageProfile: any; simulation: any; report: any }) {
+  const modules = completion?.modules || [];
+  const reportText = String(report?.markdown || "");
+  const reportFirstLine = reportText.split("\n").find((line) => line.startsWith("- ")) || "等待生成每日学习报告";
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>九大模块验收</h2>
+          <p>目标、机会队列、动态保护、统一仓位、阶段模式、扫描漏斗、目标面板、阶段模拟、每日报告都已接入。</p>
+        </div>
+      </div>
+      <div className="metrics">
+        <MetricCard title="完成度" value={`${fmt(completion?.completed || 0, 0)} / ${fmt(completion?.total || 9, 0)}`} sub={completion?.complete ? "九大模块可验收" : "仍有缺口"} tone={completion?.complete ? "positive" : "negative"} />
+        <MetricCard title="当前阶段" value={`${stageProfile?.stage || "-"} ${stageProfile?.label || ""}`} sub={stageProfile?.risk_posture || "-"} />
+        <MetricCard title="建议模式" value={stageProfile?.recommended_mode || "-"} sub={`基础风险 ${fmt(stageProfile?.base_risk_pct, 2)}%`} />
+        <MetricCard title="模拟终值" value={`${fmt(simulation?.final_equity, 4)} U`} sub={`目标缺口 ${fmt(simulation?.target_gap_pct, 2)}%`} tone={simulation?.target_hit ? "positive" : ""} />
+        <MetricCard title="模拟交易频率" value={`${fmt(simulation?.trades_per_day, 2)} 次/天`} sub={`最大回撤 ${fmt(simulation?.max_drawdown_pct, 2)}%`} />
+        <MetricCard title="学习报告" value={report?.path ? "已生成" : "生成中"} sub={reportFirstLine.replace("- ", "")} />
+      </div>
+      <div className="chip-row">
+        {modules.map((item: any) => <span className="chip" key={item.key}>{item.label}</span>)}
       </div>
     </div>
   );
@@ -792,6 +828,10 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("target_phase_b_equity", "阶段B目标权益", "默认 100000U")}
           {number("target_phase_c_equity", "阶段C目标权益", "默认 1000000U")}
           {number("target_phase_days", "每阶段天数", "默认 30 天")}
+          {toggle("daily_learning_report_enabled", "\u6bcf\u65e5\u5b66\u4e60\u62a5\u544a", "\u6bcf\u5929\u81ea\u52a8\u751f\u6210\u7b56\u7565\u590d\u76d8 Markdown\uff0c\u8bb0\u5f55\u76c8\u4e8f\u3001\u963b\u585e\u539f\u56e0\u3001\u5956\u52b1\u548c\u60e9\u7f5a\u5019\u9009")}
+          {number("simulation_trades_per_day", "\u6a21\u62df\u4ea4\u6613\u6b21\u6570/\u5929", "\u9ed8\u8ba4 3\uff1b\u7528\u4e8e\u4f30\u7b97\u6eda\u4ed3\u8def\u5f84\uff0c\u4e0d\u662f\u6536\u76ca\u4fdd\u8bc1")}
+          {number("simulation_fee_slippage_pct", "\u6a21\u62df\u624b\u7eed\u8d39\u6ed1\u70b9%", "\u9ed8\u8ba4 0.12%\uff1b\u7528\u4e8e\u9636\u6bb5\u6a21\u62df\u6263\u8d39")}
+          {number("simulation_start_equity", "\u6a21\u62df\u8d77\u59cb\u6743\u76ca", "\u9ed8\u8ba4 50U")}
           {toggle("dry_run", "模拟交易", "开启时不会真实下单")}
           {toggle("live_trading_enabled", "允许实盘交易", "还需要确认短语才会实盘")}
         </div>
@@ -857,6 +897,9 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("websocket_trigger_quote_volume_usdt", "实时触发成交额U", "默认 250000")}
 
           {toggle("dynamic_protection_enabled", "\u52a8\u6001\u4fdd\u62a4\u8ba1\u5212", "\u5f00\u542f\u540e\u4e0b\u5355\u524d\u751f\u6210\u7edf\u4e00\u4fdd\u62a4\u8ba1\u5212\uff1a\u521d\u59cb\u6b62\u76c8\u6b62\u635f\u3001\u5feb\u901f\u5931\u6548\u3001\u4fdd\u672c\u548c\u79fb\u52a8\u6b62\u76c8\u53c2\u6570\u90fd\u4f1a\u7559\u6863")}
+          {toggle("dynamic_protection_runtime_enabled", "\u8fd0\u884c\u65f6\u4fdd\u62a4\u68c0\u67e5", "\u6bcf\u8f6e\u626b\u63cf\u524d\u68c0\u67e5\u5df2\u6709\u6301\u4ed3\u662f\u5426\u89e6\u53d1\u5feb\u901f\u5931\u6548\u3001\u4fdd\u672c\u3001\u79fb\u52a8\u6b62\u76c8\u6216\u65f6\u95f4\u6b62\u635f")}
+          {toggle("dynamic_protection_runtime_trade_enabled", "\u8fd0\u884c\u65f6\u4fdd\u62a4\u5b9e\u76d8\u6267\u884c", "\u9ad8\u98ce\u9669\u5f00\u5173\uff1a\u5f00\u542f\u540e\u6ee1\u8db3\u5feb\u901f\u5931\u6548\u6216\u65f6\u95f4\u6b62\u635f\u4f1a\u81ea\u52a8\u5e73\u4ed3\uff0c\u9ed8\u8ba4\u5173\u95ed")}
+          {number("runtime_protection_max_hold_bars", "\u8fd0\u884c\u65f6\u6700\u5927\u6301\u4ed3K\u7ebf", "\u9ed8\u8ba4 12 \u6839\uff1b\u8d85\u8fc7\u4e14\u672a\u8fbe\u5230\u6263\u8d39\u540e\u5229\u6da6\u4f1a\u63d0\u793a\u65f6\u95f4\u6b62\u635f")}
           {number("protection_fast_invalid_seconds", "\u5feb\u901f\u5931\u6548\u89c2\u5bdf\u79d2\u6570", "\u9ed8\u8ba4 90 \u79d2\uff1b\u7a81\u7834\u540e\u5f88\u5feb\u53cd\u5411\u65f6\u7528\u4e8e\u540e\u7eed\u98ce\u63a7\u5347\u7ea7")}
           {number("protection_fast_invalid_atr", "\u5feb\u901f\u5931\u6548 ATR", "\u9ed8\u8ba4 0.35\uff1b\u4ef7\u683c\u53cd\u5411\u8d85\u8fc7\u8be5 ATR \u89c6\u4e3a\u4fe1\u53f7\u8d70\u5f31")}
           {number("protection_break_even_trigger_atr", "\u4fdd\u672c\u89e6\u53d1 ATR", "\u9ed8\u8ba4 0.55\uff1b\u76c8\u5229\u5230\u8be5\u8ddd\u79bb\u540e\uff0c\u540e\u7eed\u7248\u672c\u53ef\u628a\u4fdd\u62a4\u7ebf\u63a8\u5230\u6210\u672c\u9644\u8fd1")}

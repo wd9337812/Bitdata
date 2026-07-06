@@ -132,7 +132,14 @@ class TradingConfig(BaseModel):
     target_hard_floor_pct: float = Field(default=35.0, ge=0, le=100)
     target_critical_gap_pct: float = Field(default=35.0, ge=0, le=100)
     target_ahead_gap_pct: float = Field(default=15.0, ge=0, le=100)
+    daily_learning_report_enabled: bool = True
+    simulation_trades_per_day: float = Field(default=3.0, ge=0, le=200)
+    simulation_fee_slippage_pct: float = Field(default=0.12, ge=0, le=10)
+    simulation_start_equity: float = Field(default=50.0, ge=1, le=10_000_000)
     dynamic_protection_enabled: bool = True
+    dynamic_protection_runtime_enabled: bool = True
+    dynamic_protection_runtime_trade_enabled: bool = False
+    runtime_protection_max_hold_bars: int = Field(default=12, ge=1, le=500)
     protection_fast_invalid_seconds: int = Field(default=90, ge=0, le=3600)
     protection_fast_invalid_atr: float = Field(default=0.35, ge=0, le=10)
     protection_break_even_trigger_atr: float = Field(default=0.55, ge=0, le=20)

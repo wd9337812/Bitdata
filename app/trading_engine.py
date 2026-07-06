@@ -6,7 +6,7 @@ from typing import Any
 from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.grid import build_grid_orders, build_grid_plan
-from app.position_sizing import explain_position_sizing
+from app.position_sizing import explain_position_sizing, unified_position_sizing
 from app.protection import apply_initial_protection_to_signal, build_protection_plan
 from app.risk import assess_new_position, current_stage, equity_guard_status, live_trading_allowed, position_size_from_risk
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates, strategy_params_for_mode
@@ -385,6 +385,17 @@ def build_stage1_decision(
         final_risk_pct=float(active_mode["risk_pct"]),
         risk=risk_dict,
     )
+    unified_sizing = unified_position_sizing(
+        stage_base_risk=float((scan_candidate or {}).get("base_risk_pct") or (scan_candidate or {}).get("risk_pct") or active_mode["risk_pct"]),
+        candidate=scan_candidate,
+        guard=guard,
+        target=target,
+        risk_caps={
+            "max_notional": risk_dict.get("max_notional"),
+            "max_margin": risk_dict.get("max_margin"),
+            "max_risk_pct": active_mode["risk_pct"],
+        },
+    )
     return {
         "symbol": symbol,
         "action": f"OPEN_{direction}" if risk.allowed and quantity > 0 else "WAIT",
@@ -392,6 +403,7 @@ def build_stage1_decision(
         "signal": signal,
         "risk": risk_dict,
         "position_sizing": sizing,
+        "unified_position_sizing": unified_sizing,
         "quantity": quantity,
         "estimated_notional": quantity * float(signal["last_price"]),
         "mode": active_mode["mode"],
