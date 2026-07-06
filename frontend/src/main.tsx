@@ -437,6 +437,11 @@ function SignalExplain({ best }: { best?: any }) {
     return <div className="panel"><h2>当前策略解释</h2><p>还没有扫描结果。</p></div>;
   }
   const signal = best.signal || {};
+  const protection = best.protection_plan || signal.protection_plan || {};
+  const profile = signal.protection_profile || {};
+  const protectionLabel = protection.label || signal.entry_type_label || best.entry_type_label || "-";
+  const protectionStopAtr = protection.stop_atr ?? profile.stop_atr;
+  const protectionTakeAtr = protection.take_profit_atr ?? profile.take_profit_atr;
   return (
     <div className="panel signal-explain">
       <h2>当前策略解释</h2>
@@ -447,6 +452,10 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>综合评分</span><strong>{fmt(best.score, 2)}</strong></div>
         <div><span>离触发价</span><strong>{fmt(signal.distance_to_trigger_pct, 3)}%</strong></div>
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
+        <div><span>{"\u4fdd\u62a4\u6863\u6848"}</span><strong>{protectionLabel}</strong></div>
+        <div><span>{"\u6b62\u635f / \u6b62\u76c8 ATR"}</span><strong>{fmt(protectionStopAtr, 2)} / {fmt(protectionTakeAtr, 2)}</strong></div>
+        <div><span>{"\u521d\u59cb\u6b62\u635f"}</span><strong>{fmt(protection.initial_stop ?? signal.stop, 6)}</strong></div>
+        <div><span>{"\u521d\u59cb\u6b62\u76c8"}</span><strong>{fmt(protection.initial_take_profit ?? signal.take_profit, 6)}</strong></div>
       </div>
       <p>{best.decision_reason || signal.reason || best.reason || "等待下一轮扫描。"}</p>
     </div>
@@ -846,6 +855,15 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("websocket_trigger_enabled", "WebSocket 事件触发入场", "实时K线异动会进入下一轮扫描优先级")}
           {number("websocket_trigger_move_pct", "实时触发涨跌幅%", "默认 0.35")}
           {number("websocket_trigger_quote_volume_usdt", "实时触发成交额U", "默认 250000")}
+
+          {toggle("dynamic_protection_enabled", "\u52a8\u6001\u4fdd\u62a4\u8ba1\u5212", "\u5f00\u542f\u540e\u4e0b\u5355\u524d\u751f\u6210\u7edf\u4e00\u4fdd\u62a4\u8ba1\u5212\uff1a\u521d\u59cb\u6b62\u76c8\u6b62\u635f\u3001\u5feb\u901f\u5931\u6548\u3001\u4fdd\u672c\u548c\u79fb\u52a8\u6b62\u76c8\u53c2\u6570\u90fd\u4f1a\u7559\u6863")}
+          {number("protection_fast_invalid_seconds", "\u5feb\u901f\u5931\u6548\u89c2\u5bdf\u79d2\u6570", "\u9ed8\u8ba4 90 \u79d2\uff1b\u7a81\u7834\u540e\u5f88\u5feb\u53cd\u5411\u65f6\u7528\u4e8e\u540e\u7eed\u98ce\u63a7\u5347\u7ea7")}
+          {number("protection_fast_invalid_atr", "\u5feb\u901f\u5931\u6548 ATR", "\u9ed8\u8ba4 0.35\uff1b\u4ef7\u683c\u53cd\u5411\u8d85\u8fc7\u8be5 ATR \u89c6\u4e3a\u4fe1\u53f7\u8d70\u5f31")}
+          {number("protection_break_even_trigger_atr", "\u4fdd\u672c\u89e6\u53d1 ATR", "\u9ed8\u8ba4 0.55\uff1b\u76c8\u5229\u5230\u8be5\u8ddd\u79bb\u540e\uff0c\u540e\u7eed\u7248\u672c\u53ef\u628a\u4fdd\u62a4\u7ebf\u63a8\u5230\u6210\u672c\u9644\u8fd1")}
+          {number("protection_break_even_buffer_pct", "\u4fdd\u672c\u7f13\u51b2%", "\u9ed8\u8ba4 0.08%\uff1b\u8986\u76d6\u624b\u7eed\u8d39\u548c\u8f7b\u5fae\u6ed1\u70b9")}
+          {number("protection_trailing_trigger_atr", "\u79fb\u52a8\u6b62\u76c8\u89e6\u53d1 ATR", "\u9ed8\u8ba4 0.9\uff1b\u8dd1\u51fa\u5229\u6da6\u540e\u624d\u8003\u8651\u8ddf\u8e2a")}
+          {number("protection_trailing_distance_atr", "\u79fb\u52a8\u6b62\u76c8\u8ddd\u79bb ATR", "\u9ed8\u8ba4 0.55\uff1b\u8d8a\u5c0f\u8d8a\u5feb\u843d\u888b\uff0c\u8d8a\u5927\u8d8a\u7ed9\u8d8b\u52bf\u7a7a\u95f4")}
+          {number("protection_min_profit_after_cost_pct", "\u6263\u8d39\u540e\u6700\u4f4e\u5229\u6da6%", "\u9ed8\u8ba4 0.08%\uff1b\u907f\u514d\u5c0f\u76c8\u5229\u88ab\u624b\u7eed\u8d39\u5403\u6389")}
           {number("sprint_symbol_trade_score", "冲刺交易池分数", "默认 68")}
           {number("sprint_symbol_small_trade_score", "冲刺小仓交易分数", "默认 55")}
           {number("sprint_symbol_hot_observe_score", "冲刺热点观察分数", "默认 45，满足放量和盘口时可小仓试探")}

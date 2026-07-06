@@ -132,6 +132,14 @@ class TradingConfig(BaseModel):
     target_hard_floor_pct: float = Field(default=35.0, ge=0, le=100)
     target_critical_gap_pct: float = Field(default=35.0, ge=0, le=100)
     target_ahead_gap_pct: float = Field(default=15.0, ge=0, le=100)
+    dynamic_protection_enabled: bool = True
+    protection_fast_invalid_seconds: int = Field(default=90, ge=0, le=3600)
+    protection_fast_invalid_atr: float = Field(default=0.35, ge=0, le=10)
+    protection_break_even_trigger_atr: float = Field(default=0.55, ge=0, le=20)
+    protection_break_even_buffer_pct: float = Field(default=0.08, ge=0, le=5)
+    protection_trailing_trigger_atr: float = Field(default=0.9, ge=0, le=30)
+    protection_trailing_distance_atr: float = Field(default=0.55, ge=0, le=20)
+    protection_min_profit_after_cost_pct: float = Field(default=0.08, ge=0, le=10)
     growth_mode: str = "balanced"
     tournament_stop_equity: float = Field(default=30.0, ge=0)
     auto_risk_by_equity: bool = True

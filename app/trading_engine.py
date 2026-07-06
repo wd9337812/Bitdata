@@ -7,6 +7,7 @@ from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.grid import build_grid_orders, build_grid_plan
 from app.position_sizing import explain_position_sizing
+from app.protection import apply_initial_protection_to_signal, build_protection_plan
 from app.risk import assess_new_position, current_stage, equity_guard_status, live_trading_allowed, position_size_from_risk
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates, strategy_params_for_mode
 from app.state_store import save_state
@@ -304,6 +305,9 @@ def build_stage1_decision(
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "no_signal"}}
     if equity is None:
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "account_unavailable"}}
+    entry_type = (scan_candidate or {}).get("entry_type", signal.get("entry_type", "standard"))
+    protection_plan = build_protection_plan(signal, config, entry_type=entry_type, direction=direction)
+    signal = apply_initial_protection_to_signal(signal, protection_plan)
     guard = equity_guard_status(config, state, equity, active_mode["mode"])
     target = target_progress(config, state, account_summary)
     if not guard.get("allowed", True):
@@ -314,6 +318,7 @@ def build_stage1_decision(
             "risk": {"allowed": False, "reason": guard.get("reason", "equity_guard")},
             "equity_guard": guard,
             "target_progress": target,
+            "protection_plan": protection_plan,
             "mode": active_mode["mode"],
             "strategy": active_mode["strategy"],
         }
@@ -391,10 +396,11 @@ def build_stage1_decision(
         "estimated_notional": quantity * float(signal["last_price"]),
         "mode": active_mode["mode"],
         "strategy": active_mode["strategy"],
-        "entry_type": (scan_candidate or {}).get("entry_type", signal.get("entry_type", "standard")),
+        "entry_type": entry_type,
         "decision_reason": (scan_candidate or {}).get("decision_reason"),
         "equity_guard": guard,
         "target_progress": target,
+        "protection_plan": protection_plan,
         "risk_pct": active_mode["risk_pct"],
         "leverage": active_mode["leverage"],
     }
@@ -486,8 +492,15 @@ def execute_stage1_market_order(
     filters = ExchangeFilters(client.exchange_info())
     symbol = decision["symbol"]
     quantity = filters.quantity(symbol, float(decision["quantity"]))
-    stop = filters.price(symbol, float(decision["signal"]["stop"]))
-    take_profit = filters.price(symbol, float(decision["signal"]["take_profit"]))
+    protection_plan = decision.get("protection_plan") or (decision.get("signal") or {}).get("protection_plan") or {}
+    if protection_plan.get("enabled"):
+        stop_value = protection_plan.get("initial_stop", decision["signal"]["stop"])
+        take_profit_value = protection_plan.get("initial_take_profit", decision["signal"]["take_profit"])
+    else:
+        stop_value = decision["signal"]["stop"]
+        take_profit_value = decision["signal"]["take_profit"]
+    stop = filters.price(symbol, float(stop_value))
+    take_profit = filters.price(symbol, float(take_profit_value))
     entry_price = float(decision["signal"]["last_price"])
     notional = quantity * entry_price
     min_notional = filters.min_notional(symbol)
@@ -514,6 +527,7 @@ def execute_stage1_market_order(
         "stop": stop,
         "take_profit": take_profit,
         "notional": notional,
+        "protection_plan": protection_plan,
     }
     if quantity <= 0 or notional < min_notional:
         return {"mode": "blocked", "message": "Quantity is below exchange minimum.", "order": order}
