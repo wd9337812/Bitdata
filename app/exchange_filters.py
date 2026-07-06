@@ -40,14 +40,14 @@ class ExchangeFilters:
         lot = filters.get("LOT_SIZE", {})
         return round_step(quantity, lot.get("stepSize", "0.001"))
 
-    def min_quantity_for_notional(self, symbol: str, entry_price: float) -> float:
+    def min_quantity_for_notional(self, symbol: str, entry_price: float, buffer_pct: float = 0.0) -> float:
         if entry_price <= 0:
             return 0.0
         filters = self.filters_for(symbol)
         lot = filters.get("LOT_SIZE", {})
         step = lot.get("stepSize", "0.001")
         min_qty = float(lot.get("minQty", 0) or 0)
-        min_notional_qty = self.min_notional(symbol) / entry_price
+        min_notional_qty = self.min_notional(symbol) * (1 + max(float(buffer_pct), 0.0) / 100) / entry_price
         return ceil_step(max(min_qty, min_notional_qty), step)
 
     def price(self, symbol: str, price: float) -> float:

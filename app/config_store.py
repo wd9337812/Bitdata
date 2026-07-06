@@ -209,6 +209,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "equity_guard_multiplier_3": 0.20,
     "equity_guard_pause_drawdown_pct": 35.0,
     "extreme_equity_guard_pause_drawdown_pct": 40.0,
+    "min_order_notional_buffer_pct": 3.0,
     "max_drawdown_pct": 15.0,
     "max_consecutive_losses": 2,
     "cooldown_hours": 24,

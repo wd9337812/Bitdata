@@ -172,7 +172,7 @@ def test_execute_lifts_tiny_order_to_exchange_minimum_when_risk_cap_allows():
     )
 
     assert result["mode"] == "live"
-    assert ("MARKET", "SELL", 0.05, "SHORT") in client.orders
+    assert ("MARKET", "SELL", 0.052, "SHORT") in client.orders
 
 
 def test_execute_keeps_block_when_exchange_minimum_exceeds_risk_cap():

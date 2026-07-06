@@ -24,6 +24,11 @@ from app.state_store import load_state, save_state
 from app.telemetry import record_equity_snapshot, record_event, record_strategy_run
 
 
+def is_min_notional_rejection(exc: Exception) -> bool:
+    text = str(exc)
+    return "-4164" in text or "notional must be no smaller than" in text
+
+
 def loop_seconds_for(config: dict, mode: str | None) -> int:
     mode = mode or "balanced"
     return int(config.get(f"{mode}_loop_seconds", os.getenv("BOT_LOOP_SECONDS", "300")))
@@ -136,7 +141,22 @@ def run_once() -> dict:
         return {"status": "grid_checked", "results": results, "loop_seconds": int(config.get("grid_loop_seconds", 300))}
 
     decision = build_best_growth_decision(client, config, state, account)
-    result = execute_stage1_market_order(client, decision, config)
+    try:
+        result = execute_stage1_market_order(client, decision, config)
+    except RuntimeError as exc:
+        if not is_min_notional_rejection(exc):
+            raise
+        result = {
+            "mode": "blocked",
+            "message": "Exchange rejected order below minimum notional.",
+            "error": str(exc),
+        }
+        record_event(
+            "warning",
+            "order_min_notional",
+            "Binance 拒绝了低于最小名义金额的订单，本轮信号已跳过，机器人继续运行。",
+            {"decision": {"symbol": decision.get("symbol"), "action": decision.get("action")}, "error": str(exc)},
+        )
     if result.get("mode") in {"live", "rotation_live"} and decision.get("symbol"):
         cooldown_minutes = float(config.get("symbol_cooldown_minutes", 0))
         if config.get("directional_cooldown_enabled", True):

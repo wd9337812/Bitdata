@@ -474,9 +474,14 @@ def execute_stage1_market_order(
     entry_price = float(decision["signal"]["last_price"])
     notional = quantity * entry_price
     min_notional = filters.min_notional(symbol)
+    min_notional_with_buffer = min_notional * (1 + max(float(config.get("min_order_notional_buffer_pct", 3.0)), 0.0) / 100)
     max_notional = float((decision.get("risk") or {}).get("max_notional") or 0)
-    if 0 < notional < min_notional:
-        min_quantity = filters.min_quantity_for_notional(symbol, entry_price)
+    if 0 < notional < min_notional_with_buffer:
+        min_quantity = filters.min_quantity_for_notional(
+            symbol,
+            entry_price,
+            buffer_pct=float(config.get("min_order_notional_buffer_pct", 3.0)),
+        )
         min_quantity_notional = min_quantity * entry_price
         if min_quantity > quantity and (max_notional <= 0 or min_quantity_notional <= max_notional):
             quantity = min_quantity

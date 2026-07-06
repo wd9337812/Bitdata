@@ -186,6 +186,7 @@ class TradingConfig(BaseModel):
     equity_guard_multiplier_3: float = Field(default=0.20, ge=0, le=2)
     equity_guard_pause_drawdown_pct: float = Field(default=35.0, ge=0, le=100)
     extreme_equity_guard_pause_drawdown_pct: float = Field(default=40.0, ge=0, le=100)
+    min_order_notional_buffer_pct: float = Field(default=3.0, ge=0, le=20)
     max_drawdown_pct: float = Field(default=15.0, ge=1, le=80)
     max_consecutive_losses: int = Field(default=2, ge=1, le=20)
     cooldown_hours: int = Field(default=24, ge=1, le=168)
