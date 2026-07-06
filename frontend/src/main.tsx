@@ -26,7 +26,7 @@ import {
 import { api, fmt, modeLabel, stageLabel, statusLabel } from "./lib/api";
 import "./styles.css";
 
-type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; target_progress?: Record<string, any> };
+type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; opportunity_queue?: Record<string, any>; target_progress?: Record<string, any> };
 type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any; funnel?: any }; stage2_grid: any[]; auth_error?: string };
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
@@ -152,6 +152,7 @@ function App() {
   const state = status?.state || {};
   const config = status?.config || {};
   const stream = status?.market_stream || {};
+  const opportunityQueue = status?.opportunity_queue || {};
   const target = status?.target_progress || {};
 
   const chartData = useMemo(
@@ -312,7 +313,7 @@ function App() {
 
         {active === "scan" && (
           <section className="stack">
-            <ScanSummary funnel={funnel} candidates={candidates} stream={stream} />
+            <ScanSummary funnel={funnel} candidates={candidates} stream={stream} opportunityQueue={opportunityQueue} />
             <div className="panel">
               <div className="panel-head">
                 <div>
@@ -369,12 +370,14 @@ function App() {
   );
 }
 
-function ScanSummary({ funnel, candidates, stream }: { funnel: any; candidates: any[]; stream: any }) {
+function ScanSummary({ funnel, candidates, stream, opportunityQueue }: { funnel: any; candidates: any[]; stream: any; opportunityQueue: any }) {
   const passed = candidates.filter((item) => item.passed).length;
   const conclusion = passed > 0
     ? `发现 ${passed} 个可执行信号，系统会按风控选择最高优先级。`
     : "本轮暂无可执行开仓，系统继续盯盘等待触发。";
   const degraded = funnel?.rank?.degraded ? "本轮已按 VPS 时间预算自动降级，优先分析最高分币。" : "本轮未触发扫描降级。";
+  const queue = funnel?.opportunity_queue || {};
+  const queueSymbols = (queue.symbols || opportunityQueue.events?.map((item: any) => item.symbol) || []).slice(0, 6).join("、");
   return (
     <div className="panel">
       <div className="panel-head">
@@ -391,6 +394,7 @@ function ScanSummary({ funnel, candidates, stream }: { funnel: any; candidates: 
         <MetricCard title="WebSocket 状态" value={stream.connected ? "实时盯盘中" : "未连接"} sub={stream.last_error || `数据年龄 ${fmt(stream.age_seconds, 0)} 秒`} tone={stream.connected ? "positive" : "negative"} />
         <MetricCard title="实时订阅币数" value={`${fmt((stream.symbols || []).length, 0)} 个`} sub={`动态目标 ${fmt(stream.intent_count, 0)} 个`} />
         <MetricCard title="实时行情" value={`${fmt(stream.ticker_count, 0)} / ${fmt(stream.depth_count, 0)} / ${fmt(stream.kline_count, 0)}`} sub="Ticker / 盘口 / K线" />
+        <MetricCard title="事件队列" value={`${fmt(queue.count ?? opportunityQueue.active_count, 0)} 个`} sub={queueSymbols ? `热币：${queueSymbols}` : "等待 WebSocket 异动"} />
       </div>
     </div>
   );

@@ -13,6 +13,7 @@ import requests
 import websockets
 
 from app.binance_rate import after_response, before_request, estimate_weight
+from app.opportunity_queue import enqueue_opportunity
 
 
 _THREAD: threading.Thread | None = None
@@ -362,7 +363,8 @@ def _append_trigger_event(
         quote_volume = float(row[7])
     except (TypeError, ValueError, IndexError):
         return
-    move_pct = abs(close - open_price) / close * 100 if close else 0.0
+    signed_move_pct = (close - open_price) / close * 100 if close else 0.0
+    move_pct = abs(signed_move_pct)
     if move_pct < move_pct_threshold and quote_volume < quote_volume_threshold:
         return
     event = {
@@ -370,6 +372,8 @@ def _append_trigger_event(
         "interval": interval,
         "type": "kline_trigger",
         "move_pct": round(move_pct, 4),
+        "signed_move_pct": round(signed_move_pct, 4),
+        "direction_hint": "LONG" if signed_move_pct > 0 else "SHORT" if signed_move_pct < 0 else "",
         "quote_volume": round(quote_volume, 4),
         "updated_at": _now_iso(),
         "source": "websocket",
@@ -379,6 +383,17 @@ def _append_trigger_event(
         if not (item.get("symbol") == symbol and item.get("interval") == interval)
     ]
     state["triggers"] = [event] + existing[: max(0, max_events - 1)]
+    enqueue_opportunity(
+        symbol=symbol,
+        event_type="kline_trigger",
+        direction_hint=event["direction_hint"],
+        move_pct=signed_move_pct,
+        quote_volume=quote_volume,
+        interval=interval,
+        source="websocket",
+        features={"trigger_move_pct": move_pct_threshold, "trigger_quote_volume_usdt": quote_volume_threshold},
+        max_events=max_events,
+    )
 
 
 def _depth_from_event(data: dict[str, Any]) -> dict[str, Any]:

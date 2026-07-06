@@ -1555,6 +1555,105 @@ def test_scan_pipeline_coarse_rank_limits_expensive_klines(monkeypatch):
     assert len(result["candidates"]) == 2
 
 
+def test_scan_prioritizes_opportunity_queue_symbols(monkeypatch):
+    class FakeScanClient:
+        def __init__(self):
+            self.kline_symbols = []
+
+        def ticker_24h(self, symbols=None):
+            return [
+                {"symbol": "HOTUSDT", "lastPrice": "10", "quoteVolume": "900000000", "priceChangePercent": "18"},
+                {"symbol": "FASTUSDT", "lastPrice": "10", "quoteVolume": "50000000", "priceChangePercent": "1"},
+            ]
+
+        def klines_history(self, symbol, interval, days):
+            self.kline_symbols.append(symbol)
+            return [[i, 10, 10.4, 9.8, 10, 1000] for i in range(200)]
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["HOTUSDT", "FASTUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "read_opportunities",
+        lambda max_age_seconds=240, limit=50: [
+            {"symbol": "FASTUSDT", "score": 120, "event_type": "kline_trigger", "direction_hint": "LONG"}
+        ],
+    )
+    monkeypatch.setattr(scanner, "stream_triggers", lambda max_age_seconds=180, limit=40: [])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": "WAIT",
+            "strategy": strategy,
+            "last_price": 10.0,
+            "atr": 0.1,
+            "expected_profit_pct": 0.0,
+            "trend": True,
+            "volatility_ok": True,
+            "entry_type": "watch",
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG", params=None: {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 0,
+            "wins": 0,
+            "win_rate": 0,
+            "net_pct": 0,
+            "profit_factor": 0,
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "score_symbol_quality",
+        lambda symbol, bars, ticker, signal, backtests, depth, config, mode=None: {
+            "score": 10,
+            "pool": "observe",
+            "allowed": False,
+            "quality_risk_multiplier": 1.0,
+            "quality_risk_reasons": [],
+            "components": {},
+            "market_passed": False,
+            "simulation": {"passed": False},
+            "market": {"atr_pct": 1.0, "spread_pct": 0.02, "depth_notional": 50_000},
+        },
+    )
+
+    client = FakeScanClient()
+    result = scan_growth_candidates(
+        client,
+        {
+            "growth_mode": "tournament_sprint",
+            "auto_risk_by_equity": False,
+            "rank_pool_limit": 1,
+            "coarse_pool_limit": 2,
+            "recall_pool_limit": 2,
+            "auction_pool_limit": 0,
+            "depth_check_top_symbols": 0,
+            "opportunity_queue_enabled": True,
+            "opportunity_queue_score_weight": 1.0,
+            "tournament_sprint_interval": "5m",
+            "tournament_sprint_recent_days": 3,
+            "tournament_sprint_risk_per_trade_pct": 18,
+            "tournament_sprint_max_leverage": 5,
+            "tournament_sprint_max_symbol_margin_pct": 95,
+            "allow_short": False,
+            "estimated_slippage_pct": 0.04,
+        },
+        {"equity": 69},
+    )
+
+    assert client.kline_symbols == ["FASTUSDT"]
+    assert result["funnel"]["opportunity_queue"]["count"] == 1
+    assert result["funnel"]["coarse_top"][0]["symbol"] == "FASTUSDT"
+
+
 def test_scan_publishes_dynamic_stream_intent(monkeypatch):
     class FakeScanClient:
         def ticker_24h(self, symbols=None):

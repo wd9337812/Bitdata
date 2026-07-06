@@ -17,6 +17,7 @@ from app.config_store import load_config, save_config
 from app.live_learning import list_live_scores, sync_live_learning_from_binance
 from app.models import BotControlPayload, ExecutePayload, TradingConfig
 from app.market_stream import stream_status
+from app.opportunity_queue import opportunity_status
 from app.scanner import mode_config
 from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
@@ -141,6 +142,10 @@ def status() -> dict[str, Any]:
         "binance_rate": rate_status(),
         "cache": cache_status(),
         "market_stream": stream_status(),
+        "opportunity_queue": opportunity_status(
+            max_age_seconds=int(config.get("opportunity_queue_ttl_seconds", 240)),
+            limit=int(config.get("opportunity_queue_scan_limit", 50)),
+        ),
     }
 
 

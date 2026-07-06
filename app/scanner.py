@@ -9,6 +9,7 @@ from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.live_learning import apply_live_credit_to_candidate, list_live_scores
 from app.market_stream import stream_triggers, write_stream_intent
+from app.opportunity_queue import read_opportunities
 from app.strategy import StrategyParams, atr, ema
 
 
@@ -515,9 +516,11 @@ def _coarse_rank_symbols(
     tickers: dict[str, dict[str, Any]],
     config: dict[str, Any],
     mode: dict[str, Any],
+    opportunity_by_symbol: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
     limits = pipeline_limits(config, mode)
     manual = {symbol.upper() for symbol in config.get("stage1_symbols", [])}
+    opportunity_by_symbol = opportunity_by_symbol or {}
     min_volume = float(config.get("min_24h_volume_usdt", 0))
     rows: list[dict[str, Any]] = []
     for index, symbol in enumerate(symbols):
@@ -548,6 +551,10 @@ def _coarse_rank_symbols(
         if firecracker_score.get("is_firecracker"):
             reasons.append("firecracker")
             score += float(firecracker_score.get("score", 0)) * 0.25
+        opportunity = opportunity_by_symbol.get(symbol)
+        if opportunity:
+            reasons.append("event_queue")
+            score += float(opportunity.get("score") or 0) * float(config.get("opportunity_queue_score_weight", 0.35))
         rows.append(
             {
                 "symbol": symbol,
@@ -557,6 +564,7 @@ def _coarse_rank_symbols(
                 "last_price": last_price,
                 "reasons": reasons,
                 "firecracker": firecracker_score,
+                "opportunity_event": opportunity or {},
             }
         )
     if mode.get("mode") == "extreme_sprint" and config.get("extreme_v2_enabled", True):
@@ -1539,10 +1547,18 @@ def scan_growth_candidates(
     mode = mode_config(config, equity)
     limits = pipeline_limits(config, mode)
     symbols = discover_coin_symbols(client, config)
+    opportunity_events = read_opportunities(
+        max_age_seconds=int(config.get("opportunity_queue_ttl_seconds", 240)),
+        limit=int(config.get("opportunity_queue_scan_limit", 50)),
+    ) if config.get("opportunity_queue_enabled", True) else []
     trigger_events = stream_triggers(
         max_age_seconds=int(config.get("websocket_trigger_max_age_seconds", 180)),
         limit=int(config.get("websocket_trigger_scan_limit", 40)),
     ) if config.get("websocket_trigger_enabled", True) else []
+    for event in opportunity_events:
+        event_symbol = str(event.get("symbol") or "").upper()
+        if event_symbol and event_symbol not in symbols:
+            symbols.append(event_symbol)
     for event in trigger_events:
         trigger_symbol = str(event.get("symbol") or "").upper()
         if trigger_symbol and trigger_symbol not in symbols:
@@ -1554,11 +1570,18 @@ def scan_growth_candidates(
         funding_by_symbol = {item["symbol"]: item for item in client.premium_index(recalled_symbols)}
     except Exception:
         funding_by_symbol = {}
-    ranked_symbols, coarse_rows = _coarse_rank_symbols(recalled_symbols, tickers, config, mode)
+    opportunity_by_symbol = {str(event.get("symbol") or "").upper(): event for event in opportunity_events}
+    ranked_symbols, coarse_rows = _coarse_rank_symbols(recalled_symbols, tickers, config, mode, opportunity_by_symbol)
+    opportunity_symbols = [str(event.get("symbol") or "").upper() for event in opportunity_events]
     trigger_symbols = [str(event.get("symbol") or "").upper() for event in trigger_events]
     ranked_symbols = sorted(
         ranked_symbols,
-        key=lambda value: (value in trigger_symbols, -(trigger_symbols.index(value) if value in trigger_symbols else 999999)),
+        key=lambda value: (
+            value in opportunity_symbols,
+            value in trigger_symbols,
+            -(opportunity_symbols.index(value) if value in opportunity_symbols else 999999),
+            -(trigger_symbols.index(value) if value in trigger_symbols else 999999),
+        ),
         reverse=True,
     )
     fee_pct = StrategyParams().taker_fee * 2 * 100
@@ -2041,6 +2064,12 @@ def scan_growth_candidates(
             "blocked_reasons": blocked_reasons,
             "label": "极限V2",
         },
+        "opportunity_queue": {
+            "enabled": bool(config.get("opportunity_queue_enabled", True)),
+            "count": len(opportunity_events),
+            "symbols": opportunity_symbols[:20],
+            "label": "事件队列",
+        },
         "elapsed_seconds": round(time.perf_counter() - started_at, 3),
         "degrade_seconds": degrade_seconds,
         "coarse_top": _json_safe(coarse_rows[:20]),
@@ -2050,6 +2079,7 @@ def scan_growth_candidates(
         "symbols": processed_symbols,
         "ranked_symbols": ranked_symbols,
         "recalled_symbols": recalled_symbols,
+        "opportunity_events": _json_safe(opportunity_events[:20]),
         "funnel": _json_safe(funnel),
         "trade_pool": trade_pool,
         "observe_pool": observe_pool,

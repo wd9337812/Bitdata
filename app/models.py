@@ -29,6 +29,12 @@ class TradingConfig(BaseModel):
     stream_hot_symbols_limit: int = Field(default=25, ge=0, le=200)
     stream_include_positions: bool = True
     stream_include_live_credit: bool = True
+    opportunity_queue_enabled: bool = True
+    opportunity_queue_ttl_seconds: int = Field(default=240, ge=10, le=3600)
+    opportunity_queue_max_events: int = Field(default=120, ge=1, le=1000)
+    opportunity_queue_scan_limit: int = Field(default=50, ge=1, le=500)
+    opportunity_queue_score_weight: float = Field(default=0.35, ge=0, le=2)
+    opportunity_queue_min_score: float = Field(default=20.0, ge=0, le=200)
     symbol_trade_score: float = Field(default=75.0, ge=0, le=100)
     symbol_small_trade_score: float = Field(default=65.0, ge=0, le=100)
     symbol_observe_score: float = Field(default=50.0, ge=0, le=100)

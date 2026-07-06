@@ -142,17 +142,26 @@ def test_symbol_change_pct_counts_symmetric_difference():
 
 
 def test_kline_trigger_event_is_recorded_for_fast_move():
+    captured = {}
+    original = market_stream.enqueue_opportunity
+    market_stream.enqueue_opportunity = lambda **kwargs: captured.update(kwargs) or {"symbol": kwargs["symbol"]}
     state = {"triggers": []}
 
-    market_stream._append_trigger_event(
-        state,
-        "FASTUSDT",
-        "5m",
-        [1000, "10", "10.5", "9.9", "10.4", "100", 1999, "500000", 0, "0", "0", "0"],
-        move_pct_threshold=0.3,
-        quote_volume_threshold=250_000,
-        max_events=5,
-    )
+    try:
+        market_stream._append_trigger_event(
+            state,
+            "FASTUSDT",
+            "5m",
+            [1000, "10", "10.5", "9.9", "10.4", "100", 1999, "500000", 0, "0", "0", "0"],
+            move_pct_threshold=0.3,
+            quote_volume_threshold=250_000,
+            max_events=5,
+        )
+    finally:
+        market_stream.enqueue_opportunity = original
 
     assert state["triggers"][0]["symbol"] == "FASTUSDT"
     assert state["triggers"][0]["type"] == "kline_trigger"
+    assert state["triggers"][0]["direction_hint"] == "LONG"
+    assert captured["symbol"] == "FASTUSDT"
+    assert captured["direction_hint"] == "LONG"
