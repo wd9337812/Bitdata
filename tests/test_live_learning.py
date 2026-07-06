@@ -143,6 +143,84 @@ def test_quick_loss_cooldown_caps_risk_and_marks_bypass(monkeypatch):
     assert candidate["live_credit_adjustment"]["cooldown_bypass"] is True
 
 
+def test_extreme_probe_new_symbol_gets_small_risk_cap(monkeypatch):
+    monkeypatch.setattr(
+        "app.live_learning.live_score_for",
+        lambda symbol, direction, config: {
+            "enabled": True,
+            "score": 50,
+            "status": "new",
+            "status_label": "new",
+            "closed_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "consecutive_wins": 0,
+            "consecutive_losses": 0,
+            "penalty_until": None,
+            "commission": 0,
+            "net_pnl": 0,
+            "notes": [],
+        },
+    )
+
+    candidate = apply_live_credit_to_candidate(
+        {"symbol": "NEWUSDT", "direction": "LONG", "entry_type": "extreme_probe", "score": 100, "passed": True, "risk_pct": 6},
+        {
+            "live_credit_enabled": True,
+            "live_credit_multiplier_divisor": 50,
+            "live_credit_max_risk_multiplier": 2.0,
+            "live_credit_fuse_score": 2,
+            "extreme_probe_new_symbol_max_risk_pct": 2.2,
+        },
+    )
+
+    assert candidate["risk_pct"] == 2.2
+    assert any("new probe cap" in item for item in candidate["live_credit_adjustment"]["reasons"])
+
+
+def test_extreme_probe_after_loss_gets_extra_damping(monkeypatch):
+    penalty_until = (datetime.now(timezone.utc) + timedelta(minutes=30)).replace(microsecond=0).isoformat()
+    monkeypatch.setattr(
+        "app.live_learning.live_score_for",
+        lambda symbol, direction, config: {
+            "enabled": True,
+            "score": 45,
+            "status": "weak",
+            "status_label": "weak",
+            "closed_trades": 1,
+            "wins": 0,
+            "losses": 1,
+            "consecutive_wins": 0,
+            "consecutive_losses": 1,
+            "last_hold_seconds": 120,
+            "penalty_until": penalty_until,
+            "commission": 0.2,
+            "net_pnl": -0.5,
+            "notes": [],
+        },
+    )
+
+    candidate = apply_live_credit_to_candidate(
+        {"symbol": "LOSSUSDT", "direction": "SHORT", "entry_type": "extreme_probe", "score": 100, "passed": True, "risk_pct": 6},
+        {
+            "live_credit_enabled": True,
+            "live_credit_multiplier_divisor": 50,
+            "live_credit_max_risk_multiplier": 2.0,
+            "live_credit_fuse_score": 2,
+            "live_credit_loss_cooldown_cap": 0.60,
+            "live_credit_fee_pressure_enabled": True,
+            "live_credit_fee_pressure_ratio": 0.20,
+            "live_credit_fee_pressure_risk_multiplier": 0.75,
+            "extreme_probe_loss_risk_multiplier": 0.55,
+            "extreme_probe_after_loss_max_risk_pct": 1.2,
+        },
+    )
+
+    assert candidate["risk_pct"] <= 1.2
+    assert candidate["score"] < 100
+    assert any("probe after loss" in item for item in candidate["live_credit_adjustment"]["reasons"])
+
+
 def test_live_credit_natural_recovery_caps_at_default():
     old = int((datetime.now(timezone.utc) - timedelta(hours=24)).timestamp() * 1000)
 

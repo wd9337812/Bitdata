@@ -1702,6 +1702,19 @@ def scan_growth_candidates(
                                 float(mode["risk_pct"]) * float(config.get("extreme_probe_risk_multiplier", 0.22)) * quality_multiplier * float(derivatives.get("risk_multiplier", 1.0)) * float(spot_proxy.get("risk_multiplier", 1.0)),
                                 float(config.get("extreme_probe_max_risk_pct", 6.0)),
                             )
+                            if derivatives.get("enabled") and not derivatives.get("confirmed"):
+                                unconfirmed_mult = float(config.get("extreme_probe_unconfirmed_derivative_risk_multiplier", 0.55))
+                                risk_pct *= unconfirmed_mult
+                                risk_pct = min(
+                                    risk_pct,
+                                    float(config.get("extreme_probe_unconfirmed_derivative_max_risk_pct", 1.5)),
+                                )
+                                risk_adjustment = {
+                                    "type": "extreme_probe_unconfirmed_derivatives",
+                                    "multiplier": unconfirmed_mult,
+                                    "max_risk_pct": float(config.get("extreme_probe_unconfirmed_derivative_max_risk_pct", 1.5)),
+                                    "derivatives": derivatives,
+                                }
                             if market_state.get("state") == "chop":
                                 risk_pct *= 0.8
                             decision_reason = "极限V2火药桶小仓试探：放量/异动满足，先用小仓积累机会"

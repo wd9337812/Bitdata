@@ -568,6 +568,16 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
         candidate["score"] = round(float(candidate["score"]) - float(config.get("live_credit_tail_score_penalty", 3.0)), 4)
         reasons.append(f"连续盈利后防追尾，仓位乘以 {tail_mult:.2f}x")
 
+    if config.get("live_credit_fee_pressure_enabled", True):
+        commission = abs(float(credit.get("commission") or 0))
+        net_pnl = float(credit.get("net_pnl") or 0)
+        fee_ratio = commission / max(abs(net_pnl), 0.0001) if net_pnl < 0 and commission > 0 else 0.0
+        if fee_ratio >= float(config.get("live_credit_fee_pressure_ratio", 0.20)):
+            fee_mult = float(config.get("live_credit_fee_pressure_risk_multiplier", 0.75))
+            multiplier *= fee_mult
+            candidate["score"] = round(float(candidate["score"]) - min(8.0, fee_ratio * 4.0), 4)
+            reasons.append(f"fee pressure {fee_ratio:.2f}x, risk {fee_mult:.2f}x")
+
     bypass_allowed = False
     if cooldown["active"]:
         reasons.append(f"冷却倍率上限 {cooldown['cap']:.2f}x，冷却到 {credit.get('penalty_until')}")
@@ -586,6 +596,23 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
         candidate["decision_reason"] = "实盘信用接近 0 分，熔断等待自然恢复"
     else:
         candidate["risk_pct"] = float(candidate.get("risk_pct") or 0) * multiplier
+        if str(candidate.get("entry_type") or "") == "extreme_probe":
+            closed = int(credit.get("closed_trades") or 0)
+            losses = int(credit.get("losses") or 0)
+            if closed <= 0:
+                cap = float(config.get("extreme_probe_new_symbol_max_risk_pct", 2.2))
+                if candidate["risk_pct"] > cap:
+                    candidate["risk_pct"] = cap
+                    reasons.append(f"new probe cap {cap:.2f}%")
+            if losses > 0 or cooldown["active"]:
+                loss_mult = float(config.get("extreme_probe_loss_risk_multiplier", 0.55))
+                candidate["risk_pct"] *= loss_mult
+                cap = float(config.get("extreme_probe_after_loss_max_risk_pct", 1.2))
+                if candidate["risk_pct"] > cap:
+                    candidate["risk_pct"] = cap
+                candidate["score"] = round(float(candidate["score"]) - min(10.0, 3.0 + losses * 2.0), 4)
+                reasons.append(f"probe after loss {loss_mult:.2f}x, cap {cap:.2f}%")
+            candidate["risk_pct"] = round(float(candidate["risk_pct"]), 8)
         reasons.append(f"仓位倍率 {multiplier:.2f}x")
         if not candidate.get("decision_reason"):
             candidate["decision_reason"] = "；".join(reasons)
