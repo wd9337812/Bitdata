@@ -828,6 +828,22 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
                 {number("observe_breakout_min_quality", "观察池试单质量分", "默认 78")}
                 {number("observe_breakout_min_cost_ratio", "观察池试单成本比", "默认 20")}
                 {number("observe_breakout_risk_multiplier", "观察池试单仓位折扣", "默认 0.22")}
+                {toggle("weak_quality_probe_enabled", "开启弱质量试探", "极限模式下，候选分强但质量仍在观察池时，用更小仓位获取实盘样本")}
+                {number("weak_quality_probe_min_candidate_score", "弱质量试探最低候选分", "默认 95；必须是很强的候选信号")}
+                {number("weak_quality_probe_min_quality_score", "弱质量试探最低质量分", "默认 58；比正式交易池低，但不能太差")}
+                {number("weak_quality_probe_min_cost_ratio", "弱质量试探最低成本比", "默认 12；确保手续费和滑点后仍有空间")}
+                {number("weak_quality_probe_min_profit_factor", "弱质量试探最低 PF", "默认 0.55；低于此值代表历史表现太弱")}
+                {number("weak_quality_probe_min_net_pct", "弱质量试探最低净收益%", "默认 -8；允许小亏历史，但不能持续失血")}
+                {number("weak_quality_probe_min_depth_notional_usdt", "弱质量试探最低盘口深度U", "默认 300；盘口太薄不试")}
+                {number("weak_quality_probe_max_spread_pct", "弱质量试探最大点差%", "默认 0.12；点差过大不试")}
+                {number("weak_quality_probe_base_multiplier", "弱质量试探基础仓位倍率", "默认 0.18；弱观察质量的小仓测试")}
+                {number("weak_quality_probe_mid_quality_score", "弱质量试探中档质量分", "默认 65")}
+                {number("weak_quality_probe_mid_multiplier", "弱质量试探中档仓位倍率", "默认 0.25")}
+                {number("weak_quality_probe_high_quality_score", "弱质量试探高档质量分", "默认 72")}
+                {number("weak_quality_probe_high_multiplier", "弱质量试探高档仓位倍率", "默认 0.35")}
+                {number("weak_quality_probe_stop_atr", "弱质量试探止损 ATR", "默认 0.55；试错更快")}
+                {number("weak_quality_probe_take_profit_atr", "弱质量试探止盈 ATR", "默认 0.75；有利润先落袋")}
+                {number("weak_quality_probe_max_hold_bars", "弱质量试探最多K线", "默认 3 根 5m K线；久不动就不恋战")}
                 {number("observe_low_price_threshold", "低价币阈值", "低于该价格会再次降仓，默认 0.01")}
                 {number("observe_low_price_risk_multiplier", "低价币仓位折扣", "默认 0.75")}
                 {number("observe_high_atr_pct", "高波动 ATR%", "超过该值会再次降仓，默认 3")}

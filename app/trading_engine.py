@@ -66,14 +66,14 @@ def rotation_candidate_type(candidate: dict[str, Any] | None) -> str:
     if not candidate:
         return "unknown"
     entry_type = str(candidate.get("entry_type") or "").lower()
-    if entry_type in {"extreme_probe", "preemptive", "momentum", "small_standard", "observe_standard"}:
+    if entry_type in {"extreme_probe", "weak_quality_probe", "preemptive", "momentum", "small_standard", "observe_standard"}:
         return entry_type
     return "standard"
 
 
 def rotation_required_delta(config: dict[str, Any], mode: str, current_pnl_pct: float, current_type: str) -> float:
     base = float(config.get(f"{mode}_rotation_min_score_delta", config.get("rotation_min_score_delta", 12.0)))
-    if current_type in {"extreme_probe", "preemptive", "momentum", "small_standard", "observe_standard"}:
+    if current_type in {"extreme_probe", "weak_quality_probe", "preemptive", "momentum", "small_standard", "observe_standard"}:
         return min(base, float(config.get("rotation_probe_min_score_delta", 8.0)))
     if current_pnl_pct >= 0:
         return max(base, float(config.get("rotation_profit_min_score_delta", 25.0)))

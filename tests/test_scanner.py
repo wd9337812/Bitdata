@@ -760,6 +760,225 @@ def test_observe_high_score_standard_breakout_uses_discount_risk(monkeypatch):
     assert "观察池高分标准突破" in best["decision_reason"]
 
 
+def test_extreme_weak_quality_probe_allows_small_live_sample(monkeypatch):
+    class FakeScanClient:
+        def exchange_info(self):
+            return {
+                "symbols": [
+                    {
+                        "symbol": "HMSTRUSDT",
+                        "filters": [
+                            {"filterType": "LOT_SIZE", "stepSize": "1", "minQty": "1"},
+                            {"filterType": "MIN_NOTIONAL", "notional": "5"},
+                        ],
+                    }
+                ]
+            }
+
+        def ticker_24h(self, symbols=None):
+            return [{"symbol": "HMSTRUSDT", "lastPrice": "0.01", "quoteVolume": "120000000", "priceChangePercent": "-12"}]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 0.01, 0.0106, 0.0095, 0.01, 100000] for i in range(300)]
+
+        def depth(self, symbol, limit=5):
+            return {"bids": [["0.00999", "80000"]], "asks": [["0.01000", "80000"]]}
+
+        def funding_rate(self, symbol):
+            return {"lastFundingRate": "0.00001"}
+
+        def open_interest(self, symbol):
+            return {"openInterest": "1000000"}
+
+        def open_interest_hist(self, symbol, period="5m", limit=2):
+            return [{"sumOpenInterest": "1000000"}, {"sumOpenInterest": "1010000"}]
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["HMSTRUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 0.01,
+            "atr": 0.001,
+            "stop": 0.01055 if direction == "SHORT" else 0.00945,
+            "take_profit": 0.00925 if direction == "SHORT" else 0.01075,
+            "expected_profit_pct": 7.5,
+            "trend": True,
+            "volatility_ok": True,
+            "entry_type": "standard",
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG", params=None: {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 20,
+            "wins": 9,
+            "win_rate": 42.9,
+            "net_pct": -6.05,
+            "profit_factor": 0.58,
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "score_symbol_quality",
+        lambda symbol, bars, ticker, signal, backtests, depth, config, mode=None: {
+            "score": 62.93,
+            "pool": "observe",
+            "allowed": False,
+            "quality_risk_multiplier": 1.0,
+            "quality_risk_reasons": [],
+            "simulation": {"passed": False},
+            "market": {"atr_pct": 2.0, "spread_pct": 0.05, "depth_notional": 800},
+        },
+    )
+
+    result = scan_growth_candidates(
+        FakeScanClient(),
+        {
+            "growth_mode": "extreme_sprint",
+            "auto_risk_by_equity": False,
+            "extreme_sprint_enabled": True,
+            "extreme_sprint_confirmation": "ENABLE_EXTREME_SPRINT",
+            "extreme_v2_enabled": True,
+            "extreme_sprint_interval": "5m",
+            "extreme_sprint_recent_days": 2,
+            "extreme_sprint_risk_per_trade_pct": 28,
+            "extreme_sprint_max_leverage": 8,
+            "extreme_sprint_max_symbol_margin_pct": 98,
+            "allow_short": True,
+            "quality_backtest_days": [3, 5],
+            "estimated_slippage_pct": 0.04,
+            "weak_quality_probe_enabled": True,
+            "weak_quality_probe_min_candidate_score": 60,
+            "weak_quality_probe_min_quality_score": 58,
+            "weak_quality_probe_min_cost_ratio": 12,
+            "weak_quality_probe_min_profit_factor": 0.55,
+            "weak_quality_probe_min_net_pct": -8,
+            "weak_quality_probe_min_depth_notional_usdt": 300,
+            "weak_quality_probe_max_spread_pct": 0.12,
+        },
+        {"equity": 50},
+    )
+
+    best = result["candidates"][0]
+    assert best["passed"] is True
+    assert best["entry_type"] == "weak_quality_probe"
+    assert best["signal"]["entry_type_label"] == "弱质量试探"
+    assert best["v2_tier"] == "试探"
+    assert best["risk_adjustment"]["type"] == "weak_quality_probe"
+    assert best["risk_pct"] < 5
+
+
+def test_extreme_weak_quality_probe_blocks_bad_pf(monkeypatch):
+    class FakeScanClient:
+        def exchange_info(self):
+            return {"symbols": [{"symbol": "BADUSDT", "filters": [{"filterType": "LOT_SIZE", "stepSize": "1"}, {"filterType": "MIN_NOTIONAL", "notional": "5"}]}]}
+
+        def ticker_24h(self, symbols=None):
+            return [{"symbol": "BADUSDT", "lastPrice": "0.01", "quoteVolume": "120000000", "priceChangePercent": "-12"}]
+
+        def klines_history(self, symbol, interval, days):
+            return [[i, 0.01, 0.0106, 0.0095, 0.01, 100000] for i in range(300)]
+
+        def depth(self, symbol, limit=5):
+            return {"bids": [["0.00999", "80000"]], "asks": [["0.01000", "80000"]]}
+
+        def funding_rate(self, symbol):
+            return {"lastFundingRate": "0.00001"}
+
+        def open_interest(self, symbol):
+            return {"openInterest": "1000000"}
+
+        def open_interest_hist(self, symbol, period="5m", limit=2):
+            return [{"sumOpenInterest": "1000000"}, {"sumOpenInterest": "1010000"}]
+
+    monkeypatch.setattr(scanner, "discover_coin_symbols", lambda client, config: ["BADUSDT"])
+    monkeypatch.setattr(
+        scanner,
+        "latest_strategy_signal",
+        lambda symbol, bars, strategy, params=None, direction="LONG": {
+            "symbol": symbol,
+            "signal": direction,
+            "strategy": strategy,
+            "last_price": 0.01,
+            "atr": 0.001,
+            "stop": 0.01055,
+            "take_profit": 0.00925,
+            "expected_profit_pct": 7.5,
+            "trend": True,
+            "volatility_ok": True,
+            "entry_type": "standard",
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "backtest_strategy",
+        lambda symbol, bars, strategy, days, direction="LONG", params=None: {
+            "symbol": symbol,
+            "strategy": strategy,
+            "direction": direction,
+            "days": days,
+            "trades": 20,
+            "wins": 5,
+            "win_rate": 25,
+            "net_pct": -6.0,
+            "profit_factor": 0.3,
+        },
+    )
+    monkeypatch.setattr(
+        scanner,
+        "score_symbol_quality",
+        lambda symbol, bars, ticker, signal, backtests, depth, config, mode=None: {
+            "score": 62.93,
+            "pool": "observe",
+            "allowed": False,
+            "quality_risk_multiplier": 1.0,
+            "quality_risk_reasons": [],
+            "simulation": {"passed": False},
+            "market": {"atr_pct": 2.0, "spread_pct": 0.05, "depth_notional": 800},
+        },
+    )
+
+    result = scan_growth_candidates(
+        FakeScanClient(),
+        {
+            "growth_mode": "extreme_sprint",
+            "auto_risk_by_equity": False,
+            "extreme_sprint_enabled": True,
+            "extreme_sprint_confirmation": "ENABLE_EXTREME_SPRINT",
+            "extreme_v2_enabled": True,
+            "extreme_sprint_interval": "5m",
+            "extreme_sprint_recent_days": 2,
+            "extreme_sprint_risk_per_trade_pct": 28,
+            "extreme_sprint_max_leverage": 8,
+            "extreme_sprint_max_symbol_margin_pct": 98,
+            "allow_short": True,
+            "quality_backtest_days": [3, 5],
+            "estimated_slippage_pct": 0.04,
+            "weak_quality_probe_enabled": True,
+            "weak_quality_probe_min_candidate_score": 60,
+            "weak_quality_probe_min_quality_score": 58,
+            "weak_quality_probe_min_cost_ratio": 12,
+            "weak_quality_probe_min_profit_factor": 0.55,
+            "weak_quality_probe_min_net_pct": -8,
+        },
+        {"equity": 50},
+    )
+
+    best = result["candidates"][0]
+    assert best["passed"] is False
+    assert best["entry_type"] != "weak_quality_probe"
+    assert "弱质量试探未通过" in best["decision_reason"]
+
+
 def test_observe_breakout_reduces_risk_after_consecutive_live_losses(monkeypatch):
     class FakeScanClient:
         api_key = "key"

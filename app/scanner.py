@@ -152,7 +152,7 @@ def strategy_params_for_mode(
     mode_name = str(mode.get("mode") if isinstance(mode, dict) else mode)
     if mode_name not in {"tournament_sprint", "extreme_sprint"}:
         return None
-    entry_key = "momentum" if entry_type == "momentum" else "preemptive" if entry_type in {"preemptive", "extreme_probe"} else "standard"
+    entry_key = "momentum" if entry_type == "momentum" else "preemptive" if entry_type in {"preemptive", "extreme_probe", "weak_quality_probe"} else "standard"
     if mode_name == "extreme_sprint":
         defaults = {
             "standard": (0.75, 1.05, 4),
@@ -167,6 +167,13 @@ def strategy_params_for_mode(
         }
     default_stop, default_take, default_hold = defaults[entry_key]
     prefix = "extreme_sprint" if mode_name == "extreme_sprint" else "tournament_sprint"
+    if mode_name == "extreme_sprint" and entry_type == "weak_quality_probe":
+        return StrategyParams(
+            stop_atr=float(config.get("weak_quality_probe_stop_atr", 0.55)),
+            take_profit_atr=float(config.get("weak_quality_probe_take_profit_atr", 0.75)),
+            max_hold_bars=int(config.get("weak_quality_probe_max_hold_bars", 3)),
+            min_atr_pct=0.006,
+        )
     return StrategyParams(
         stop_atr=float(config.get(f"{prefix}_{entry_key}_stop_atr", default_stop)),
         take_profit_atr=float(config.get(f"{prefix}_{entry_key}_take_profit_atr", default_take)),
@@ -1334,6 +1341,73 @@ def observe_breakout_risk_adjustment(
     return {"multiplier": multiplier, "reasons": reasons, "live_losses": live_losses}
 
 
+def weak_quality_probe_allows_entry(
+    candidate_score: float,
+    quality: dict[str, Any],
+    recent: dict[str, Any],
+    signal: dict[str, Any],
+    cost_ratio: float,
+    depth: dict[str, Any],
+    config: dict[str, Any],
+    mode: dict[str, Any],
+) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    if not config.get("weak_quality_probe_enabled", True):
+        return False, ["弱质量试探未开启"]
+    if mode.get("mode") != "extreme_sprint":
+        return False, ["仅极限冲刺启用"]
+    if quality.get("pool") not in {"observe", "observe_hot"}:
+        return False, [f"质量池不是观察池({quality.get('pool')})"]
+    if signal.get("signal") not in {"LONG", "SHORT"}:
+        return False, ["没有真实突破信号"]
+    checks = [
+        (candidate_score >= float(config.get("weak_quality_probe_min_candidate_score", 95.0)), "候选分不足"),
+        (float(quality.get("score", 0)) >= float(config.get("weak_quality_probe_min_quality_score", 58.0)), "质量分不足"),
+        (cost_ratio >= float(config.get("weak_quality_probe_min_cost_ratio", 12.0)), "成本比不足"),
+        (float(recent.get("profit_factor", 0)) >= float(config.get("weak_quality_probe_min_profit_factor", 0.55)), "PF过低"),
+        (float(recent.get("net_pct", 0)) >= float(config.get("weak_quality_probe_min_net_pct", -8.0)), "净收益过低"),
+        (float(depth.get("spread_pct", 999)) <= float(config.get("weak_quality_probe_max_spread_pct", 0.12)), "点差过大"),
+        (float(depth.get("depth_notional", 0)) >= float(config.get("weak_quality_probe_min_depth_notional_usdt", 300.0)), "盘口深度不足"),
+    ]
+    for passed, reason in checks:
+        if not passed:
+            reasons.append(reason)
+    return not reasons, reasons
+
+
+def weak_quality_probe_risk_adjustment(
+    quality: dict[str, Any],
+    recent: dict[str, Any],
+    depth: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    quality_score = float(quality.get("score", 0) or 0)
+    if quality_score >= float(config.get("weak_quality_probe_high_quality_score", 72.0)):
+        multiplier = float(config.get("weak_quality_probe_high_multiplier", 0.35))
+        tier = "高观察质量"
+    elif quality_score >= float(config.get("weak_quality_probe_mid_quality_score", 65.0)):
+        multiplier = float(config.get("weak_quality_probe_mid_multiplier", 0.25))
+        tier = "中观察质量"
+    else:
+        multiplier = float(config.get("weak_quality_probe_base_multiplier", 0.18))
+        tier = "弱观察质量"
+    reasons = [f"{tier} {quality_score:.2f}，基础倍率 {multiplier:.2f}x"]
+    if float(recent.get("profit_factor", 0)) < 0.8:
+        pf_mult = float(config.get("weak_quality_probe_low_pf_multiplier", 0.7))
+        multiplier *= pf_mult
+        reasons.append(f"PF偏低折扣 {pf_mult:.2f}x")
+    if float(recent.get("net_pct", 0)) < 0:
+        net_mult = float(config.get("weak_quality_probe_negative_net_multiplier", 0.8))
+        multiplier *= net_mult
+        reasons.append(f"回测净收益为负折扣 {net_mult:.2f}x")
+    min_depth = float(config.get("weak_quality_probe_min_depth_notional_usdt", 300.0))
+    if min_depth > 0 and float(depth.get("depth_notional", 0)) < min_depth * 2:
+        depth_mult = float(config.get("weak_quality_probe_weak_depth_multiplier", 0.7))
+        multiplier *= depth_mult
+        reasons.append(f"盘口深度偏弱折扣 {depth_mult:.2f}x")
+    return {"type": "weak_quality_probe", "multiplier": round(multiplier, 6), "reasons": reasons}
+
+
 def backtest_strategy(
     symbol: str,
     bars: list[list[Any]],
@@ -1661,6 +1735,45 @@ def scan_growth_candidates(
                         decision_reason = "观察池高分标准突破，允许折扣仓位试单" if passed else "观察池标准突破评分不足"
                     else:
                         decision_reason = f"币种质量未达实盘准入：{quality['pool']}，评分 {quality['score']}"
+                if signal.get("signal") == direction and not passed and not quality["allowed"]:
+                    weak_allowed, weak_reasons = weak_quality_probe_allows_entry(
+                        score,
+                        quality,
+                        recent,
+                        signal,
+                        cost_ratio,
+                        depth,
+                        config,
+                        mode,
+                    )
+                    if weak_allowed:
+                        entry_type = "weak_quality_probe"
+                        passed = True
+                        params = strategy_params_for_mode(config, mode, "weak_quality_probe")
+                        weak_signal = latest_strategy_signal(
+                            symbol,
+                            bars,
+                            mode["strategy"],
+                            params=params,
+                            direction=direction,
+                        )
+                        if weak_signal.get("signal") == direction:
+                            signal = weak_signal
+                            expected_profit_pct = float(signal.get("expected_profit_pct") or 0)
+                            cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
+                        signal["entry_type"] = "weak_quality_probe"
+                        signal["entry_type_label"] = "弱质量试探"
+                        if params:
+                            signal["protection_profile"] = {
+                                "stop_atr": params.stop_atr,
+                                "take_profit_atr": params.take_profit_atr,
+                                "max_hold_bars": params.max_hold_bars,
+                            }
+                        risk_adjustment = weak_quality_probe_risk_adjustment(quality, recent, depth, config)
+                        risk_pct = float(mode["risk_pct"]) * float(risk_adjustment["multiplier"])
+                        decision_reason = "弱质量试探：候选信号强，但币种质量仍在观察池；使用小仓位获取实盘样本；" + "；".join(risk_adjustment["reasons"])
+                    elif weak_reasons:
+                        decision_reason += "；弱质量试探未通过：" + "；".join(weak_reasons[:3])
                 preemptive_enabled = mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint"} and config.get("preemptive_entries_enabled", True)
                 if (
                     not passed
@@ -1777,12 +1890,19 @@ def scan_growth_candidates(
                         decision_reason = "、".join(misses) or "等待触发"
 
                 extreme_risk_multiplier = 1.0
-                if mode["mode"] == "extreme_sprint" and passed and entry_type != "extreme_probe":
+                if mode["mode"] == "extreme_sprint" and passed and entry_type not in {"extreme_probe", "weak_quality_probe"}:
                     if score >= float(config.get("extreme_sprint_super_score", 135.0)):
                         extreme_risk_multiplier = float(config.get("extreme_sprint_super_risk_multiplier", 1.75))
                     elif score >= float(config.get("extreme_sprint_high_score", 110.0)):
                         extreme_risk_multiplier = float(config.get("extreme_sprint_high_risk_multiplier", 1.35))
                     risk_pct *= extreme_risk_multiplier
+                v2_tier = (
+                    "冲刺"
+                    if passed and entry_type in {"standard", "small_standard", "adaptive_live_standard"}
+                    else "试探"
+                    if entry_type in {"extreme_probe", "weak_quality_probe"}
+                    else "观察"
+                )
 
                 candidate = {
                         "symbol": symbol,
@@ -1803,7 +1923,7 @@ def scan_growth_candidates(
                         "derivatives": derivatives,
                         "spot_proxy": spot_proxy,
                         "squeeze": squeeze,
-                        "v2_tier": "冲刺" if passed and entry_type in {"standard", "small_standard", "adaptive_live_standard"} else "试探" if entry_type == "extreme_probe" else "观察",
+                        "v2_tier": v2_tier,
                         "depth_checked": depth.get("reason") != "depth_not_checked",
                         "simulation_passed": quality["simulation"]["passed"],
                         "current_score": round(current_score, 2),
@@ -1865,7 +1985,7 @@ def scan_growth_candidates(
         candidate
         for candidate in candidates
         if candidate.get("symbol_quality", {}).get("pool") in {"trade", "small_trade", "adaptive_live", "observe_hot"}
-        or candidate.get("entry_type") == "extreme_probe"
+        or candidate.get("entry_type") in {"extreme_probe", "weak_quality_probe"}
     ][: int(config.get("max_trade_pool_symbols", 15))]
     observe_pool = [
         candidate
@@ -1873,8 +1993,8 @@ def scan_growth_candidates(
         if candidate.get("symbol_quality", {}).get("pool") == "observe"
     ][:max_candidates]
     firecracker_count = sum(1 for candidate in candidates if candidate.get("firecracker", {}).get("is_firecracker"))
-    probe_count = sum(1 for candidate in candidates if candidate.get("entry_type") == "extreme_probe")
-    sprint_count = sum(1 for candidate in candidates if candidate.get("passed") and candidate.get("entry_type") != "extreme_probe")
+    probe_count = sum(1 for candidate in candidates if candidate.get("entry_type") in {"extreme_probe", "weak_quality_probe"})
+    sprint_count = sum(1 for candidate in candidates if candidate.get("passed") and candidate.get("entry_type") not in {"extreme_probe", "weak_quality_probe"})
     blocked_reasons: dict[str, int] = {}
     for candidate in candidates:
         if candidate.get("passed"):
