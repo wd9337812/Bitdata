@@ -62,6 +62,55 @@ def find_position_scan_candidate(position: dict[str, Any], candidates: list[dict
     return None
 
 
+def rotation_candidate_type(candidate: dict[str, Any] | None) -> str:
+    if not candidate:
+        return "unknown"
+    entry_type = str(candidate.get("entry_type") or "").lower()
+    if entry_type in {"extreme_probe", "preemptive", "momentum", "small_standard", "observe_standard"}:
+        return entry_type
+    return "standard"
+
+
+def rotation_required_delta(config: dict[str, Any], mode: str, current_pnl_pct: float, current_type: str) -> float:
+    base = float(config.get(f"{mode}_rotation_min_score_delta", config.get("rotation_min_score_delta", 12.0)))
+    if current_type in {"extreme_probe", "preemptive", "momentum", "small_standard", "observe_standard"}:
+        return min(base, float(config.get("rotation_probe_min_score_delta", 8.0)))
+    if current_pnl_pct >= 0:
+        return max(base, float(config.get("rotation_profit_min_score_delta", 25.0)))
+    if abs(current_pnl_pct) >= float(config.get("rotation_small_loss_pct", 0.5)):
+        return min(base, float(config.get("rotation_loss_min_score_delta", 8.0)))
+    return base
+
+
+def rotation_cost_metrics(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, float]:
+    expected_profit_pct = float(candidate.get("expected_profit_pct") or 0.0)
+    fallback_cost_ratio = float(candidate.get("cost_ratio") or 0.0)
+    estimated_cost_pct = float(candidate.get("estimated_cost_pct") or 0.0)
+    if expected_profit_pct <= 0 and fallback_cost_ratio > 0:
+        return {
+            "expected_profit_pct": 0.0,
+            "estimated_new_trade_cost_pct": 0.0,
+            "extra_close_cost_pct": round(float(config.get("rotation_extra_close_cost_pct", 0.08)), 6),
+            "total_rotation_cost_pct": 0.0,
+            "rotation_cost_ratio": round(fallback_cost_ratio, 6),
+        }
+    if estimated_cost_pct <= 0:
+        if fallback_cost_ratio > 0:
+            estimated_cost_pct = expected_profit_pct / fallback_cost_ratio if expected_profit_pct > 0 else 0.0
+    if estimated_cost_pct <= 0:
+        estimated_cost_pct = float(config.get("estimated_slippage_pct", 0.04)) + 0.08
+    extra_close_cost_pct = float(config.get("rotation_extra_close_cost_pct", 0.08))
+    total_cost_pct = estimated_cost_pct + extra_close_cost_pct
+    rotation_cost_ratio = expected_profit_pct / total_cost_pct if total_cost_pct > 0 else 0.0
+    return {
+        "expected_profit_pct": round(expected_profit_pct, 6),
+        "estimated_new_trade_cost_pct": round(estimated_cost_pct, 6),
+        "extra_close_cost_pct": round(extra_close_cost_pct, 6),
+        "total_rotation_cost_pct": round(total_cost_pct, 6),
+        "rotation_cost_ratio": round(rotation_cost_ratio, 6),
+    }
+
+
 def rotation_cooldown_active(state: dict[str, Any], symbol: str) -> bool:
     cooldowns = state.get("rotation_cooldowns") or {}
     until = cooldowns.get(symbol.upper()) if isinstance(cooldowns, dict) else None
@@ -117,13 +166,21 @@ def build_position_rotation_plan(
     weakest = min(scored_positions, key=lambda item: (item["score"], item["pnl_pct"]))
     new_score = candidate_score(candidate)
     min_new_score = float(config.get(f"{mode}_rotation_min_new_score", 999.0))
-    min_delta = float(config.get(f"{mode}_rotation_min_score_delta", 999.0))
+    configured_min_delta = float(config.get(f"{mode}_rotation_min_score_delta", 999.0))
     min_cost_ratio = float(config.get("rotation_min_cost_ratio", 8.0))
-    keep_winner_profit_pct = float(config.get("rotation_keep_winner_profit_pct", 3.0))
+    min_net_cost_ratio = float(config.get("rotation_min_net_cost_ratio", 2.5))
+    keep_winner_profit_pct = float(
+        config.get("rotation_keep_winner_profit_pct_extreme", config.get("rotation_keep_winner_profit_pct", 3.0))
+        if mode == "extreme_sprint"
+        else config.get("rotation_keep_winner_profit_pct", 3.0)
+    )
     max_current_loss_pct = float(config.get("rotation_max_current_loss_pct", 6.0))
     cost_ratio = float(candidate.get("cost_ratio") or 0)
     score_delta = new_score - float(weakest["score"])
     current_pnl_pct = float(weakest["pnl_pct"])
+    current_type = rotation_candidate_type(weakest.get("scan_candidate"))
+    min_delta = rotation_required_delta(config, mode, current_pnl_pct, current_type)
+    cost_metrics = rotation_cost_metrics(candidate, config)
 
     if new_score < min_new_score:
         reason = "new_score_below_rotation_threshold"
@@ -131,6 +188,8 @@ def build_position_rotation_plan(
         reason = "score_delta_too_small"
     elif cost_ratio < min_cost_ratio:
         reason = "cost_ratio_too_low"
+    elif cost_metrics["rotation_cost_ratio"] < min_net_cost_ratio:
+        reason = "rotation_cost_ratio_too_low"
     elif current_pnl_pct >= keep_winner_profit_pct:
         reason = "current_position_is_winner"
     elif current_pnl_pct <= -max_current_loss_pct:
@@ -147,6 +206,7 @@ def build_position_rotation_plan(
             "direction": position_direction(weakest["position"]),
             "quantity": position_amount_abs(weakest["position"]),
             "score": weakest["score"],
+            "entry_type": current_type,
             "pnl_pct_on_margin": current_pnl_pct,
             "unrealized_pnl": float(weakest["position"].get("unrealizedProfit", 0) or 0),
         },
@@ -155,15 +215,19 @@ def build_position_rotation_plan(
             "direction": new_direction,
             "score": new_score,
             "cost_ratio": cost_ratio,
+            "entry_type": rotation_candidate_type(candidate),
         },
         "thresholds": {
             "min_new_score": min_new_score,
-            "min_score_delta": min_delta,
+            "configured_min_score_delta": configured_min_delta,
+            "effective_min_score_delta": min_delta,
             "min_cost_ratio": min_cost_ratio,
+            "min_net_cost_ratio": min_net_cost_ratio,
             "keep_winner_profit_pct": keep_winner_profit_pct,
             "max_current_loss_pct": max_current_loss_pct,
         },
         "score_delta": score_delta,
+        "costs": cost_metrics,
     }
 
 

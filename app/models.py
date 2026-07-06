@@ -195,20 +195,30 @@ class TradingConfig(BaseModel):
     position_rotation_enabled: bool = True
     tournament_rotation_enabled: bool = True
     tournament_sprint_rotation_enabled: bool = True
+    extreme_sprint_rotation_enabled: bool = True
     attack_rotation_enabled: bool = True
     balanced_rotation_enabled: bool = True
     conservative_rotation_enabled: bool = False
     tournament_rotation_min_new_score: float = Field(default=95.0, ge=0, le=200)
     tournament_sprint_rotation_min_new_score: float = Field(default=88.0, ge=0, le=200)
+    extreme_sprint_rotation_min_new_score: float = Field(default=82.0, ge=0, le=200)
     attack_rotation_min_new_score: float = Field(default=100.0, ge=0, le=200)
     balanced_rotation_min_new_score: float = Field(default=110.0, ge=0, le=200)
     conservative_rotation_min_new_score: float = Field(default=130.0, ge=0, le=200)
     tournament_rotation_min_score_delta: float = Field(default=12.0, ge=0, le=200)
     tournament_sprint_rotation_min_score_delta: float = Field(default=8.0, ge=0, le=200)
+    extreme_sprint_rotation_min_score_delta: float = Field(default=8.0, ge=0, le=200)
     attack_rotation_min_score_delta: float = Field(default=18.0, ge=0, le=200)
     balanced_rotation_min_score_delta: float = Field(default=25.0, ge=0, le=200)
     conservative_rotation_min_score_delta: float = Field(default=999.0, ge=0, le=1000)
     rotation_min_cost_ratio: float = Field(default=8.0, ge=0, le=100)
+    rotation_min_net_cost_ratio: float = Field(default=2.5, ge=0, le=100)
+    rotation_extra_close_cost_pct: float = Field(default=0.08, ge=0, le=5)
+    rotation_profit_min_score_delta: float = Field(default=25.0, ge=0, le=200)
+    rotation_loss_min_score_delta: float = Field(default=8.0, ge=0, le=200)
+    rotation_probe_min_score_delta: float = Field(default=8.0, ge=0, le=200)
+    rotation_small_loss_pct: float = Field(default=0.5, ge=0, le=100)
+    rotation_keep_winner_profit_pct_extreme: float = Field(default=1.2, ge=0, le=100)
     rotation_unknown_position_score: float = Field(default=75.0, ge=0, le=200)
     rotation_keep_winner_profit_pct: float = Field(default=3.0, ge=0, le=100)
     rotation_max_current_loss_pct: float = Field(default=6.0, ge=0, le=100)
