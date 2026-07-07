@@ -168,6 +168,8 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     elif config.get("api_key") and config.get("api_secret"):
         try:
             account = summarize_account(client.account())
+        except BinanceRateLimitError:
+            raise
         except Exception as exc:
             raise RuntimeError(private_api_error(exc)) from exc
     else:
@@ -368,6 +370,7 @@ def _background_scan_loop() -> None:
                 continue
             with request_priority("background"):
                 result = run_once()
+            save_state({"last_error": ""})
             interval_seconds = int(result.get("loop_seconds") or interval_seconds)
             print({"status": "background_scan", "elapsed": time.monotonic() - started}, flush=True)
         except BinanceRateLimitError as exc:
@@ -423,6 +426,7 @@ def coordinator_main() -> None:
                 try:
                     with request_priority("realtime"):
                         result = run_once(symbols_override=symbols, fast_lane=True)
+                    save_state({"last_error": ""})
                     print({"status": "fast_lane", "symbols": symbols, "result": result.get("status")}, flush=True)
                 except BinanceRateLimitError as exc:
                     record_event("warning", "fast_lane_rate_limit", str(exc), {"symbols": symbols})

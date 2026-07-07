@@ -166,7 +166,7 @@ def before_request(weight: int, budget_per_minute: int = 600) -> None:
             }
         used = int(state.get("used_estimated") or 0)
         priority = _REQUEST_PRIORITY.get()
-        priority_fraction = {"background": 0.70, "normal": 0.85, "realtime": 1.0, "critical": 1.0}.get(priority, 0.85)
+        priority_fraction = {"background": 0.70, "normal": 0.85, "realtime": 0.95, "critical": 1.0}.get(priority, 0.85)
         priority_budget = max(1, int(budget_per_minute * priority_fraction))
         if used + weight > priority_budget and priority in {"background", "normal"}:
             raise BinanceRateLimitError(
