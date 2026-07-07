@@ -19,6 +19,7 @@ from app.trading_engine import (
     build_grid_decisions,
     execute_grid_orders,
     execute_stage1_market_order,
+    is_reduce_only_rejection,
     summarize_account,
     sync_stage,
 )
@@ -29,6 +30,11 @@ from app.telemetry import record_equity_snapshot, record_event, record_strategy_
 def is_min_notional_rejection(exc: Exception) -> bool:
     text = str(exc)
     return "-4164" in text or "notional must be no smaller than" in text
+
+
+def has_live_position(client: BinanceFuturesClient) -> bool:
+    account = summarize_account(client.account_live())
+    return any(abs(float(position.get("positionAmt", 0) or 0)) > 0 for position in account.get("positions", []))
 
 
 def loop_seconds_for(config: dict, mode: str | None) -> int:
@@ -165,6 +171,24 @@ def run_once() -> dict:
     try:
         result = execute_stage1_market_order(client, decision, config)
     except RuntimeError as exc:
+        if is_reduce_only_rejection(exc) and not has_live_position(client):
+            result = {
+                "mode": "blocked",
+                "message": "Reduce-only close was rejected because no live position remains.",
+                "error": str(exc),
+            }
+            record_event(
+                "warning",
+                "order_reduce_only_recovered",
+                "Binance refused a duplicate close order; no live position remains, so the bot keeps running.",
+                {"decision": {"symbol": decision.get("symbol"), "action": decision.get("action")}, "error": str(exc)},
+            )
+            return {
+                "status": "growth_checked",
+                "decision": decision,
+                "results": [result],
+                "loop_seconds": loop_seconds_for(config, ((decision.get("scan") or {}).get("mode") or {}).get("mode")),
+            }
         if not is_min_notional_rejection(exc):
             raise
         result = {

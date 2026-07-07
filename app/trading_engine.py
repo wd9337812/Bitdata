@@ -34,6 +34,28 @@ def position_amount_abs(position: dict[str, Any]) -> float:
     return abs(float(position.get("positionAmt", position.get("amount", position.get("quantity", 0))) or 0))
 
 
+def is_reduce_only_rejection(exc: Exception) -> bool:
+    text = str(exc)
+    return "-2022" in text or "ReduceOnly Order is rejected" in text
+
+
+def find_live_position(
+    client: BinanceFuturesClient,
+    symbol: str,
+    direction: str,
+) -> dict[str, Any] | None:
+    if not hasattr(client, "account_live"):
+        return None
+    account = summarize_account(client.account_live())
+    symbol = symbol.upper()
+    direction = direction.upper()
+    for position in account.get("positions", []):
+        if position_symbol(position) == symbol and position_direction(position) == direction:
+            if position_amount_abs(position) > 0:
+                return position
+    return None
+
+
 def position_margin(position: dict[str, Any]) -> float:
     margin = float(position.get("positionInitialMargin", 0) or 0)
     if margin > 0:
@@ -458,7 +480,16 @@ def build_best_growth_decision(
 def close_rotation_position(client: BinanceFuturesClient, position: dict[str, Any]) -> dict[str, Any]:
     symbol = position_symbol(position)
     direction = position_direction(position)
-    quantity = position_amount_abs(position)
+    live_position = find_live_position(client, symbol, direction) if hasattr(client, "account_live") else position
+    if live_position is None:
+        return {
+            "symbol": symbol,
+            "direction": direction,
+            "quantity": 0.0,
+            "skipped": True,
+            "reason": "position_already_closed",
+        }
+    quantity = position_amount_abs(live_position)
     close_side = "BUY" if direction == "SHORT" else "SELL"
     position_side = None
     try:
@@ -468,12 +499,28 @@ def close_rotation_position(client: BinanceFuturesClient, position: dict[str, An
         position_side = None
     cancelled_orders = client.cancel_all_open_orders(symbol)
     cancelled_algo_orders = client.cancel_all_open_algo_orders(symbol)
-    close_order = client.place_market_order(
-        symbol=symbol,
-        side=close_side,
-        quantity=quantity,
-        position_side=position_side,
-    )
+    try:
+        close_order = client.place_market_order(
+            symbol=symbol,
+            side=close_side,
+            quantity=quantity,
+            position_side=position_side,
+        )
+    except RuntimeError as exc:
+        if not is_reduce_only_rejection(exc):
+            raise
+        if find_live_position(client, symbol, direction) is not None:
+            raise
+        return {
+            "symbol": symbol,
+            "direction": direction,
+            "quantity": quantity,
+            "cancelled_orders": cancelled_orders,
+            "cancelled_algo_orders": cancelled_algo_orders,
+            "skipped": True,
+            "reason": "position_already_closed_after_cancel",
+            "error": str(exc),
+        }
     return {
         "symbol": symbol,
         "direction": direction,

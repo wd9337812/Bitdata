@@ -1,5 +1,63 @@
 from app.state_store import load_state, save_state
-from app.trading_engine import sync_stage
+from app.trading_engine import close_rotation_position, sync_stage
+
+
+class RotationCloseClient:
+    def __init__(self, positions, reject_close=False, positions_after_reject=None):
+        self.positions = positions
+        self.reject_close = reject_close
+        self.positions_after_reject = positions_after_reject if positions_after_reject is not None else positions
+        self.close_calls = 0
+        self.account_calls = 0
+
+    def account_live(self):
+        self.account_calls += 1
+        positions = self.positions if self.account_calls == 1 else self.positions_after_reject
+        return {
+            "totalWalletBalance": "50",
+            "totalUnrealizedProfit": "0",
+            "availableBalance": "50",
+            "positions": positions,
+        }
+
+    def position_side_dual(self):
+        return {"dualSidePosition": True}
+
+    def cancel_all_open_orders(self, symbol):
+        return {"symbol": symbol, "cancelled": True}
+
+    def cancel_all_open_algo_orders(self, symbol):
+        return {"symbol": symbol, "cancelled_algo": True}
+
+    def place_market_order(self, **kwargs):
+        self.close_calls += 1
+        if self.reject_close:
+            raise RuntimeError('Binance signed API 400: {"code":-2022,"msg":"ReduceOnly Order is rejected."}')
+        return {"status": "NEW", **kwargs}
+
+
+def test_close_rotation_skips_when_live_position_is_already_gone():
+    client = RotationCloseClient(positions=[])
+
+    result = close_rotation_position(client, {"symbol": "OLDUSDT", "direction": "LONG", "quantity": 2})
+
+    assert result["skipped"] is True
+    assert result["reason"] == "position_already_closed"
+    assert client.close_calls == 0
+
+
+def test_close_rotation_recovers_reduce_only_when_position_disappears_after_cancel():
+    client = RotationCloseClient(
+        positions=[{"symbol": "OLDUSDT", "positionSide": "LONG", "positionAmt": "2"}],
+        reject_close=True,
+        positions_after_reject=[],
+    )
+
+    result = close_rotation_position(client, {"symbol": "OLDUSDT", "direction": "LONG", "quantity": 2})
+
+    assert result["skipped"] is True
+    assert result["reason"] == "position_already_closed_after_cancel"
+    assert client.close_calls == 1
 
 
 def test_sync_stage_initializes_extreme_sprint_equity_guard(monkeypatch, tmp_path):
