@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
 from app.binance_client import BinanceFuturesClient
-from app.binance_rate import BinanceRateLimitError, rate_status
+from app.binance_rate import BinanceRateLimitError, rate_status, request_priority
 from app.config_store import load_config
 from app.learning_report import save_daily_learning_report
 from app.live_learning import sync_live_learning_from_binance
 from app.market_stream import start_market_stream_thread
+from app.opportunity_queue import read_opportunities
 from app.risk import direction_cooldown_key
 from app.runtime_protection import manage_runtime_protection
 from app.trading_engine import (
@@ -24,7 +26,11 @@ from app.trading_engine import (
     sync_stage,
 )
 from app.state_store import load_state, save_state
-from app.telemetry import record_equity_snapshot, record_event, record_strategy_run
+from app.runtime_snapshot import market_rows_from_scan, update_runtime_snapshot
+from app.telemetry import compact_decision, maintain_telemetry, record_equity_snapshot, record_event, record_strategy_run
+
+
+_EXECUTION_LOCK = threading.Lock()
 
 
 def is_min_notional_rejection(exc: Exception) -> bool:
@@ -116,7 +122,34 @@ def is_timestamp_error(exc: Exception) -> bool:
     return "-1021" in message or "recvWindow" in message or "Timestamp for this request" in message
 
 
-def run_once() -> dict:
+def _position_keys(account: dict) -> set[tuple[str, str, float]]:
+    return {
+        (
+            str(position.get("symbol") or ""),
+            str(position.get("positionSide") or "BOTH"),
+            round(float(position.get("positionAmt", 0) or 0), 12),
+        )
+        for position in account.get("positions", [])
+        if abs(float(position.get("positionAmt", 0) or 0)) > 0
+    }
+
+
+def execute_with_freshness_guard(client: BinanceFuturesClient, decision: dict, config: dict, account: dict) -> dict:
+    if decision.get("action") not in {"OPEN_LONG", "OPEN_SHORT"}:
+        return execute_stage1_market_order(client, decision, config)
+    with _EXECUTION_LOCK, request_priority("critical"):
+        fresh_account = summarize_account(client.account_live())
+        if _position_keys(fresh_account) != _position_keys(account):
+            return {
+                "mode": "blocked",
+                "message": "持仓在决策期间发生变化，本次信号作废并等待重新评估。",
+                "reason": "stale_position_snapshot",
+            }
+        return execute_stage1_market_order(client, decision, config)
+
+
+def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False) -> dict:
+    cycle_started = time.perf_counter()
     config = load_config()
     state = load_state()
     client = BinanceFuturesClient(
@@ -140,11 +173,12 @@ def run_once() -> dict:
     else:
         raise RuntimeError("实盘模式需要先配置 Binance API Key 和 Secret。")
     state = sync_stage(config, state, account)
-    maybe_sync_live_learning(client, config, state)
-    protection_status = manage_runtime_protection(client, config, state, account)
-    if protection_status.get("actions"):
-        record_event("info", "runtime_protection", "runtime protection checked", protection_status)
-    maybe_generate_daily_report(config, state)
+    if not fast_lane:
+        maybe_sync_live_learning(client, config, state)
+        protection_status = manage_runtime_protection(client, config, state, account)
+        if protection_status.get("actions"):
+            record_event("info", "runtime_protection", "runtime protection checked", protection_status)
+        maybe_generate_daily_report(config, state)
 
     if state.get("stage") == "grid":
         results = []
@@ -167,9 +201,16 @@ def run_once() -> dict:
         record_event("info", "grid", "完成网格检查", {"results": results})
         return {"status": "grid_checked", "results": results, "loop_seconds": int(config.get("grid_loop_seconds", 300))}
 
-    decision = build_best_growth_decision(client, config, state, account)
+    decision = build_best_growth_decision(
+        client,
+        config,
+        state,
+        account,
+        symbols_override=symbols_override,
+        fast_lane=fast_lane,
+    )
     try:
-        result = execute_stage1_market_order(client, decision, config)
+        result = execute_with_freshness_guard(client, decision, config, account)
     except RuntimeError as exc:
         if is_reduce_only_rejection(exc) and not has_live_position(client):
             result = {
@@ -231,7 +272,45 @@ def run_once() -> dict:
         action=decision.get("action"),
         reason=decision.get("reason") or (decision.get("risk") or {}).get("reason"),
     )
-    record_event("info", "growth", "完成增长模式扫描", {"decision": decision, "result": result})
+    record_event(
+        "info",
+        "growth",
+        "完成增长模式扫描",
+        {
+            "channel": "fast_lane" if fast_lane else "background_scan",
+            "symbol": decision.get("symbol"),
+            "action": decision.get("action"),
+            "reason": decision.get("reason") or (decision.get("risk") or {}).get("reason"),
+            "result_mode": result.get("mode"),
+        },
+    )
+    elapsed = round(time.perf_counter() - cycle_started, 3)
+    channel = "fast_lane" if fast_lane else "background_scan"
+    snapshot_updates = {
+        "channel": channel,
+        "last_cycle": {
+            "channel": channel,
+            "elapsed_seconds": elapsed,
+            "symbol": decision.get("symbol"),
+            "action": decision.get("action"),
+            "reason": decision.get("reason") or (decision.get("risk") or {}).get("reason"),
+        },
+        "account": {key: account.get(key) for key in ["equity", "available_balance", "unrealized_pnl"]},
+    }
+    if fast_lane:
+        snapshot_updates["fast_lane_decision"] = compact_decision(decision)
+    else:
+        snapshot_updates["decision"] = compact_decision(decision)
+        snapshot_updates["market"] = market_rows_from_scan(scan)
+    snapshot_updates["fast_lane" if fast_lane else "background_scan"] = {
+        "elapsed_seconds": elapsed,
+        "symbols": symbols_override or [],
+        "action": decision.get("action"),
+        "reason": decision.get("reason") or (decision.get("risk") or {}).get("reason"),
+        "funnel": scan.get("funnel") or {},
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    update_runtime_snapshot(**snapshot_updates)
     return {
         "status": "growth_checked",
         "decision": decision,
@@ -278,5 +357,79 @@ def main() -> None:
         time.sleep(interval_seconds)
 
 
+def _background_scan_loop() -> None:
+    interval_seconds = int(os.getenv("BOT_LOOP_SECONDS", "300"))
+    while True:
+        started = time.monotonic()
+        try:
+            state = load_state()
+            if state.get("bot_status") != "running":
+                time.sleep(2)
+                continue
+            with request_priority("background"):
+                result = run_once()
+            interval_seconds = int(result.get("loop_seconds") or interval_seconds)
+            print({"status": "background_scan", "elapsed": time.monotonic() - started}, flush=True)
+        except BinanceRateLimitError as exc:
+            record_event("warning", "background_scan_deferred", str(exc), {"retry_after": exc.retry_after})
+        except Exception as exc:
+            save_state({"last_error": str(exc)})
+            record_event("error", "background_scan", str(exc))
+        elapsed = time.monotonic() - started
+        time.sleep(max(5, interval_seconds - elapsed))
+
+
+def _event_signature(events: list[dict]) -> str:
+    return "|".join(
+        f"{event.get('symbol')}:{event.get('direction_hint')}:{event.get('updated_at')}"
+        for event in events
+    )
+
+
+def coordinator_main() -> None:
+    load_dotenv()
+    start_market_stream_thread(load_config)
+    threading.Thread(target=_background_scan_loop, name="background-scan", daemon=True).start()
+    last_signature = ""
+    last_processed_symbols: dict[str, float] = {}
+    last_maintenance_day = ""
+    while True:
+        config = load_config()
+        state = load_state()
+        today = datetime.now(timezone.utc).date().isoformat()
+        if today != last_maintenance_day:
+            try:
+                maintain_telemetry(int(config.get("telemetry_retention_days", 30)))
+                last_maintenance_day = today
+            except Exception as exc:
+                record_event("warning", "telemetry_maintenance", str(exc))
+        if state.get("bot_status") == "running" and config.get("fast_lane_enabled", True):
+            events = read_opportunities(
+                max_age_seconds=int(config.get("fast_lane_event_max_age_seconds", 45)),
+                limit=int(config.get("fast_lane_max_symbols", 3)),
+            )
+            symbol_cooldown = int(config.get("fast_lane_symbol_cooldown_seconds", 10))
+            now_monotonic = time.monotonic()
+            events = [
+                event for event in events
+                if now_monotonic - last_processed_symbols.get(str(event.get("symbol") or "").upper(), 0) >= symbol_cooldown
+            ]
+            signature = _event_signature(events)
+            if events and signature and signature != last_signature:
+                last_signature = signature
+                symbols = list(dict.fromkeys(str(event.get("symbol") or "").upper() for event in events))
+                for symbol in symbols:
+                    last_processed_symbols[symbol] = now_monotonic
+                try:
+                    with request_priority("realtime"):
+                        result = run_once(symbols_override=symbols, fast_lane=True)
+                    print({"status": "fast_lane", "symbols": symbols, "result": result.get("status")}, flush=True)
+                except BinanceRateLimitError as exc:
+                    record_event("warning", "fast_lane_rate_limit", str(exc), {"symbols": symbols})
+                except Exception as exc:
+                    record_event("error", "fast_lane", str(exc), {"symbols": symbols})
+        time.sleep(max(1, int(config.get("fast_lane_poll_seconds", 2))))
+
+
 if __name__ == "__main__":
-    main()
+    coordinator_main()

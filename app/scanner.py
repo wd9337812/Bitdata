@@ -1549,12 +1549,18 @@ def scan_growth_candidates(
     client: BinanceFuturesClient,
     config: dict[str, Any],
     account_summary: dict[str, Any],
+    symbols_override: list[str] | None = None,
+    fast_lane: bool = False,
 ) -> dict[str, Any]:
     started_at = time.perf_counter()
     equity = account_summary.get("equity")
     mode = mode_config(config, equity)
     limits = pipeline_limits(config, mode)
-    symbols = discover_coin_symbols(client, config)
+    symbols = (
+        list(dict.fromkeys(str(symbol).upper() for symbol in symbols_override if str(symbol).upper().endswith("USDT")))
+        if symbols_override
+        else discover_coin_symbols(client, config)
+    )
     opportunity_events = read_opportunities(
         max_age_seconds=int(config.get("opportunity_queue_ttl_seconds", 240)),
         limit=int(config.get("opportunity_queue_scan_limit", 50)),
@@ -1563,14 +1569,15 @@ def scan_growth_candidates(
         max_age_seconds=int(config.get("websocket_trigger_max_age_seconds", 180)),
         limit=int(config.get("websocket_trigger_scan_limit", 40)),
     ) if config.get("websocket_trigger_enabled", True) else []
-    for event in opportunity_events:
-        event_symbol = str(event.get("symbol") or "").upper()
-        if event_symbol and event_symbol not in symbols:
-            symbols.append(event_symbol)
-    for event in trigger_events:
-        trigger_symbol = str(event.get("symbol") or "").upper()
-        if trigger_symbol and trigger_symbol not in symbols:
-            symbols.append(trigger_symbol)
+    if not fast_lane:
+        for event in opportunity_events:
+            event_symbol = str(event.get("symbol") or "").upper()
+            if event_symbol and event_symbol not in symbols:
+                symbols.append(event_symbol)
+        for event in trigger_events:
+            trigger_symbol = str(event.get("symbol") or "").upper()
+            if trigger_symbol and trigger_symbol not in symbols:
+                symbols.append(trigger_symbol)
     candidates = []
     recalled_symbols = list(symbols)
     tickers = {item["symbol"]: item for item in client.ticker_24h(recalled_symbols)}
@@ -1600,9 +1607,17 @@ def scan_growth_candidates(
         for day in config.get("quality_backtest_days", [3, 5])
         if int(day) > 0
     } | {int(mode["recent_days"])})
-    max_depth_checks = min(int(config.get("depth_check_top_symbols", 8)), limits["auction"])
-    degrade_seconds = float(config.get("scan_degrade_seconds", 18))
-    min_rank_symbols = min(int(config.get("scan_min_rank_symbols", 8)), len(ranked_symbols))
+    max_depth_checks = min(
+        int(config.get("fast_lane_depth_checks", 3)) if fast_lane else int(config.get("depth_check_top_symbols", 8)),
+        limits["auction"],
+    )
+    degrade_seconds = float(config.get("fast_lane_budget_seconds", 5.0) if fast_lane else config.get("scan_degrade_seconds", 18))
+    min_rank_symbols = min(
+        int(config.get("fast_lane_max_symbols", 3)) if fast_lane else int(config.get("scan_min_rank_symbols", 8)),
+        len(ranked_symbols),
+    )
+    if fast_lane:
+        ranked_symbols = ranked_symbols[:max(1, int(config.get("fast_lane_max_symbols", 3)))]
     depth_checks = 0
     depth_by_symbol: dict[str, dict[str, Any]] = {}
     live_losses_by_direction: dict[str, dict[str, Any]] = {}
@@ -2046,7 +2061,8 @@ def scan_growth_candidates(
         pool_reason = str(candidate.get("symbol_quality", {}).get("pool") or "")
         key = market_reason if market_reason in {"chop", "liquidity_trap", "spike_wick"} else pool_reason if pool_reason == "disabled" else reason
         blocked_reasons[key] = blocked_reasons.get(key, 0) + 1
-    _publish_stream_intent(config, account_summary, coarse_rows, candidates, trade_pool)
+    if not fast_lane:
+        _publish_stream_intent(config, account_summary, coarse_rows, candidates, trade_pool)
     funnel = {
         "recall": {
             "count": len(recalled_symbols),
@@ -2090,6 +2106,7 @@ def scan_growth_candidates(
             "label": "事件队列",
         },
         "elapsed_seconds": round(time.perf_counter() - started_at, 3),
+        "channel": "fast_lane" if fast_lane else "background_scan",
         "degrade_seconds": degrade_seconds,
         "coarse_top": _json_safe(coarse_rows[:20]),
     }

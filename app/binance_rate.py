@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import threading
 import time
 import uuid
+from contextlib import closing, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +29,16 @@ class CacheEntry:
 
 
 _LOCK = threading.Lock()
+_REQUEST_PRIORITY: ContextVar[str] = ContextVar("binance_request_priority", default="normal")
+
+
+@contextmanager
+def request_priority(priority: str):
+    token = _REQUEST_PRIORITY.set(priority)
+    try:
+        yield
+    finally:
+        _REQUEST_PRIORITY.reset(token)
 
 
 def _data_dir() -> Path:
@@ -39,7 +52,20 @@ def _rate_path() -> Path:
 
 
 def _cache_path() -> Path:
-    return _data_dir() / "binance_cache.json"
+    return _data_dir() / "binance_cache.db"
+
+
+def _cache_connect() -> sqlite3.Connection:
+    conn = sqlite3.connect(_cache_path(), timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=10000")
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS cache_entries (key TEXT PRIMARY KEY, ts REAL NOT NULL, value TEXT NOT NULL)"
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_entries_ts ON cache_entries(ts)")
+    conn.commit()
+    return conn
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -139,6 +165,15 @@ def before_request(weight: int, budget_per_minute: int = 600) -> None:
                 "last_error": "",
             }
         used = int(state.get("used_estimated") or 0)
+        priority = _REQUEST_PRIORITY.get()
+        priority_fraction = {"background": 0.70, "normal": 0.85, "realtime": 1.0, "critical": 1.0}.get(priority, 0.85)
+        priority_budget = max(1, int(budget_per_minute * priority_fraction))
+        if used + weight > priority_budget and priority in {"background", "normal"}:
+            raise BinanceRateLimitError(
+                f"REST预算为实时交易预留，{priority}任务延后。",
+                retry_after=5,
+                status_code=429,
+            )
         if used + weight > budget_per_minute:
             wait = (bucket + 1) * 60 - now + 1
             state["cooldown_until"] = now + wait
@@ -203,35 +238,51 @@ def rate_status() -> dict[str, Any]:
 
 def cache_get(key: str, ttl_seconds: int) -> CacheEntry | None:
     now = time.time()
-    with _LOCK:
-        cache = _read_json(_cache_path(), {})
-        item = cache.get(key)
-        if not item:
+    try:
+        with closing(_cache_connect()) as conn:
+            row = conn.execute("SELECT ts, value FROM cache_entries WHERE key = ?", (key,)).fetchone()
+        if not row:
             return None
-        ts = float(item.get("ts") or 0)
-        age = now - ts
+        age = now - float(row[0])
         if age <= ttl_seconds:
-            return CacheEntry(item.get("value"), age, False)
+            return CacheEntry(json.loads(row[1]), age, False)
+    except (sqlite3.Error, json.JSONDecodeError):
+        return None
     return None
 
 
 def cache_set(key: str, value: Any) -> None:
     now = time.time()
-    with _LOCK:
-        cache = _read_json(_cache_path(), {})
-        cache[key] = {"ts": now, "value": value}
-        # Avoid unbounded growth from per-symbol kline keys.
-        if len(cache) > 500:
-            ordered = sorted(cache.items(), key=lambda row: float(row[1].get("ts") or 0), reverse=True)
-            cache = dict(ordered[:400])
-        _write_json(_cache_path(), cache)
+    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    try:
+        with closing(_cache_connect()) as conn:
+            conn.execute(
+                "INSERT INTO cache_entries(key, ts, value) VALUES (?, ?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET ts=excluded.ts, value=excluded.value",
+                (key, now, encoded),
+            )
+            count = int(conn.execute("SELECT COUNT(*) FROM cache_entries").fetchone()[0])
+            if count > 600:
+                conn.execute(
+                    "DELETE FROM cache_entries WHERE key IN (SELECT key FROM cache_entries ORDER BY ts ASC LIMIT ?)",
+                    (count - 450,),
+                )
+            conn.commit()
+    except (sqlite3.Error, TypeError, ValueError):
+        return
 
 
 def cache_status() -> dict[str, Any]:
-    cache = _read_json(_cache_path(), {})
     now = time.time()
-    return {
-        "entries": len(cache),
-        "newest_age_seconds": min((now - float(item.get("ts") or 0) for item in cache.values()), default=None),
-        "oldest_age_seconds": max((now - float(item.get("ts") or 0) for item in cache.values()), default=None),
-    }
+    try:
+        with closing(_cache_connect()) as conn:
+            row = conn.execute("SELECT COUNT(*), MAX(ts), MIN(ts) FROM cache_entries").fetchone()
+        return {
+            "backend": "sqlite_wal",
+            "entries": int(row[0] or 0),
+            "newest_age_seconds": now - float(row[1]) if row[1] else None,
+            "oldest_age_seconds": now - float(row[2]) if row[2] else None,
+            "size_bytes": _cache_path().stat().st_size if _cache_path().exists() else 0,
+        }
+    except sqlite3.Error as exc:
+        return {"backend": "sqlite_wal", "entries": 0, "last_error": str(exc)}

@@ -26,7 +26,7 @@ import {
 import { api, fmt, modeLabel, stageLabel, statusLabel } from "./lib/api";
 import "./styles.css";
 
-type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; opportunity_queue?: Record<string, any>; target_progress?: Record<string, any>; stage_profile?: Record<string, any>; product_completion?: Record<string, any> };
+type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; opportunity_queue?: Record<string, any>; runtime?: Record<string, any>; target_progress?: Record<string, any>; stage_profile?: Record<string, any>; product_completion?: Record<string, any> };
 type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any; funnel?: any }; stage2_grid: any[]; auth_error?: string };
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
@@ -159,6 +159,7 @@ function App() {
   const config = status?.config || {};
   const stream = status?.market_stream || {};
   const opportunityQueue = status?.opportunity_queue || {};
+  const runtime = status?.runtime || {};
   const target = status?.target_progress || {};
   const stageProfile = status?.stage_profile || {};
   const completion = status?.product_completion || {};
@@ -322,7 +323,7 @@ function App() {
 
         {active === "scan" && (
           <section className="stack">
-            <ScanSummary funnel={funnel} candidates={candidates} stream={stream} opportunityQueue={opportunityQueue} />
+            <ScanSummary funnel={funnel} candidates={candidates} stream={stream} opportunityQueue={opportunityQueue} runtime={runtime} />
             <div className="panel">
               <div className="panel-head">
                 <div>
@@ -379,7 +380,7 @@ function App() {
   );
 }
 
-function ScanSummary({ funnel, candidates, stream, opportunityQueue }: { funnel: any; candidates: any[]; stream: any; opportunityQueue: any }) {
+function ScanSummary({ funnel, candidates, stream, opportunityQueue, runtime }: { funnel: any; candidates: any[]; stream: any; opportunityQueue: any; runtime: any }) {
   const passed = candidates.filter((item) => item.passed).length;
   const conclusion = passed > 0
     ? `发现 ${passed} 个可执行信号，系统会按风控选择最高优先级。`
@@ -400,6 +401,8 @@ function ScanSummary({ funnel, candidates, stream, opportunityQueue }: { funnel:
         </div>
       </div>
       <div className="metrics">
+        <MetricCard title="实时快车道" value={`${fmt(runtime?.fast_lane?.elapsed_seconds, 2)} 秒`} sub={(runtime?.fast_lane?.symbols || []).join("、") || "等待 WebSocket 机会"} tone={(runtime?.fast_lane?.elapsed_seconds || 0) <= 5 ? "positive" : undefined} />
+        <MetricCard title="后台全量扫描" value={`${fmt(runtime?.background_scan?.elapsed_seconds ?? funnel?.elapsed_seconds, 2)} 秒`} sub="后台更新，不阻塞实时机会" />
         <MetricCard title="WebSocket 状态" value={stream.connected ? "实时盯盘中" : "未连接"} sub={stream.last_error || `数据年龄 ${fmt(stream.age_seconds, 0)} 秒`} tone={stream.connected ? "positive" : "negative"} />
         <MetricCard title="实时订阅币数" value={`${fmt((stream.symbols || []).length, 0)} 个`} sub={`动态目标 ${fmt(stream.intent_count, 0)} 个`} />
         <MetricCard title="实时行情" value={`${fmt(stream.ticker_count, 0)} / ${fmt(stream.depth_count, 0)} / ${fmt(stream.kline_count, 0)}`} sub="Ticker / 盘口 / K线" />
@@ -821,6 +824,13 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("market_stream_max_symbols", "实时盯盘币数上限", "2G VPS 默认 50；越高越实时，但连接和写入压力越大")}
           {number("market_stream_rebuild_seconds", "实时盯盘重建间隔", "默认 60 秒；避免 WebSocket 频繁重连")}
           {number("stream_hot_symbols_limit", "热点进入盯盘数量", "默认 25；来自漏斗粗排和候选")}
+          {toggle("fast_lane_enabled", "WebSocket 实时快车道", "异动事件独立于全量扫描，优先在数秒内完成决策")}
+          {number("fast_lane_poll_seconds", "快车道轮询秒数", "默认 2 秒；只读取本地事件队列，不持续消耗 Binance REST")}
+          {number("fast_lane_symbol_cooldown_seconds", "同币快车道冷却秒数", "默认 10 秒；合并连续推送，避免重复计算和追单")}
+          {number("fast_lane_event_max_age_seconds", "快车道事件有效期", "默认 45 秒；过期异动不再追单")}
+          {number("fast_lane_max_symbols", "快车道单次币数", "默认 3；优先最高分异动，避免挤占交易API预算")}
+          {number("fast_lane_budget_seconds", "快车道计算预算", "默认 5 秒；超过预算只完成最高优先级币")}
+          {number("telemetry_retention_days", "系统明细保留天数", "默认 30 天；成交与实盘学习记录不受影响")}
           {toggle("auto_risk_by_equity", "按权益自动切换风险", "50U 自动锦标赛，100U 后进攻")}
           {toggle("target_controller_enabled", "开启目标进度控制器", "按 30 天到 1万、再 30 天到 10万、再 30 天到 100万计算进度")}
           {toggle("target_risk_adjustment_enabled", "目标进度参与仓位", "默认关闭；开启后系统会根据领先或落后目标曲线调整风险倍率")}

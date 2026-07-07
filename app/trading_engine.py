@@ -480,8 +480,16 @@ def build_best_growth_decision(
     config: dict[str, Any],
     state: dict[str, Any],
     account_summary: dict[str, Any],
+    symbols_override: list[str] | None = None,
+    fast_lane: bool = False,
 ) -> dict[str, Any]:
-    scan = scan_growth_candidates(client, config, account_summary)
+    scan = scan_growth_candidates(
+        client,
+        config,
+        account_summary,
+        symbols_override=symbols_override,
+        fast_lane=fast_lane,
+    )
     best = next((item for item in scan["candidates"] if item.get("passed")), None)
     if not best:
         return {

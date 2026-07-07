@@ -21,6 +21,7 @@ from app.market_stream import stream_status
 from app.opportunity_queue import opportunity_status
 from app.product_completion import product_completion_summary
 from app.runtime_protection import manage_runtime_protection
+from app.runtime_snapshot import read_runtime_snapshot
 from app.scanner import mode_config
 from app.stage_modes import stage_profile_for_equity
 from app.stage_simulation import simulate_stage_path
@@ -50,7 +51,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.1.0")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.2.0")
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
 if assets_dir.exists():
@@ -139,6 +140,11 @@ def status() -> dict[str, Any]:
             "unrealized_pnl": snap.get("unrealized_pnl"),
             "positions": [],
         }
+    runtime = read_runtime_snapshot()
+    runtime_status = {
+        key: runtime.get(key)
+        for key in ["updated_at", "age_seconds", "channel", "last_cycle", "fast_lane", "background_scan"]
+    }
     return {
         "config": load_config(include_secret=False),
         "state": state,
@@ -153,6 +159,7 @@ def status() -> dict[str, Any]:
             max_age_seconds=int(config.get("opportunity_queue_ttl_seconds", 240)),
             limit=int(config.get("opportunity_queue_scan_limit", 50)),
         ),
+        "runtime": runtime_status,
     }
 
 
@@ -179,7 +186,7 @@ def equity_snapshot() -> dict[str, Any]:
 
 @app.get("/api/logs", dependencies=[Depends(require_auth)])
 def logs(limit: int = 200, category: str | None = None) -> dict[str, Any]:
-    return {"events": list_events(limit, category)}
+    return {"events": list_events(limit, category, include_payload=False)}
 
 
 @app.get("/api/product/completion", dependencies=[Depends(require_auth)])
@@ -309,24 +316,13 @@ def control(payload: BotControlPayload) -> dict[str, Any]:
 
 @app.get("/api/market", dependencies=[Depends(require_auth)])
 def market() -> dict[str, Any]:
-    config = load_config()
-    symbols = [symbol.upper() for symbol in config["symbols"]]
-    client = client_from_config()
-    tickers = client.ticker_24h(symbols)
-    funding = {item["symbol"]: item for item in client.premium_index(symbols)}
-    rows = []
-    for ticker in tickers:
-        symbol = ticker["symbol"]
-        rows.append(
-            {
-                "symbol": symbol,
-                "last": float(ticker["lastPrice"]),
-                "change_pct": float(ticker["priceChangePercent"]),
-                "volume_usdt_b": round(float(ticker["quoteVolume"]) / 1_000_000_000, 3),
-                "funding_pct": round(float(funding.get(symbol, {}).get("lastFundingRate", 0)) * 100, 5),
-            }
-        )
-    return {"symbols": rows}
+    runtime = read_runtime_snapshot()
+    return {
+        "symbols": runtime.get("market") or [],
+        "source": "runner_snapshot",
+        "updated_at": runtime.get("updated_at"),
+        "age_seconds": runtime.get("age_seconds"),
+    }
 
 
 @app.get("/api/backtest", dependencies=[Depends(require_auth)])
@@ -358,9 +354,10 @@ def api_decisions() -> dict[str, Any]:
     state = load_state()
     account_summary = {"equity": None, "available_balance": None, "unrealized_pnl": None, "positions": []}
     auth_error = ""
+    runtime = read_runtime_snapshot()
     latest = latest_strategy_payload()
     payload = (latest or {}).get("payload") or {}
-    best_growth = (payload.get("decision") or {}) if payload else {}
+    best_growth = runtime.get("decision") or ((payload.get("decision") or {}) if payload else {})
     scan = best_growth.get("scan") or {}
     if latest:
         account_summary.update(
@@ -380,7 +377,8 @@ def api_decisions() -> dict[str, Any]:
         "stage1": stage1_decisions,
         "growth_scan": scan,
         "stage2_grid": [],
-        "source": "runner_latest",
+        "source": "runner_snapshot" if runtime.get("decision") else "runner_latest",
+        "runtime": runtime,
         "latest_run": {key: latest.get(key) for key in ["id", "ts", "action", "symbol", "reason"]} if latest else None,
         "binance_rate": rate_status(),
     }

@@ -16,8 +16,11 @@ def db_path() -> Path:
 def connect() -> sqlite3.Connection:
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=15)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=15000")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -69,6 +72,10 @@ def connect() -> sqlite3.Connection:
         )
         """
     )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_equity_snapshots_ts ON equity_snapshots(ts)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_event_logs_category_ts ON event_logs(category, ts)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_strategy_runs_symbol_ts ON strategy_runs(symbol, ts)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_strategy_runs_action_ts ON strategy_runs(action, ts)")
     conn.commit()
     return conn
 
@@ -155,10 +162,60 @@ def record_strategy_run(
                 signal.get("take_profit"),
                 decision.get("quantity"),
                 account.get("equity"),
-                json.dumps({"decision": decision, "result": result}, ensure_ascii=False),
+                json.dumps({"decision": compact_decision(decision), "result": result}, ensure_ascii=False, separators=(",", ":")),
             ),
         )
         conn.commit()
+
+
+def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
+    """Keep optimization evidence without persisting the full market universe every loop."""
+    compact = dict(decision)
+    def compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+        item = dict(candidate)
+        item.pop("coarse", None)
+        item["backtests"] = {
+            str(day): {
+                key: value
+                for key, value in (summary or {}).items()
+                if key in {"trades", "wins", "win_rate", "net_pct", "profit_factor"}
+            }
+            for day, summary in (item.get("backtests") or {}).items()
+        }
+        return item
+
+    if isinstance(compact.get("candidate"), dict):
+        compact["candidate"] = compact_candidate(compact["candidate"])
+    scan = dict(compact.get("scan") or {})
+    if scan:
+        scan.pop("ranked_symbols", None)
+        scan.pop("recalled_symbols", None)
+        scan["symbols"] = list(scan.get("symbols") or [])[:30]
+        scan["opportunity_events"] = list(scan.get("opportunity_events") or [])[:10]
+        scan["candidates"] = [compact_candidate(candidate) for candidate in list(scan.get("candidates") or [])[:24]]
+        if isinstance(scan.get("best"), dict):
+            scan["best"] = compact_candidate(scan["best"])
+        for pool_name in ["trade_pool", "observe_pool"]:
+            scan[pool_name] = [
+                {
+                    key: item.get(key)
+                    for key in ["symbol", "direction", "score", "passed", "entry_type", "decision_reason", "risk_pct"]
+                }
+                for item in list(scan.get(pool_name) or [])[:24]
+            ]
+        compact["scan"] = scan
+    return compact
+
+
+def maintain_telemetry(retention_days: int = 30) -> dict[str, int]:
+    cutoff = datetime.now(timezone.utc).timestamp() - max(1, retention_days) * 86400
+    cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
+    with connect() as conn:
+        events = conn.execute("DELETE FROM event_logs WHERE ts < ?", (cutoff_iso,)).rowcount
+        snapshots = conn.execute("DELETE FROM equity_snapshots WHERE ts < ?", (cutoff_iso,)).rowcount
+        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+        conn.commit()
+    return {"events_deleted": max(0, events), "snapshots_deleted": max(0, snapshots)}
 
 
 def list_equity_snapshots(limit: int = 500) -> list[dict[str, Any]]:
@@ -197,22 +254,24 @@ def latest_strategy_payload() -> dict[str, Any] | None:
     return item
 
 
-def list_events(limit: int = 200, category: str | None = None) -> list[dict[str, Any]]:
+def list_events(limit: int = 200, category: str | None = None, include_payload: bool = True) -> list[dict[str, Any]]:
+    columns = "*" if include_payload else "id, ts, level, category, message"
     with connect() as conn:
         if category:
             rows = conn.execute(
-                "SELECT * FROM event_logs WHERE category = ? ORDER BY id DESC LIMIT ?",
+                f"SELECT {columns} FROM event_logs WHERE category = ? ORDER BY id DESC LIMIT ?",
                 (category, limit),
             ).fetchall()
         else:
-            rows = conn.execute("SELECT * FROM event_logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+            rows = conn.execute(f"SELECT {columns} FROM event_logs ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     events = []
     for row in rows:
         item = dict(row)
-        try:
-            item["payload"] = json.loads(item.get("payload") or "{}")
-        except json.JSONDecodeError:
-            item["payload"] = {}
+        if include_payload:
+            try:
+                item["payload"] = json.loads(item.get("payload") or "{}")
+            except json.JSONDecodeError:
+                item["payload"] = {}
         events.append(item)
     return events
 
