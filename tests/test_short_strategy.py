@@ -195,7 +195,12 @@ def test_execute_lifts_tiny_order_to_exchange_minimum_when_risk_cap_allows():
     result = execute_stage1_market_order(
         client,
         decision,
-        {"dry_run": False, "live_trading_enabled": True, "live_trading_confirmation": "ENABLE_LIVE_TRADING"},
+        {
+            "dry_run": False,
+            "live_trading_enabled": True,
+            "live_trading_confirmation": "ENABLE_LIVE_TRADING",
+            "effective_position_sizing_enabled": False,
+        },
     )
 
     assert result["mode"] == "live"
@@ -221,7 +226,35 @@ def test_execute_keeps_block_when_exchange_minimum_exceeds_risk_cap():
     )
 
     assert result["mode"] == "blocked"
-    assert result["message"] == "Quantity is below exchange minimum."
+    assert result["message"] == "Quantity is below effective order minimum."
+    assert not any(order[0] == "MARKET" for order in client.orders)
+
+
+def test_execute_does_not_lift_ineffective_order_to_exchange_floor():
+    client = FakeFiltersClient()
+    decision = {
+        "symbol": "TESTUSDT",
+        "action": "OPEN_SHORT",
+        "direction": "SHORT",
+        "quantity": 0.06,
+        "leverage": 3,
+        "risk": {"max_notional": 20},
+        "signal": {"last_price": 100.0, "stop": 102.0, "take_profit": 96.0},
+    }
+
+    result = execute_stage1_market_order(
+        client,
+        decision,
+        {
+            "dry_run": False,
+            "live_trading_enabled": True,
+            "live_trading_confirmation": "ENABLE_LIVE_TRADING",
+            "effective_position_sizing_enabled": True,
+            "effective_min_order_notional_usdt": 10,
+        },
+    )
+
+    assert result["mode"] == "blocked"
     assert not any(order[0] == "MARKET" for order in client.orders)
 
 

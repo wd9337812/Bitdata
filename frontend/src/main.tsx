@@ -890,6 +890,21 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("equity_guard_drawdown_3_pct", "权益保护三档回撤%", "默认 25")}
           {number("equity_guard_multiplier_3", "权益保护三档倍率", "默认 0.20")}
           {number("extreme_equity_guard_pause_drawdown_pct", "极限模式暂停回撤%", "默认 40")}
+          {toggle("effective_position_sizing_enabled", "启用有效仓位模型", "强信号获得有效仓位；低收益小单直接等待，不再强行凑交易所最低额")}
+          {number("effective_min_order_notional_usdt", "最低有效订单 U", "默认 10U；低于该名义价值的订单不执行")}
+          {number("effective_min_profit_cost_ratio", "最低收益成本比", "默认 3；预期毛收益至少为手续费与滑点成本的 3 倍")}
+          {number("effective_min_net_profit_usdt", "最低预期净利润 U", "默认 0.15U；低于该值的小单不值得承担噪声风险")}
+          {number("effective_probe_min_risk_pct", "探路单最低止损风险%", "默认 0.5%；按止损距离反推仓位，不等于保证金比例")}
+          {number("effective_standard_min_risk_pct", "标准单最低止损风险%", "默认 0.8%")}
+          {number("effective_high_min_risk_pct", "高质量单最低止损风险%", "默认 1.5%")}
+          {number("effective_top_min_risk_pct", "顶级信号最低止损风险%", "默认 2%；仍受最大保证金和风险上限约束")}
+          {number("effective_guard_probe_min_multiplier", "深回撤探路权益倍率", "默认 0.2；弱机会不会绕过权益保护")}
+          {number("effective_guard_standard_min_multiplier", "深回撤标准权益倍率", "默认 0.3")}
+          {number("effective_guard_high_min_multiplier", "深回撤高质量权益倍率", "默认 0.4")}
+          {number("effective_guard_top_min_multiplier", "深回撤顶级权益倍率", "默认 0.6；只对顶级标准信号生效")}
+          {number("extreme_probe_stop_atr", "火药桶探路止损 ATR", "默认 0.9；给 5 分钟噪声更多空间")}
+          {number("extreme_probe_take_profit_atr", "火药桶探路止盈 ATR", "默认 1.2")}
+          {number("extreme_probe_max_hold_bars", "火药桶最长持有 K 线", "默认 4 根")}
           {toggle("min_order_filter_enabled", "最小下单量前置过滤", "扫描阶段提前跳过下单量不足的币，避免启动后失败")}
           {toggle("market_state_filter_enabled", "行情状态分类过滤", "识别趋势放量、插针、盘口薄等状态")}
           {toggle("websocket_trigger_enabled", "WebSocket 事件触发入场", "实时K线异动会进入下一轮扫描优先级")}

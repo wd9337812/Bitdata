@@ -3,6 +3,96 @@ from __future__ import annotations
 from typing import Any
 
 
+PROBE_ENTRY_TYPES = {"extreme_probe", "weak_quality_probe", "preemptive", "momentum", "small_standard", "observe_standard"}
+
+
+def signal_strength_tier(candidate: dict[str, Any] | None) -> str:
+    candidate = candidate or {}
+    entry_type = str(candidate.get("entry_type") or "standard")
+    score = float(candidate.get("score") or 0.0)
+    quality_score = float((candidate.get("symbol_quality") or {}).get("score") or 0.0)
+    if entry_type not in PROBE_ENTRY_TYPES and score >= 135 and quality_score >= 75:
+        return "top"
+    if entry_type not in PROBE_ENTRY_TYPES and score >= 110 and quality_score >= 68:
+        return "high"
+    if entry_type not in PROBE_ENTRY_TYPES:
+        return "standard"
+    return "probe"
+
+
+def effective_position_risk(
+    *,
+    candidate_risk_pct: float,
+    candidate: dict[str, Any] | None,
+    guard: dict[str, Any] | None,
+    target: dict[str, Any] | None,
+    config: dict[str, Any],
+    mode: str,
+) -> dict[str, Any]:
+    """Apply drawdown protection once, while keeping qualified orders economically meaningful."""
+    candidate = candidate or {}
+    guard = guard or {}
+    target = target or {}
+    raw_risk = max(0.0, float(candidate_risk_pct))
+    tier = signal_strength_tier(candidate)
+    guard_multiplier = max(0.0, float(guard.get("risk_multiplier", 1.0)))
+    target_multiplier = max(0.0, float(target.get("effective_risk_multiplier", 1.0)))
+    guard_floor = 0.0
+    risk_floor = 0.0
+    if config.get("effective_position_sizing_enabled", True) and mode == "extreme_sprint":
+        guard_floor = float(config.get(f"effective_guard_{tier}_min_multiplier", 0.2))
+        guard_multiplier = max(guard_multiplier, guard_floor)
+        risk_floor = float(config.get(f"effective_{tier}_min_risk_pct", 0.0))
+    calculated = raw_risk * guard_multiplier * target_multiplier
+    final_risk = max(calculated, risk_floor) if raw_risk > 0 else 0.0
+    max_risk = float(config.get(f"effective_{tier}_max_risk_pct", raw_risk or final_risk))
+    if max_risk > 0:
+        final_risk = min(final_risk, max_risk)
+    return {
+        "tier": tier,
+        "candidate_risk_pct": round(raw_risk, 8),
+        "guard_multiplier": round(guard_multiplier, 6),
+        "guard_floor": round(guard_floor, 6),
+        "target_multiplier": round(target_multiplier, 6),
+        "risk_floor_pct": round(risk_floor, 6),
+        "max_risk_pct": round(max_risk, 6),
+        "final_risk_pct": round(final_risk, 8),
+    }
+
+
+def effective_order_viability(
+    *,
+    notional: float,
+    candidate: dict[str, Any] | None,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    candidate = candidate or {}
+    expected_profit_pct = max(0.0, float(candidate.get("expected_profit_pct") or 0.0))
+    estimated_cost_pct = max(0.0, float(candidate.get("estimated_cost_pct") or 0.0))
+    cost_ratio = float(candidate.get("cost_ratio") or (expected_profit_pct / estimated_cost_pct if estimated_cost_pct else 999.0))
+    expected_net_profit = float(notional) * max(0.0, expected_profit_pct - estimated_cost_pct) / 100
+    min_notional = float(config.get("effective_min_order_notional_usdt", 10.0))
+    min_cost_ratio = float(config.get("effective_min_profit_cost_ratio", 3.0))
+    min_net_profit = float(config.get("effective_min_net_profit_usdt", 0.15))
+    reasons = []
+    if float(notional) < min_notional:
+        reasons.append("below_effective_min_notional")
+    if cost_ratio < min_cost_ratio:
+        reasons.append("insufficient_profit_cost_ratio")
+    if expected_net_profit < min_net_profit:
+        reasons.append("insufficient_expected_net_profit")
+    return {
+        "allowed": not reasons,
+        "notional": round(float(notional), 8),
+        "minimum_notional": min_notional,
+        "cost_ratio": round(cost_ratio, 6),
+        "minimum_cost_ratio": min_cost_ratio,
+        "expected_net_profit": round(expected_net_profit, 8),
+        "minimum_net_profit": min_net_profit,
+        "reasons": reasons,
+    }
+
+
 def explain_position_sizing(
     *,
     base_risk_pct: float,

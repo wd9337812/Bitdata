@@ -10,6 +10,7 @@ from app.exchange_filters import ExchangeFilters
 from app.live_learning import apply_live_credit_to_candidate, list_live_scores
 from app.market_stream import stream_triggers, write_stream_intent
 from app.opportunity_queue import read_opportunities
+from app.position_sizing import effective_position_risk
 from app.strategy import StrategyParams, atr, ema
 
 
@@ -173,6 +174,13 @@ def strategy_params_for_mode(
             stop_atr=float(config.get("weak_quality_probe_stop_atr", 0.55)),
             take_profit_atr=float(config.get("weak_quality_probe_take_profit_atr", 0.75)),
             max_hold_bars=int(config.get("weak_quality_probe_max_hold_bars", 3)),
+            min_atr_pct=0.006,
+        )
+    if mode_name == "extreme_sprint" and entry_type == "extreme_probe":
+        return StrategyParams(
+            stop_atr=float(config.get("extreme_probe_stop_atr", 0.9)),
+            take_profit_atr=float(config.get("extreme_probe_take_profit_atr", 1.2)),
+            max_hold_bars=int(config.get("extreme_probe_max_hold_bars", 4)),
             min_atr_pct=0.006,
         )
     return StrategyParams(
@@ -1975,15 +1983,26 @@ def scan_growth_candidates(
                         "coarse": next((row for row in coarse_rows if row["symbol"] == symbol), {}),
                     }
                 candidate = apply_live_credit_to_candidate(candidate, config)
+                viability_risk_pct = float(candidate.get("risk_pct") or 0)
+                if config.get("effective_position_sizing_enabled", True):
+                    viability_risk_pct = float(effective_position_risk(
+                        candidate_risk_pct=viability_risk_pct,
+                        candidate=candidate,
+                        guard={"risk_multiplier": 1.0},
+                        target={"effective_risk_multiplier": 1.0},
+                        config=config,
+                        mode=str(mode["mode"]),
+                    )["final_risk_pct"])
                 viability = execution_viability(
                     exchange_filters,
                     symbol,
                     equity,
-                    float(candidate.get("risk_pct") or 0),
+                    viability_risk_pct,
                     float(signal.get("last_price") or 0),
                     float(signal.get("stop") or 0),
                     float(mode["margin_pct"]) / 100 * float(equity or 0) * float(mode["leverage"]),
                 )
+                viability["effective_risk_pct"] = viability_risk_pct
                 candidate["execution_filter"] = viability
                 if candidate.get("passed") and viability.get("enabled") and not viability.get("executable"):
                     candidate["passed"] = False

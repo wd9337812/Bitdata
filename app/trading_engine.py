@@ -6,7 +6,7 @@ from typing import Any
 from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.grid import build_grid_orders, build_grid_plan
-from app.position_sizing import explain_position_sizing, unified_position_sizing
+from app.position_sizing import effective_order_viability, effective_position_risk, explain_position_sizing, unified_position_sizing
 from app.protection import apply_initial_protection_to_signal, build_protection_plan
 from app.risk import assess_new_position, current_stage, equity_guard_status, live_trading_allowed, position_size_from_risk
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates, strategy_params_for_mode
@@ -344,8 +344,15 @@ def build_stage1_decision(
             "mode": active_mode["mode"],
             "strategy": active_mode["strategy"],
         }
-    active_mode["risk_pct"] = float(active_mode["risk_pct"]) * float(guard.get("risk_multiplier", 1.0))
-    active_mode["risk_pct"] = float(active_mode["risk_pct"]) * float(target.get("effective_risk_multiplier", 1.0))
+    effective_risk = effective_position_risk(
+        candidate_risk_pct=float(active_mode["risk_pct"]),
+        candidate=scan_candidate,
+        guard=guard,
+        target=target,
+        config=config,
+        mode=str(active_mode["mode"]),
+    )
+    active_mode["risk_pct"] = float(effective_risk["final_risk_pct"])
 
     daily_loss_key = "daily_loss_limit_pct"
     if active_mode["mode"] == "attack":
@@ -398,6 +405,32 @@ def build_stage1_decision(
     )
     max_qty = risk.max_notional / float(signal["last_price"]) if signal.get("last_price") else 0
     quantity = min(quantity, max_qty)
+    estimated_notional = quantity * float(signal["last_price"])
+    order_viability = effective_order_viability(
+        notional=estimated_notional,
+        candidate=scan_candidate,
+        config=config,
+    )
+    if config.get("effective_position_sizing_enabled", True) and not order_viability["allowed"]:
+        risk_dict = risk.__dict__
+        return {
+            "symbol": symbol,
+            "action": "WAIT",
+            "direction": direction,
+            "signal": signal,
+            "risk": {**risk_dict, "allowed": False, "reason": "ineffective_order"},
+            "quantity": quantity,
+            "estimated_notional": estimated_notional,
+            "effective_risk": effective_risk,
+            "order_viability": order_viability,
+            "mode": active_mode["mode"],
+            "strategy": active_mode["strategy"],
+            "entry_type": entry_type,
+            "decision_reason": "订单预期净收益不足以覆盖交易成本和噪声",
+            "equity_guard": guard,
+            "target_progress": target,
+            "protection_plan": protection_plan,
+        }
     risk_dict = risk.__dict__
     sizing = explain_position_sizing(
         base_risk_pct=float((scan_candidate or {}).get("base_risk_pct") or (scan_candidate or {}).get("risk_pct") or active_mode["risk_pct"]),
@@ -428,6 +461,8 @@ def build_stage1_decision(
         "unified_position_sizing": unified_sizing,
         "quantity": quantity,
         "estimated_notional": quantity * float(signal["last_price"]),
+        "effective_risk": effective_risk,
+        "order_viability": order_viability,
         "mode": active_mode["mode"],
         "strategy": active_mode["strategy"],
         "entry_type": entry_type,
@@ -564,8 +599,9 @@ def execute_stage1_market_order(
     notional = quantity * entry_price
     min_notional = filters.min_notional(symbol)
     min_notional_with_buffer = min_notional * (1 + max(float(config.get("min_order_notional_buffer_pct", 3.0)), 0.0) / 100)
+    effective_min_notional = float(config.get("effective_min_order_notional_usdt", 10.0))
     max_notional = float((decision.get("risk") or {}).get("max_notional") or 0)
-    if 0 < notional < min_notional_with_buffer:
+    if not config.get("effective_position_sizing_enabled", True) and 0 < notional < min_notional_with_buffer:
         min_quantity = filters.min_quantity_for_notional(
             symbol,
             entry_price,
@@ -588,8 +624,9 @@ def execute_stage1_market_order(
         "notional": notional,
         "protection_plan": protection_plan,
     }
-    if quantity <= 0 or notional < min_notional:
-        return {"mode": "blocked", "message": "Quantity is below exchange minimum.", "order": order}
+    required_notional = max(min_notional, effective_min_notional) if config.get("effective_position_sizing_enabled", True) else min_notional
+    if quantity <= 0 or notional < required_notional:
+        return {"mode": "blocked", "message": "Quantity is below effective order minimum.", "order": order}
     rotation = decision.get("rotation") or {}
     if not live_trading_allowed(config):
         if rotation.get("allowed"):
