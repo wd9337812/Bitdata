@@ -143,7 +143,7 @@ def status() -> dict[str, Any]:
     runtime = read_runtime_snapshot()
     runtime_status = {
         key: runtime.get(key)
-        for key in ["updated_at", "age_seconds", "channel", "last_cycle", "fast_lane", "background_scan"]
+        for key in ["updated_at", "age_seconds", "channel", "last_cycle", "fast_lane", "background_scan", "protection_audit"]
     }
     return {
         "config": load_config(include_secret=False),

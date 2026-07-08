@@ -144,6 +144,30 @@ function MetricCard({ title, value, sub, tone }: { title: string; value: string;
   );
 }
 
+function ProtectionAuditPanel({ audit }: { audit?: any }) {
+  const positions = audit?.positions || [];
+  if (!audit?.enabled && positions.length === 0) return null;
+  const protectedCount = positions.filter((item: any) => item.protected || item.repair_status === "repaired").length;
+  const first = positions[0] || {};
+  const statusText = positions.length === 0 ? "暂无持仓" : audit?.protected ? "已保护" : "需关注";
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>持仓保护</h2>
+          <p>系统只检查当前持仓币的条件止盈止损，缺失时会自动补单。</p>
+        </div>
+      </div>
+      <div className="metrics">
+        <MetricCard title="保护状态" value={statusText} sub={audit?.checked_at ? new Date(audit.checked_at).toLocaleString("zh-CN") : "等待下一轮审计"} tone={audit?.protected ? "positive" : positions.length ? "negative" : ""} />
+        <MetricCard title="持仓数量" value={`${protectedCount} / ${positions.length}`} sub="已保护 / 当前持仓" />
+        <MetricCard title="最近持仓" value={first.symbol || "-"} sub={first.direction ? `${first.direction} · ${first.status || "-"}` : "暂无"} />
+        <MetricCard title="保护单" value={`${fmt(first.stop_count, 0)} 止损 / ${fmt(first.take_profit_count, 0)} 止盈`} sub={first.repair_status === "repaired" ? "本轮已自动修复" : "来自 Binance 条件单"} />
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [active, setActive] = useState("overview");
   const [actionError, setActionError] = useState("");
@@ -305,6 +329,7 @@ function App() {
                 sub={data.health?.offsetMs !== undefined ? `时间偏差 ${fmt(data.health.offsetMs, 0)} ms` : data.health?.error}
               />
             </div>
+            <ProtectionAuditPanel audit={runtime?.protection_audit} />
             <TargetProgressPanel target={target} />
             <ProductCompletionPanel completion={completion} stageProfile={stageProfile} simulation={data.simulation} report={data.report} />
             <SignalExplain best={best} />

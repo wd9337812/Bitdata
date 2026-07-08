@@ -90,6 +90,12 @@ class TradingConfig(BaseModel):
     live_credit_large_win_usdt: float = Field(default=2.0, ge=0, le=1000)
     live_credit_big_loss_usdt: float = Field(default=0.7, ge=0, le=1000)
     live_credit_large_loss_usdt: float = Field(default=2.0, ge=0, le=1000)
+    live_credit_win_reward: float = Field(default=4.0, ge=0, le=50)
+    live_credit_net_profit_reward_per_usdt: float = Field(default=1.5, ge=0, le=50)
+    live_credit_low_fee_reward: float = Field(default=1.5, ge=0, le=20)
+    live_credit_loss_penalty: float = Field(default=6.0, ge=0, le=50)
+    live_credit_consecutive_loss_penalty: float = Field(default=10.0, ge=0, le=100)
+    live_credit_fee_drag_penalty: float = Field(default=3.0, ge=0, le=50)
     live_credit_min_quality_hold_seconds: int = Field(default=90, ge=0, le=86400)
     live_credit_tail_win_count: int = Field(default=3, ge=1, le=20)
     live_credit_tail_risk_multiplier: float = Field(default=0.75, ge=0.05, le=1)
@@ -147,6 +153,12 @@ class TradingConfig(BaseModel):
     dynamic_protection_enabled: bool = True
     dynamic_protection_runtime_enabled: bool = True
     dynamic_protection_runtime_trade_enabled: bool = False
+    protection_audit_enabled: bool = True
+    protection_audit_auto_repair_enabled: bool = True
+    protection_audit_rebuild_invalid_enabled: bool = True
+    protection_audit_log_throttle_seconds: int = Field(default=60, ge=0, le=3600)
+    protection_audit_fallback_stop_pct: float = Field(default=0.9, ge=0.05, le=20)
+    protection_audit_fallback_take_profit_pct: float = Field(default=1.2, ge=0.05, le=50)
     runtime_protection_max_hold_bars: int = Field(default=12, ge=1, le=500)
     protection_fast_invalid_seconds: int = Field(default=90, ge=0, le=3600)
     protection_fast_invalid_atr: float = Field(default=0.35, ge=0, le=10)
@@ -187,6 +199,18 @@ class TradingConfig(BaseModel):
     extreme_sprint_super_score: float = Field(default=135.0, ge=0, le=300)
     extreme_sprint_high_risk_multiplier: float = Field(default=1.35, ge=0.1, le=5)
     extreme_sprint_super_risk_multiplier: float = Field(default=1.75, ge=0.1, le=5)
+    extreme_scalp_enabled: bool = True
+    extreme_scalp_high_score: float = Field(default=122.0, ge=0, le=300)
+    extreme_scalp_super_score: float = Field(default=145.0, ge=0, le=300)
+    extreme_scalp_min_quality_score: float = Field(default=72.0, ge=0, le=100)
+    extreme_scalp_min_cost_ratio: float = Field(default=12.0, ge=0, le=200)
+    extreme_scalp_min_depth_notional_usdt: float = Field(default=20_000.0, ge=0)
+    extreme_scalp_high_risk_multiplier: float = Field(default=1.25, ge=0.1, le=5)
+    extreme_scalp_super_risk_multiplier: float = Field(default=1.55, ge=0.1, le=5)
+    extreme_scalp_max_risk_pct: float = Field(default=18.0, ge=0.1, le=100)
+    extreme_scalp_stop_atr: float = Field(default=0.55, ge=0.05, le=10)
+    extreme_scalp_take_profit_atr: float = Field(default=0.75, ge=0.05, le=20)
+    extreme_scalp_max_hold_bars: int = Field(default=2, ge=1, le=100)
     extreme_sprint_max_consecutive_losses: int = Field(default=5, ge=1, le=20)
     extreme_sprint_daily_loss_limit_pct: float = Field(default=50.0, ge=0.1, le=95)
     extreme_v2_enabled: bool = True

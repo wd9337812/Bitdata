@@ -20,6 +20,30 @@ def signal_strength_tier(candidate: dict[str, Any] | None) -> str:
     return "probe"
 
 
+def extreme_scalp_tier(candidate: dict[str, Any] | None, config: dict[str, Any]) -> str:
+    if not config.get("extreme_scalp_enabled", True):
+        return "none"
+    candidate = candidate or {}
+    if str(candidate.get("mode") or "") != "extreme_sprint":
+        return "none"
+    if str(candidate.get("entry_type") or "standard") in PROBE_ENTRY_TYPES:
+        return "none"
+    score = float(candidate.get("score") or 0.0)
+    quality_score = float((candidate.get("symbol_quality") or {}).get("score") or 0.0)
+    cost_ratio = float(candidate.get("cost_ratio") or 0.0)
+    depth_notional = float(((candidate.get("depth") or {}).get("depth_notional")) or 0.0)
+    min_quality = float(config.get("extreme_scalp_min_quality_score", 72.0))
+    min_cost_ratio = float(config.get("extreme_scalp_min_cost_ratio", 12.0))
+    min_depth = float(config.get("extreme_scalp_min_depth_notional_usdt", 20_000.0))
+    if quality_score < min_quality or cost_ratio < min_cost_ratio or depth_notional < min_depth:
+        return "none"
+    if score >= float(config.get("extreme_scalp_super_score", 145.0)):
+        return "super"
+    if score >= float(config.get("extreme_scalp_high_score", 122.0)):
+        return "high"
+    return "none"
+
+
 def effective_position_risk(
     *,
     candidate_risk_pct: float,
@@ -44,12 +68,24 @@ def effective_position_risk(
         guard_multiplier = max(guard_multiplier, guard_floor)
         risk_floor = float(config.get(f"effective_{tier}_min_risk_pct", 0.0))
     calculated = raw_risk * guard_multiplier * target_multiplier
+    scalp_tier = extreme_scalp_tier(candidate, config) if mode == "extreme_sprint" else "none"
+    scalp_multiplier = 1.0
+    if scalp_tier == "high":
+        scalp_multiplier = float(config.get("extreme_scalp_high_risk_multiplier", 1.25))
+    elif scalp_tier == "super":
+        scalp_multiplier = float(config.get("extreme_scalp_super_risk_multiplier", 1.55))
+    calculated *= scalp_multiplier
     final_risk = max(calculated, risk_floor) if raw_risk > 0 else 0.0
     max_risk = float(config.get(f"effective_{tier}_max_risk_pct", raw_risk or final_risk))
+    if scalp_tier != "none":
+        scalp_cap = float(config.get("extreme_scalp_max_risk_pct", 18.0))
+        max_risk = scalp_cap if scalp_cap > 0 else max_risk
     if max_risk > 0:
         final_risk = min(final_risk, max_risk)
     return {
         "tier": tier,
+        "scalp_tier": scalp_tier,
+        "scalp_multiplier": round(scalp_multiplier, 6),
         "candidate_risk_pct": round(raw_risk, 8),
         "guard_multiplier": round(guard_multiplier, 6),
         "guard_floor": round(guard_floor, 6),

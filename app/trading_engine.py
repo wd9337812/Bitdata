@@ -6,7 +6,14 @@ from typing import Any
 from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.grid import build_grid_orders, build_grid_plan
-from app.position_sizing import effective_order_viability, effective_position_risk, explain_position_sizing, unified_position_sizing
+from app.position_sizing import (
+    effective_order_viability,
+    effective_position_risk,
+    explain_position_sizing,
+    extreme_scalp_tier,
+    unified_position_sizing,
+)
+from app.protection_audit import audit_position_protection, enrich_positions_with_prices
 from app.protection import apply_initial_protection_to_signal, build_protection_plan
 from app.risk import assess_new_position, current_stage, equity_guard_status, live_trading_allowed, position_size_from_risk
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates, strategy_params_for_mode
@@ -328,6 +335,17 @@ def build_stage1_decision(
     if equity is None:
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "account_unavailable"}}
     entry_type = (scan_candidate or {}).get("entry_type", signal.get("entry_type", "standard"))
+    scalp_tier = extreme_scalp_tier(scan_candidate, config)
+    if scalp_tier != "none":
+        signal = dict(signal)
+        signal["entry_type"] = "extreme_scalp"
+        signal["entry_type_label"] = "极限短打"
+        signal["protection_profile"] = {
+            "stop_atr": float(config.get("extreme_scalp_stop_atr", 0.55)),
+            "take_profit_atr": float(config.get("extreme_scalp_take_profit_atr", 0.75)),
+            "max_hold_bars": int(config.get("extreme_scalp_max_hold_bars", 2)),
+        }
+        entry_type = "extreme_scalp"
     protection_plan = build_protection_plan(signal, config, entry_type=entry_type, direction=direction)
     signal = apply_initial_protection_to_signal(signal, protection_plan)
     guard = equity_guard_status(config, state, equity, active_mode["mode"])
@@ -470,6 +488,7 @@ def build_stage1_decision(
         "equity_guard": guard,
         "target_progress": target,
         "protection_plan": protection_plan,
+        "scalp_tier": scalp_tier,
         "risk_pct": active_mode["risk_pct"],
         "leverage": active_mode["leverage"],
     }
@@ -681,12 +700,40 @@ def execute_stage1_market_order(
             "close_order": close_order,
             "error": str(exc),
         }
+    live_position = find_live_position(client, symbol, direction)
+    if live_position is not None:
+        try:
+            live_position = enrich_positions_with_prices([live_position], client.position_risk())[0]
+            audit = audit_position_protection(
+                client,
+                live_position,
+                config,
+                repair=False,
+            )
+        except Exception as exc:
+            audit = {"protected": False, "status": "audit_error", "error": str(exc)}
+        if not audit.get("protected"):
+            close_order = client.place_market_order(
+                symbol=symbol,
+                side=close_side,
+                quantity=position_amount_abs(live_position),
+                position_side=position_side,
+            )
+            return {
+                "mode": "protection_confirm_failed_closed",
+                "entry_order": entry_order,
+                "stop_order": stop_order,
+                "take_profit_order": take_profit_order,
+                "close_order": close_order,
+                "protection_audit": audit,
+            }
     return {
         "mode": "rotation_live" if rotation_close else "live",
         "rotation_close": rotation_close,
         "entry_order": entry_order,
         "stop_order": stop_order,
         "take_profit_order": take_profit_order,
+        "protection_audit": audit if "audit" in locals() else None,
     }
 
 

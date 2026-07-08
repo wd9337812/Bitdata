@@ -5,10 +5,11 @@ from typing import Any
 
 from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
+from app.protection_audit import enrich_positions_with_prices
 from app.risk import live_trading_allowed
 from app.state_store import save_state
 from app.strategy import atr
-from app.telemetry import record_event
+from app.telemetry import record_event, record_event_throttled
 
 
 def _now() -> datetime:
@@ -140,6 +141,17 @@ def manage_runtime_protection(
     if not config.get("dynamic_protection_runtime_enabled", True):
         return {"enabled": False, "actions": []}
     positions = [item for item in account.get("positions", []) if abs(_position_amount(item)) > 0]
+    if positions and client is not None:
+        try:
+            positions = enrich_positions_with_prices(positions, client.position_risk())
+        except Exception as exc:
+            record_event_throttled(
+                "warning",
+                "runtime_protection",
+                f"positionRisk price fallback failed: {exc}",
+                {},
+                throttle_seconds=120,
+            )
     tracked = _tracked_positions(state)
     updates: dict[str, Any] = {}
     now_iso = _now().isoformat()

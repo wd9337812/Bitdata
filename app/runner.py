@@ -14,7 +14,8 @@ from app.learning_report import save_daily_learning_report
 from app.live_learning import sync_live_learning_from_binance
 from app.market_stream import start_market_stream_thread
 from app.opportunity_queue import read_opportunities
-from app.risk import direction_cooldown_key
+from app.protection_audit import audit_account_protection
+from app.risk import direction_cooldown_key, live_trading_allowed
 from app.runtime_protection import manage_runtime_protection
 from app.trading_engine import (
     build_best_growth_decision,
@@ -27,7 +28,7 @@ from app.trading_engine import (
 )
 from app.state_store import load_state, save_state
 from app.runtime_snapshot import market_rows_from_scan, update_runtime_snapshot
-from app.telemetry import compact_decision, maintain_telemetry, record_equity_snapshot, record_event, record_strategy_run
+from app.telemetry import compact_decision, maintain_telemetry, record_equity_snapshot, record_event, record_event_throttled, record_strategy_run
 
 
 _EXECUTION_LOCK = threading.Lock()
@@ -177,9 +178,24 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     state = sync_stage(config, state, account)
     if not fast_lane:
         maybe_sync_live_learning(client, config, state)
+        with request_priority("critical"):
+            audit_status = audit_account_protection(client, config, account, repair=live_trading_allowed(config))
+        if audit_status.get("positions") and not audit_status.get("protected", True):
+            record_event_throttled(
+                "warning",
+                "protection_audit",
+                "unprotected position detected",
+                audit_status,
+                throttle_seconds=int(config.get("protection_audit_log_throttle_seconds", 60)),
+            )
         protection_status = manage_runtime_protection(client, config, state, account)
         if protection_status.get("actions"):
-            record_event("info", "runtime_protection", "runtime protection checked", protection_status)
+            noisy_actions = [
+                action for action in protection_status.get("actions", [])
+                if action.get("action") != "observe" or action.get("reason") not in {"holding"}
+            ]
+            if noisy_actions:
+                record_event("info", "runtime_protection", "runtime protection checked", {**protection_status, "actions": noisy_actions})
         maybe_generate_daily_report(config, state)
 
     if state.get("stage") == "grid":
@@ -299,6 +315,8 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         },
         "account": {key: account.get(key) for key in ["equity", "available_balance", "unrealized_pnl"]},
     }
+    if not fast_lane and "audit_status" in locals():
+        snapshot_updates["protection_audit"] = audit_status
     if fast_lane:
         snapshot_updates["fast_lane_decision"] = compact_decision(decision)
     else:

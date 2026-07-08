@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_EVENT_THROTTLE: dict[str, float] = {}
+
 
 def db_path() -> Path:
     config_path = Path(os.getenv("APP_CONFIG_PATH", "./data/config.json"))
@@ -127,6 +129,30 @@ def record_event(level: str, category: str, message: str, payload: dict[str, Any
         conn.commit()
 
 
+def record_event_throttled(
+    level: str,
+    category: str,
+    message: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    throttle_seconds: int = 60,
+    key: str | None = None,
+) -> bool:
+    throttle_key = key or f"{level}:{category}:{message}"
+    current = datetime.now(timezone.utc).timestamp()
+    last = _EVENT_THROTTLE.get(throttle_key, 0.0)
+    if throttle_seconds > 0 and current - last < throttle_seconds:
+        return False
+    _EVENT_THROTTLE[throttle_key] = current
+    try:
+        record_event(level, category, message, payload)
+    except sqlite3.OperationalError as exc:
+        if "locked" not in str(exc).lower():
+            raise
+        return False
+    return True
+
+
 def record_strategy_run(
     state: dict[str, Any],
     account: dict[str, Any],
@@ -210,11 +236,23 @@ def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
 def maintain_telemetry(retention_days: int = 30) -> dict[str, int]:
     cutoff = datetime.now(timezone.utc).timestamp() - max(1, retention_days) * 86400
     cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
-    with connect() as conn:
-        events = conn.execute("DELETE FROM event_logs WHERE ts < ?", (cutoff_iso,)).rowcount
-        snapshots = conn.execute("DELETE FROM equity_snapshots WHERE ts < ?", (cutoff_iso,)).rowcount
-        conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
-        conn.commit()
+    try:
+        with connect() as conn:
+            events = conn.execute("DELETE FROM event_logs WHERE ts < ?", (cutoff_iso,)).rowcount
+            snapshots = conn.execute("DELETE FROM equity_snapshots WHERE ts < ?", (cutoff_iso,)).rowcount
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            conn.commit()
+    except sqlite3.OperationalError as exc:
+        if "locked" not in str(exc).lower():
+            raise
+        record_event_throttled(
+            "warning",
+            "telemetry_maintenance",
+            "database table is locked",
+            {},
+            throttle_seconds=300,
+        )
+        return {"events_deleted": 0, "snapshots_deleted": 0}
     return {"events_deleted": max(0, events), "snapshots_deleted": max(0, snapshots)}
 
 

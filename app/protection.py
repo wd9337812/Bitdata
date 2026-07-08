@@ -10,6 +10,7 @@ ENTRY_LABELS = {
     "extreme_probe": "\u706b\u836f\u6876\u8bd5\u63a2\u4fdd\u62a4",
     "weak_quality_probe": "\u5f31\u8d28\u91cf\u8bd5\u63a2\u4fdd\u62a4",
     "observe_standard": "\u89c2\u5bdf\u6c60\u8bd5\u5355\u4fdd\u62a4",
+    "extreme_scalp": "极限短打保护",
 }
 
 
@@ -34,6 +35,8 @@ def _entry_defaults(entry_type: str) -> tuple[float, float, int]:
         return 0.75, 1.0, 4
     if entry_type == "momentum":
         return 0.8, 1.2, 5
+    if entry_type == "extreme_scalp":
+        return 0.55, 0.75, 2
     return 1.0, 1.5, 18
 
 

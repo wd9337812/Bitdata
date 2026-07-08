@@ -192,7 +192,8 @@ def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict
             consecutive_wins += 1
             consecutive_losses = 0
             gross_profit += net
-            delta = 3.0
+            delta = float(config.get("live_credit_win_reward", 4.0))
+            delta += min(6.0, net * float(config.get("live_credit_net_profit_reward_per_usdt", 1.5)))
             if net >= float(config.get("live_credit_big_win_usdt", 0.7)):
                 delta += 2.0
             if net >= float(config.get("live_credit_large_win_usdt", 2.0)):
@@ -202,7 +203,7 @@ def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict
             if consecutive_wins >= 3:
                 delta += 5.0
             if fee > 0 and net > 0 and fee / max(net, 0.0001) <= 0.10:
-                delta += 1.0
+                delta += float(config.get("live_credit_low_fee_reward", 1.5))
             if hold_seconds >= float(config.get("live_credit_min_quality_hold_seconds", 90)):
                 delta += 1.0
             delta *= _time_decay_multiplier(record, config)
@@ -213,7 +214,7 @@ def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict
             consecutive_losses += 1
             consecutive_wins = 0
             gross_loss += abs(net)
-            delta = -5.0
+            delta = -float(config.get("live_credit_loss_penalty", 6.0))
             if net <= -float(config.get("live_credit_big_loss_usdt", 0.7)):
                 delta -= 3.0
             if net <= -float(config.get("live_credit_large_loss_usdt", 2.0)):
@@ -221,11 +222,11 @@ def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict
             if hold_seconds and hold_seconds <= float(config.get("live_credit_quick_stop_seconds", 60)):
                 delta -= 8.0
             if consecutive_losses >= 2:
-                delta -= 8.0
+                delta -= float(config.get("live_credit_consecutive_loss_penalty", 10.0))
             if consecutive_losses >= 3:
                 delta -= 15.0
             if abs(net_ratio) < 0.3 and fee > abs(net) * 0.20:
-                delta -= 2.0
+                delta -= float(config.get("live_credit_fee_drag_penalty", 3.0))
             delta *= _time_decay_multiplier(record, config)
             score += delta
             notes.append(f"亏损惩罚 {delta:.1f}")
