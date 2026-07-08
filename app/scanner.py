@@ -81,6 +81,17 @@ MODE_PRESETS: dict[str, dict[str, Any]] = {
         "min_trades": 1,
         "recent_days": 2,
     },
+    "yolo_scalp": {
+        "strategy": "breakout",
+        "interval_key": "yolo_scalp_interval",
+        "recent_days_key": "yolo_scalp_recent_days",
+        "risk_key": "yolo_scalp_risk_per_trade_pct",
+        "leverage_key": "yolo_scalp_max_leverage",
+        "margin_key": "yolo_scalp_max_symbol_margin_pct",
+        "min_pf": 0.55,
+        "min_trades": 1,
+        "recent_days": 1,
+    },
 }
 
 
@@ -91,6 +102,7 @@ PIPELINE_DEFAULTS: dict[str, dict[str, int]] = {
     "tournament": {"recall": 500, "coarse": 180, "rank": 80, "auction": 15},
     "tournament_sprint": {"recall": 600, "coarse": 220, "rank": 90, "auction": 15},
     "extreme_sprint": {"recall": 650, "coarse": 240, "rank": 110, "auction": 18},
+    "yolo_scalp": {"recall": 700, "coarse": 260, "rank": 120, "auction": 20},
 }
 
 
@@ -101,14 +113,31 @@ def extreme_sprint_armed(config: dict[str, Any]) -> bool:
     )
 
 
+def yolo_scalp_armed(config: dict[str, Any]) -> bool:
+    return (
+        config.get("yolo_scalp_enabled") is True
+        and str(config.get("yolo_scalp_confirmation", "")) == "ENABLE_YOLO_SCALP"
+    )
+
+
+def is_extreme_mode(mode_name: str | None) -> bool:
+    return str(mode_name or "").lower() in {"extreme_sprint", "yolo_scalp"}
+
+
 def active_growth_mode(config: dict[str, Any], equity: float | None = None) -> str:
     configured = str(config.get("growth_mode", "balanced")).lower()
+    if configured == "yolo_scalp":
+        return "yolo_scalp" if yolo_scalp_armed(config) else "balanced"
     if configured == "extreme_sprint":
         return "extreme_sprint" if extreme_sprint_armed(config) else "balanced"
     if not config.get("auto_risk_by_equity", True):
         return configured if configured in MODE_PRESETS else "balanced"
     if equity is None:
         return configured if configured in MODE_PRESETS else "balanced"
+    if yolo_scalp_armed(config) and equity < float(config.get("yolo_scalp_auto_under_equity", 300.0)):
+        return "yolo_scalp"
+    if extreme_sprint_armed(config) and equity < float(config.get("extreme_sprint_auto_under_equity", 10_000.0)):
+        return "extreme_sprint"
     if (
         config.get("tournament_sprint_enabled", True)
         and equity < float(config.get("tournament_sprint_auto_under_equity", 0))
@@ -152,10 +181,16 @@ def strategy_params_for_mode(
     entry_type: str = "standard",
 ) -> StrategyParams | None:
     mode_name = str(mode.get("mode") if isinstance(mode, dict) else mode)
-    if mode_name not in {"tournament_sprint", "extreme_sprint"}:
+    if mode_name not in {"tournament_sprint", "extreme_sprint", "yolo_scalp"}:
         return None
     entry_key = "momentum" if entry_type == "momentum" else "preemptive" if entry_type in {"preemptive", "extreme_probe", "weak_quality_probe"} else "standard"
-    if mode_name == "extreme_sprint":
+    if mode_name == "yolo_scalp":
+        defaults = {
+            "standard": (0.38, 0.55, 2),
+            "preemptive": (0.32, 0.48, 2),
+            "momentum": (0.35, 0.60, 2),
+        }
+    elif mode_name == "extreme_sprint":
         defaults = {
             "standard": (0.75, 1.05, 4),
             "preemptive": (0.65, 0.9, 3),
@@ -168,19 +203,19 @@ def strategy_params_for_mode(
             "momentum": (0.8, 1.2, 5),
         }
     default_stop, default_take, default_hold = defaults[entry_key]
-    prefix = "extreme_sprint" if mode_name == "extreme_sprint" else "tournament_sprint"
-    if mode_name == "extreme_sprint" and entry_type == "weak_quality_probe":
+    prefix = "yolo_scalp" if mode_name == "yolo_scalp" else "extreme_sprint" if mode_name == "extreme_sprint" else "tournament_sprint"
+    if is_extreme_mode(mode_name) and entry_type == "weak_quality_probe":
         return StrategyParams(
-            stop_atr=float(config.get("weak_quality_probe_stop_atr", 0.55)),
-            take_profit_atr=float(config.get("weak_quality_probe_take_profit_atr", 0.75)),
-            max_hold_bars=int(config.get("weak_quality_probe_max_hold_bars", 3)),
+            stop_atr=float(config.get(f"{prefix}_weak_probe_stop_atr", config.get("weak_quality_probe_stop_atr", default_stop))),
+            take_profit_atr=float(config.get(f"{prefix}_weak_probe_take_profit_atr", config.get("weak_quality_probe_take_profit_atr", default_take))),
+            max_hold_bars=int(config.get(f"{prefix}_weak_probe_max_hold_bars", config.get("weak_quality_probe_max_hold_bars", default_hold))),
             min_atr_pct=0.006,
         )
-    if mode_name == "extreme_sprint" and entry_type == "extreme_probe":
+    if is_extreme_mode(mode_name) and entry_type == "extreme_probe":
         return StrategyParams(
-            stop_atr=float(config.get("extreme_probe_stop_atr", 0.9)),
-            take_profit_atr=float(config.get("extreme_probe_take_profit_atr", 1.2)),
-            max_hold_bars=int(config.get("extreme_probe_max_hold_bars", 4)),
+            stop_atr=float(config.get(f"{prefix}_probe_stop_atr", config.get("extreme_probe_stop_atr", default_stop))),
+            take_profit_atr=float(config.get(f"{prefix}_probe_take_profit_atr", config.get("extreme_probe_take_profit_atr", default_take))),
+            max_hold_bars=int(config.get(f"{prefix}_probe_max_hold_bars", config.get("extreme_probe_max_hold_bars", default_hold))),
             min_atr_pct=0.006,
         )
     return StrategyParams(
@@ -192,7 +227,7 @@ def strategy_params_for_mode(
 
 
 def _mode_key(mode: dict[str, Any], sprint_key: str, extreme_key: str) -> str:
-    return extreme_key if mode.get("mode") == "extreme_sprint" else sprint_key
+    return extreme_key if is_extreme_mode(mode.get("mode")) else sprint_key
 
 
 def classify_market_state(
@@ -322,7 +357,7 @@ def discover_coin_symbols(client: BinanceFuturesClient, config: dict[str, Any]) 
         and item.get("quoteAsset") == "USDT"
     }
     min_volume = float(config.get("min_24h_volume_usdt", 100_000_000))
-    if config.get("growth_mode") == "extreme_sprint" and config.get("extreme_v2_enabled", True):
+    if is_extreme_mode(str(config.get("growth_mode"))) and config.get("extreme_v2_enabled", True):
         min_volume = min(min_volume, float(config.get("extreme_firecracker_min_quote_volume_usdt", 30_000_000)))
     tickers = client.ticker_24h()
     ranked = [
@@ -538,7 +573,7 @@ def _coarse_rank_symbols(
         last_price = float(ticker.get("lastPrice", 0) or 0)
         volume_score = min(max(math.log10(max(quote_volume, 1)) - 6.5, 0.0) * 12.0, 35.0)
         move_score = min(abs(change_pct) * 1.8, 28.0)
-        if mode.get("mode") == "extreme_sprint" and config.get("extreme_v2_enabled", True):
+        if is_extreme_mode(mode.get("mode")) and config.get("extreme_v2_enabled", True):
             move_score = min(abs(change_pct) * float(config.get("extreme_firecracker_move_score_weight", 2.4)), 40.0)
             volume_score = min(max(math.log10(max(quote_volume, 1)) - 6.5, 0.0) * float(config.get("extreme_firecracker_volume_score_weight", 12.0)), 38.0)
         direction_bias = 4.0 if change_pct > 0 else 2.0 if change_pct < 0 else 0.0
@@ -575,7 +610,7 @@ def _coarse_rank_symbols(
                 "opportunity_event": opportunity or {},
             }
         )
-    if mode.get("mode") == "extreme_sprint" and config.get("extreme_v2_enabled", True):
+    if is_extreme_mode(mode.get("mode")) and config.get("extreme_v2_enabled", True):
         rows.sort(key=lambda item: item["score"], reverse=True)
     else:
         rows.sort(key=lambda item: (item["symbol"] in manual, item["score"]), reverse=True)
@@ -603,7 +638,7 @@ def firecracker_opportunity_score(
 ) -> dict[str, Any]:
     if not config.get("extreme_firecracker_enabled", True):
         return {"enabled": False, "score": 0.0, "is_firecracker": False, "reasons": ["disabled"]}
-    if (mode or {}).get("mode") != "extreme_sprint" or not config.get("extreme_v2_enabled", True):
+    if not is_extreme_mode((mode or {}).get("mode")) or not config.get("extreme_v2_enabled", True):
         return {"enabled": False, "score": 0.0, "is_firecracker": False, "reasons": ["not_extreme_v2"]}
     quote_volume = float(ticker.get("quoteVolume", 0) or 0)
     change_pct = float(ticker.get("priceChangePercent", 0) or 0)
@@ -909,6 +944,16 @@ QUALITY_WEIGHTS: dict[str, dict[str, float]] = {
         "backtest_10d": 0,
         "trend": 11,
     },
+    "yolo_scalp": {
+        "volume": 6,
+        "volume_spike": 26,
+        "volatility": 22,
+        "spread_depth": 20,
+        "backtest_3d": 10,
+        "backtest_5d": 4,
+        "backtest_10d": 0,
+        "trend": 12,
+    },
 }
 
 
@@ -918,6 +963,7 @@ ATR_IDEAL_RANGES: dict[str, tuple[float, float, float]] = {
     "attack": (0.8, 4.5, 7.0),
     "tournament": (1.0, 5.5, 8.0),
     "extreme_sprint": (1.2, 8.0, 11.0),
+    "yolo_scalp": (1.5, 10.0, 14.0),
 }
 
 
@@ -929,10 +975,10 @@ def _mode_name(config: dict[str, Any], mode: dict[str, Any] | None = None) -> st
 def _score_volatility_for_mode(atr_pct: float, mode_name: str, config: dict[str, Any]) -> float:
     if atr_pct <= 0:
         return 0.0
-    if mode_name in {"tournament_sprint", "extreme_sprint"}:
+    if mode_name in {"tournament_sprint", "extreme_sprint", "yolo_scalp"}:
         ideal_min = float(config.get("sprint_atr_ideal_min_pct", 1.2))
-        ideal_max = float(config.get("sprint_atr_ideal_max_pct", 8.0 if mode_name == "extreme_sprint" else 7.0))
-        high = float(config.get("sprint_atr_high_pct", 11.0 if mode_name == "extreme_sprint" else 10.0))
+        ideal_max = float(config.get("sprint_atr_ideal_max_pct", 10.0 if mode_name == "yolo_scalp" else 8.0 if mode_name == "extreme_sprint" else 7.0))
+        high = float(config.get("sprint_atr_high_pct", 14.0 if mode_name == "yolo_scalp" else 11.0 if mode_name == "extreme_sprint" else 10.0))
     else:
         ideal_min, ideal_max, high = ATR_IDEAL_RANGES.get(mode_name, ATR_IDEAL_RANGES["balanced"])
     if ideal_min <= atr_pct <= ideal_max:
@@ -961,7 +1007,7 @@ def _quality_risk_multiplier(
         hot_mult = float(config.get("sprint_hot_observe_risk_multiplier", 0.35))
         multiplier *= hot_mult
         reasons.append(f"热点观察小仓 {hot_mult:.2f}x")
-    if mode_name in {"tournament_sprint", "extreme_sprint"}:
+    if mode_name in {"tournament_sprint", "extreme_sprint", "yolo_scalp"}:
         ideal_max = float(config.get("sprint_atr_ideal_max_pct", 7.0))
         high = float(config.get("sprint_atr_high_pct", 10.0))
         if atr_pct > ideal_max:
@@ -973,7 +1019,7 @@ def _quality_risk_multiplier(
             extreme_depth = float(config.get("sprint_extreme_depth_notional_usdt", 50_000.0))
             if depth_notional < extreme_depth or spike < float(config.get("sprint_sample_penalty_exempt_spike", 2.5)):
                 return 0.0, reasons + ["极端ATR且深度/放量不足，禁止"]
-    if mode_name in {"tournament_sprint", "extreme_sprint"} and sample_low and not sample_exempt:
+    if mode_name in {"tournament_sprint", "extreme_sprint", "yolo_scalp"} and sample_low and not sample_exempt:
         sample_mult = float(config.get("sprint_sample_low_risk_multiplier", 0.75))
         multiplier *= sample_mult
         reasons.append(f"样本偏少降仓 {sample_mult:.2f}x")
@@ -1154,7 +1200,7 @@ def score_symbol_quality(
     primary = backtests.get(5) or {}
     sample_low = int(primary.get("trades", 0)) < int(config.get("min_simulated_trades", 5))
     sample_exempt = (
-        mode_name in {"tournament_sprint", "extreme_sprint"}
+        mode_name in {"tournament_sprint", "extreme_sprint", "yolo_scalp"}
         and spike >= float(config.get("sprint_sample_penalty_exempt_spike", 2.5))
         and bool(signal.get("trend") is True or signal.get("signal") in {"LONG", "SHORT"})
         and float(depth.get("depth_notional", 0)) >= float(config.get("min_depth_notional_usdt", 20_000))
@@ -1162,7 +1208,7 @@ def score_symbol_quality(
     if sample_low and not sample_exempt:
         false_breakout_penalty += (
             float(config.get("sprint_sample_penalty", 1.0))
-            if mode_name in {"tournament_sprint", "extreme_sprint"}
+            if mode_name in {"tournament_sprint", "extreme_sprint", "yolo_scalp"}
             else {"conservative": 10.0, "balanced": 8.0, "attack": 5.0, "tournament": 3.0}.get(mode_name, 8.0)
         )
     if float(primary.get("win_rate", 0)) < 35 and int(primary.get("trades", 0)) >= 5:
@@ -1170,7 +1216,7 @@ def score_symbol_quality(
     high_atr_penalty = 0.0
     if mode_name != "tournament_sprint" and atr_pct > 5.5:
         high_atr_penalty = 6.0
-    elif mode_name in {"tournament_sprint", "extreme_sprint"} and atr_pct > float(config.get("sprint_atr_high_pct", 10.0)):
+    elif mode_name in {"tournament_sprint", "extreme_sprint", "yolo_scalp"} and atr_pct > float(config.get("sprint_atr_high_pct", 14.0 if mode_name == "yolo_scalp" else 10.0)):
         high_atr_penalty = 2.0
     if high_atr_penalty:
         false_breakout_penalty += high_atr_penalty
@@ -1190,8 +1236,8 @@ def score_symbol_quality(
     }
     score = sum(weighted_components.values()) - min(false_breakout_penalty, 20.0)
     score = max(0.0, min(score, 100.0))
-    trade_score = float(config.get("sprint_symbol_trade_score", 68.0) if mode_name in {"tournament_sprint", "extreme_sprint"} else config.get("symbol_trade_score", 75.0))
-    small_score = float(config.get("sprint_symbol_small_trade_score", 55.0) if mode_name in {"tournament_sprint", "extreme_sprint"} else config.get("symbol_small_trade_score", 65.0))
+    trade_score = float(config.get("yolo_symbol_trade_score", 60.0) if mode_name == "yolo_scalp" else config.get("sprint_symbol_trade_score", 68.0) if mode_name in {"tournament_sprint", "extreme_sprint"} else config.get("symbol_trade_score", 75.0))
+    small_score = float(config.get("yolo_symbol_small_trade_score", 48.0) if mode_name == "yolo_scalp" else config.get("sprint_symbol_small_trade_score", 55.0) if mode_name in {"tournament_sprint", "extreme_sprint"} else config.get("symbol_small_trade_score", 65.0))
     hot_score = float(config.get("sprint_symbol_hot_observe_score", 45.0))
     observe_score = float(config.get("symbol_observe_score", 50.0))
     market_passed = (
@@ -1199,7 +1245,7 @@ def score_symbol_quality(
         and float(depth.get("depth_notional", 0)) >= float(config.get("min_depth_notional_usdt", 20_000))
     )
     hot_observe = (
-        mode_name in {"tournament_sprint", "extreme_sprint"}
+        mode_name in {"tournament_sprint", "extreme_sprint", "yolo_scalp"}
         and score >= hot_score
         and market_passed
         and spike >= float(config.get("sprint_sample_penalty_exempt_spike", 2.5))
@@ -1285,22 +1331,24 @@ def observe_breakout_allows_entry(
 ) -> bool:
     if not config.get("observe_breakout_enabled", True):
         return False
-    if mode.get("mode") not in {"tournament", "tournament_sprint"}:
+    if mode.get("mode") not in {"tournament", "tournament_sprint", "yolo_scalp"}:
         return False
     if quality.get("pool") != "observe":
         return False
     if signal.get("signal") not in {"LONG", "SHORT"}:
         return False
-    if mode.get("mode") == "tournament_sprint":
-        if candidate_score < float(config.get("tournament_sprint_standard_min_score", config.get("standard_min_score", 85.0))):
+    if mode.get("mode") in {"tournament_sprint", "yolo_scalp"}:
+        prefix = "yolo_scalp" if mode.get("mode") == "yolo_scalp" else "tournament_sprint"
+        if candidate_score < float(config.get(f"{prefix}_standard_min_score", config.get("standard_min_score", 85.0))):
             return False
-        if float(quality.get("score", 0)) < float(config.get("observe_breakout_min_quality", 78.0)) - 5.0:
+        quality_floor = float(config.get("yolo_observe_breakout_min_quality", 58.0) if prefix == "yolo_scalp" else config.get("observe_breakout_min_quality", 78.0) - 5.0)
+        if float(quality.get("score", 0)) < quality_floor:
             return False
-        if cost_ratio < float(config.get("tournament_sprint_min_expected_profit_cost_ratio", 1.35)):
+        if cost_ratio < float(config.get(f"{prefix}_min_expected_profit_cost_ratio", 1.35)):
             return False
-        if float(recent.get("profit_factor", 0)) < float(config.get("tournament_sprint_long_min_profit_factor", 0.85)):
+        if float(recent.get("profit_factor", 0)) < float(config.get(f"{prefix}_long_min_profit_factor", 0.75 if prefix == "yolo_scalp" else 0.85)):
             return False
-        if float(recent.get("net_pct", 0)) < float(config.get("tournament_sprint_long_min_net_pct", -3.0)):
+        if float(recent.get("net_pct", 0)) < float(config.get(f"{prefix}_long_min_net_pct", -8.0 if prefix == "yolo_scalp" else -3.0)):
             return False
         if float(depth.get("spread_pct", 999)) > float(config.get("observe_breakout_max_spread_pct", 0.08)):
             return False
@@ -1370,7 +1418,7 @@ def weak_quality_probe_allows_entry(
     reasons: list[str] = []
     if not config.get("weak_quality_probe_enabled", True):
         return False, ["弱质量试探未开启"]
-    if mode.get("mode") != "extreme_sprint":
+    if not is_extreme_mode(mode.get("mode")):
         return False, ["仅极限冲刺启用"]
     if quality.get("pool") not in {"observe", "observe_hot"}:
         return False, [f"质量池不是观察池({quality.get('pool')})"]
@@ -1638,8 +1686,8 @@ def scan_growth_candidates(
             bars = client.klines_history(symbol, mode["interval"], max(quality_days))
             directions = ["LONG", "SHORT"] if config.get("allow_short", False) else ["LONG"]
             for direction in directions:
-                is_sprint = mode["mode"] in {"tournament_sprint", "extreme_sprint"}
-                fast_prefix = "extreme_sprint" if mode["mode"] == "extreme_sprint" else "tournament_sprint"
+                is_sprint = mode["mode"] in {"tournament_sprint", "extreme_sprint", "yolo_scalp"}
+                fast_prefix = "yolo_scalp" if mode["mode"] == "yolo_scalp" else "extreme_sprint" if mode["mode"] == "extreme_sprint" else "tournament_sprint"
                 signal_params = strategy_params_for_mode(config, mode, "standard")
                 signal = latest_strategy_signal(symbol, bars, mode["strategy"], params=signal_params, direction=direction)
                 backtests = {
@@ -1653,14 +1701,14 @@ def scan_growth_candidates(
                 cost_ratio = expected_profit_pct / cost_pct if cost_pct else 0
 
                 if direction == "SHORT":
-                    min_trades = int(config.get("tournament_sprint_short_min_recent_trades", 3) if is_sprint else config.get("short_min_recent_trades", 5))
-                    min_pf = float(config.get("tournament_sprint_short_min_profit_factor", 1.05) if is_sprint else config.get("short_min_profit_factor", 1.3))
-                    min_net_pct = float(config.get("tournament_sprint_short_min_net_pct", -2.0) if is_sprint else config.get("short_min_net_pct", 1.0))
+                    min_trades = int(config.get(f"{fast_prefix}_short_min_recent_trades", config.get("tournament_sprint_short_min_recent_trades", 3)) if is_sprint else config.get("short_min_recent_trades", 5))
+                    min_pf = float(config.get(f"{fast_prefix}_short_min_profit_factor", config.get("tournament_sprint_short_min_profit_factor", 1.05)) if is_sprint else config.get("short_min_profit_factor", 1.3))
+                    min_net_pct = float(config.get(f"{fast_prefix}_short_min_net_pct", config.get("tournament_sprint_short_min_net_pct", -2.0)) if is_sprint else config.get("short_min_net_pct", 1.0))
                     risk_pct = float(mode["risk_pct"]) * float(config.get("short_risk_multiplier", 0.5))
                 else:
                     min_trades = int(mode["min_trades"])
-                    min_pf = float(config.get("tournament_sprint_long_min_profit_factor", mode["min_pf"]) if is_sprint else mode["min_pf"])
-                    min_net_pct = float(config.get("tournament_sprint_long_min_net_pct", -3.0) if is_sprint else 0.0)
+                    min_pf = float(config.get(f"{fast_prefix}_long_min_profit_factor", config.get("tournament_sprint_long_min_profit_factor", mode["min_pf"])) if is_sprint else mode["min_pf"])
+                    min_net_pct = float(config.get(f"{fast_prefix}_long_min_net_pct", config.get("tournament_sprint_long_min_net_pct", -3.0)) if is_sprint else 0.0)
                     risk_pct = float(mode["risk_pct"])
                 if direction not in live_losses_by_direction:
                     live_losses_by_direction[direction] = consecutive_live_losses(client, processed_symbols or ranked_symbols, direction, config)
@@ -1691,9 +1739,9 @@ def scan_growth_candidates(
                 quality = _apply_live_performance_quality(quality, live_perf, config)
                 market_state = classify_market_state(symbol, bars, signal, depth, config)
                 firecracker = firecracker_opportunity_score(ticker, config, mode)
-                squeeze = squeeze_signal(bars, config) if mode["mode"] == "extreme_sprint" else {"enabled": False, "score": 0.0}
+                squeeze = squeeze_signal(bars, config) if is_extreme_mode(mode["mode"]) else {"enabled": False, "score": 0.0}
                 check_derivatives = (
-                    mode["mode"] == "extreme_sprint"
+                    is_extreme_mode(mode["mode"])
                     and config.get("extreme_v2_enabled", True)
                     and derivative_checks < int(config.get("extreme_oi_check_top_symbols", 12))
                     and (
@@ -1713,7 +1761,7 @@ def scan_growth_candidates(
                 )
                 if check_derivatives:
                     derivative_checks += 1
-                spot_proxy = spot_proxy_confirmation(bars, direction, signal, config) if mode["mode"] == "extreme_sprint" else {"enabled": False, "score_delta": 0.0, "risk_multiplier": 1.0}
+                spot_proxy = spot_proxy_confirmation(bars, direction, signal, config) if is_extreme_mode(mode["mode"]) else {"enabled": False, "score_delta": 0.0, "risk_multiplier": 1.0}
                 quality_multiplier = float(quality.get("quality_risk_multiplier", 1.0))
                 risk_pct *= quality_multiplier
                 risk_pct *= float(market_state.get("risk_multiplier", 1.0))
@@ -1724,7 +1772,7 @@ def scan_growth_candidates(
                     and recent["profit_factor"] >= min_pf
                     and recent["net_pct"] > min_net_pct
                 )
-                if mode["mode"] == "extreme_sprint" and config.get("extreme_v2_enabled", True):
+                if is_extreme_mode(mode["mode"]) and config.get("extreme_v2_enabled", True):
                     history_passed = history_passed or (
                         firecracker.get("is_firecracker")
                         and int(recent.get("trades", 0)) >= 1
@@ -1820,10 +1868,10 @@ def scan_growth_candidates(
                         decision_reason = "弱质量试探：候选信号强，但币种质量仍在观察池；使用小仓位获取实盘样本；" + "；".join(risk_adjustment["reasons"])
                     elif weak_reasons:
                         decision_reason += "；弱质量试探未通过：" + "；".join(weak_reasons[:3])
-                preemptive_enabled = mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint"} and config.get("preemptive_entries_enabled", True)
+                preemptive_enabled = mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint", "yolo_scalp"} and config.get("preemptive_entries_enabled", True)
                 if (
                     not passed
-                    and mode["mode"] == "extreme_sprint"
+                    and is_extreme_mode(mode["mode"])
                     and config.get("extreme_v2_enabled", True)
                     and config.get("extreme_probe_enabled", True)
                     and firecracker.get("is_firecracker")
@@ -1836,7 +1884,7 @@ def scan_growth_candidates(
                         signal.get("trend") is True
                         and signal.get("volatility_ok") is True
                         and (
-                            float(signal.get("distance_to_trigger_pct") or 999) <= float(config.get("extreme_sprint_preemptive_max_distance_pct", 0.55)) * 2
+                            float(signal.get("distance_to_trigger_pct") or 999) <= float(config.get(f"{fast_prefix}_preemptive_max_distance_pct", config.get("extreme_sprint_preemptive_max_distance_pct", 0.55))) * 2
                             or bool(squeeze.get("active"))
                             or bool(squeeze.get("released"))
                         )
@@ -1936,11 +1984,11 @@ def scan_growth_candidates(
                         decision_reason = "、".join(misses) or "等待触发"
 
                 extreme_risk_multiplier = 1.0
-                if mode["mode"] == "extreme_sprint" and passed and entry_type not in {"extreme_probe", "weak_quality_probe"}:
-                    if score >= float(config.get("extreme_sprint_super_score", 135.0)):
-                        extreme_risk_multiplier = float(config.get("extreme_sprint_super_risk_multiplier", 1.75))
-                    elif score >= float(config.get("extreme_sprint_high_score", 110.0)):
-                        extreme_risk_multiplier = float(config.get("extreme_sprint_high_risk_multiplier", 1.35))
+                if is_extreme_mode(mode["mode"]) and passed and entry_type not in {"extreme_probe", "weak_quality_probe"}:
+                    if score >= float(config.get(f"{fast_prefix}_super_score", config.get("extreme_sprint_super_score", 135.0))):
+                        extreme_risk_multiplier = float(config.get(f"{fast_prefix}_super_risk_multiplier", config.get("extreme_sprint_super_risk_multiplier", 1.75)))
+                    elif score >= float(config.get(f"{fast_prefix}_high_score", config.get("extreme_sprint_high_score", 110.0))):
+                        extreme_risk_multiplier = float(config.get(f"{fast_prefix}_high_risk_multiplier", config.get("extreme_sprint_high_risk_multiplier", 1.35)))
                     risk_pct *= extreme_risk_multiplier
                 v2_tier = (
                     "冲刺"
@@ -2092,7 +2140,7 @@ def scan_growth_candidates(
             "label": "候选",
         },
         "extreme_v2": {
-            "enabled": bool(mode.get("mode") == "extreme_sprint" and config.get("extreme_v2_enabled", True)),
+            "enabled": bool(is_extreme_mode(mode.get("mode")) and config.get("extreme_v2_enabled", True)),
             "firecracker": firecracker_count,
             "probe": probe_count,
             "sprint": sprint_count,

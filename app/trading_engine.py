@@ -289,15 +289,15 @@ def sync_stage(config: dict[str, Any], state: dict[str, Any], account_summary: d
     updates["stage"] = stage
     updates.update(target_state_updates(config, state, account_summary))
     active_mode = mode_config(config, equity).get("mode")
-    if equity is not None and active_mode == "extreme_sprint":
+    if equity is not None and active_mode in {"extreme_sprint", "yolo_scalp"}:
         existing_mode = state.get("equity_guard_mode")
         current_extreme_high = float(state.get("extreme_sprint_equity_high_watermark") or 0)
-        if existing_mode != "extreme_sprint" or current_extreme_high <= 0:
+        if existing_mode != active_mode or current_extreme_high <= 0:
             updates["extreme_sprint_start_equity"] = float(equity)
             updates["extreme_sprint_equity_high_watermark"] = float(equity)
         else:
             updates["extreme_sprint_equity_high_watermark"] = max(current_extreme_high, float(equity))
-        updates["equity_guard_mode"] = "extreme_sprint"
+        updates["equity_guard_mode"] = active_mode
     elif active_mode:
         updates["equity_guard_mode"] = active_mode
     return save_state(updates) if updates else state
@@ -337,13 +337,14 @@ def build_stage1_decision(
     entry_type = (scan_candidate or {}).get("entry_type", signal.get("entry_type", "standard"))
     scalp_tier = extreme_scalp_tier(scan_candidate, config)
     if scalp_tier != "none":
+        mode_prefix = "yolo_scalp" if active_mode.get("mode") == "yolo_scalp" else "extreme_scalp"
         signal = dict(signal)
         signal["entry_type"] = "extreme_scalp"
         signal["entry_type_label"] = "极限短打"
         signal["protection_profile"] = {
-            "stop_atr": float(config.get("extreme_scalp_stop_atr", 0.55)),
-            "take_profit_atr": float(config.get("extreme_scalp_take_profit_atr", 0.75)),
-            "max_hold_bars": int(config.get("extreme_scalp_max_hold_bars", 2)),
+            "stop_atr": float(config.get(f"{mode_prefix}_stop_atr", config.get("extreme_scalp_stop_atr", 0.55))),
+            "take_profit_atr": float(config.get(f"{mode_prefix}_take_profit_atr", config.get("extreme_scalp_take_profit_atr", 0.75))),
+            "max_hold_bars": int(config.get(f"{mode_prefix}_max_hold_bars", config.get("extreme_scalp_max_hold_bars", 2))),
         }
         entry_type = "extreme_scalp"
     protection_plan = build_protection_plan(signal, config, entry_type=entry_type, direction=direction)
@@ -381,8 +382,10 @@ def build_stage1_decision(
         daily_loss_key = "tournament_sprint_daily_loss_limit_pct"
     if active_mode["mode"] == "extreme_sprint":
         daily_loss_key = "extreme_sprint_daily_loss_limit_pct"
+    if active_mode["mode"] == "yolo_scalp":
+        daily_loss_key = "yolo_scalp_daily_loss_limit_pct"
     max_open_positions = config.get("max_open_positions", 1)
-    if active_mode["mode"] in {"tournament_sprint", "extreme_sprint"}:
+    if active_mode["mode"] in {"tournament_sprint", "extreme_sprint", "yolo_scalp"}:
         max_open_positions = int(config.get("tournament_sprint_max_open_positions", max_open_positions))
         if equity is not None and float(equity) < float(config.get("tournament_sprint_second_position_equity", 100.0)):
             max_open_positions = min(max_open_positions, 1)
@@ -390,16 +393,18 @@ def build_stage1_decision(
             max_open_positions = int(config.get("extreme_sprint_max_open_positions", max_open_positions))
             if float(equity) < float(config.get("tournament_sprint_second_position_equity", 100.0)):
                 max_open_positions = min(max_open_positions, 1)
+        if active_mode["mode"] == "yolo_scalp":
+            max_open_positions = int(config.get("yolo_scalp_max_open_positions", 1))
     overrides = {
         "direction": direction,
         "margin_pct": active_mode["margin_pct"],
         "leverage": active_mode["leverage"],
         "daily_loss_limit_pct": config.get(daily_loss_key, config.get("daily_loss_limit_pct", 3.0)),
-        "ignore_max_drawdown": active_mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint"},
+        "ignore_max_drawdown": active_mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint", "yolo_scalp"},
         "max_open_positions": max_open_positions,
         "max_consecutive_losses": (
             config.get("extreme_sprint_max_consecutive_losses", config.get("max_consecutive_losses", 2))
-            if active_mode["mode"] == "extreme_sprint"
+            if active_mode["mode"] in {"extreme_sprint", "yolo_scalp"}
             else
             config.get("tournament_sprint_max_consecutive_losses", config.get("max_consecutive_losses", 2))
             if active_mode["mode"] == "tournament_sprint"

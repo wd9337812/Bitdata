@@ -10,12 +10,12 @@ from app.stage_modes import stage_profile_for_equity
 from app.stage_simulation import simulate_stage_path
 
 
-def test_stage_profile_maps_small_equity_to_extreme_stage():
-    profile = stage_profile_for_equity(50, {"extreme_sprint_risk_per_trade_pct": 28})
+def test_stage_profile_maps_small_equity_to_yolo_stage():
+    profile = stage_profile_for_equity(50, {"yolo_scalp_risk_per_trade_pct": 55})
 
     assert profile["stage"] == "S0"
-    assert profile["recommended_mode"] == "extreme_sprint"
-    assert profile["base_risk_pct"] == 28
+    assert profile["recommended_mode"] == "yolo_scalp"
+    assert profile["base_risk_pct"] == 55
 
 
 def test_unified_position_sizing_exposes_all_multipliers():

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import math
@@ -503,46 +503,24 @@ def live_credit_multiplier(score: dict[str, Any], config: dict[str, Any]) -> flo
     return min(base, cooldown_multiplier_cap(score, config))
 
 
-def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    if not config.get("live_credit_enabled", True):
-        return candidate
-    symbol = str(candidate.get("symbol") or "").upper()
-    direction = str(candidate.get("direction") or "").upper()
-    if not symbol or direction not in {"LONG", "SHORT"}:
-        return candidate
-    credit = live_score_for(symbol, direction, config)
-    score = float(credit.get("score", DEFAULT_SCORE))
-    weight = float(config.get("live_credit_score_weight", 0.35))
-    score_delta = (score - float(config.get("live_credit_default_score", DEFAULT_SCORE))) * weight
-    candidate = dict(candidate)
-    candidate["live_credit"] = credit
-    candidate["score"] = round(float(candidate.get("score") or 0) + score_delta, 4)
-    reasons = [f"实盘信用 {score:.1f} 分（{credit.get('status_label', '-') }）"]
-    multiplier = live_credit_multiplier(credit, config)
-    if int(credit.get("consecutive_wins") or 0) >= int(config.get("live_credit_tail_win_count", 3)):
-        tail_mult = float(config.get("live_credit_tail_risk_multiplier", 0.75))
-        multiplier *= tail_mult
-        candidate["score"] = round(float(candidate["score"]) - float(config.get("live_credit_tail_score_penalty", 3.0)), 4)
-        reasons.append(f"连续盈利后防追尾，仓位 {tail_mult:.2f}x")
-    if penalty_active(credit):
-        reasons.append(f"冷却倍率上限 {cooldown_multiplier_cap(credit, config):.2f}x，冷却到 {credit.get('penalty_until')}")
-    if multiplier <= 0:
-        candidate["passed"] = False
-        candidate["reason"] = "live_credit_fuse"
-        candidate["decision_reason"] = "实盘信用接近 0 分，熔断等待自然恢复"
-    else:
-        candidate["risk_pct"] = float(candidate.get("risk_pct") or 0) * multiplier
-        reasons.append(f"仓位倍率 {multiplier:.2f}x")
-        if not candidate.get("decision_reason"):
-            candidate["decision_reason"] = "；".join(reasons)
-        else:
-            candidate["decision_reason"] = f"{candidate['decision_reason']}；{'；'.join(reasons)}"
-    candidate["live_credit_adjustment"] = {
-        "score_delta": round(score_delta, 4),
-        "risk_multiplier": round(multiplier, 4),
-        "reasons": reasons,
-    }
-    return candidate
+def live_credit_boost_qualified(score: dict[str, Any], config: dict[str, Any]) -> tuple[bool, list[str]]:
+    if not config.get("live_credit_boost_requires_profitability", True):
+        return True, []
+    closed = int(score.get("closed_trades") or 0)
+    net_pnl = float(score.get("net_pnl") or 0)
+    profit_factor = float(score.get("profit_factor") or 0)
+    commission = abs(float(score.get("commission") or 0))
+    fee_to_net = commission / max(abs(net_pnl), 0.0001) if commission else 0.0
+    failures: list[str] = []
+    if closed < int(config.get("live_credit_boost_min_closed_trades", 3)):
+        failures.append("sample_not_enough")
+    if net_pnl < float(config.get("live_credit_boost_min_net_pnl_usdt", 0.2)):
+        failures.append("net_profit_not_enough")
+    if profit_factor < float(config.get("live_credit_boost_min_profit_factor", 1.2)):
+        failures.append("profit_factor_not_enough")
+    if fee_to_net > float(config.get("live_credit_boost_max_fee_to_net_ratio", 0.35)):
+        failures.append("fee_drag_too_high")
+    return not failures, failures
 
 
 def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -563,21 +541,32 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
     reasons = [f"实盘信用 {score:.1f} 分（{credit.get('status_label', '-')}）"]
     multiplier = live_credit_multiplier(credit, config)
     cooldown = live_credit_cooldown_summary(credit, config)
+    boost_ok, boost_failures = live_credit_boost_qualified(credit, config)
+    if multiplier > 1.0 and not boost_ok:
+        cap = float(config.get("live_credit_unqualified_boost_cap", 1.0))
+        multiplier = min(multiplier, cap)
+        reasons.append(f"未达盈利加仓条件：{','.join(boost_failures)}，倍率封顶 {cap:.2f}x")
+
     if int(credit.get("consecutive_wins") or 0) >= int(config.get("live_credit_tail_win_count", 3)):
-        tail_mult = float(config.get("live_credit_tail_risk_multiplier", 0.75))
-        multiplier *= tail_mult
-        candidate["score"] = round(float(candidate["score"]) - float(config.get("live_credit_tail_score_penalty", 3.0)), 4)
-        reasons.append(f"连续盈利后防追尾，仓位乘以 {tail_mult:.2f}x")
+        if boost_ok:
+            streak_mult = float(config.get("live_credit_streak_profit_multiplier", 1.15))
+            multiplier = min(float(config.get("live_credit_max_risk_multiplier", 2.0)), multiplier * streak_mult)
+            reasons.append(f"连续盈利且净收益/PF达标，加仓 {streak_mult:.2f}x")
+        else:
+            tail_mult = float(config.get("live_credit_tail_risk_multiplier", 0.75))
+            multiplier *= tail_mult
+            candidate["score"] = round(float(candidate["score"]) - float(config.get("live_credit_tail_score_penalty", 3.0)), 4)
+            reasons.append(f"连续盈利但质量未达标，防追尾 {tail_mult:.2f}x")
 
     if config.get("live_credit_fee_pressure_enabled", True):
         commission = abs(float(credit.get("commission") or 0))
         net_pnl = float(credit.get("net_pnl") or 0)
-        fee_ratio = commission / max(abs(net_pnl), 0.0001) if net_pnl < 0 and commission > 0 else 0.0
-        if fee_ratio >= float(config.get("live_credit_fee_pressure_ratio", 0.20)):
+        fee_ratio = commission / max(abs(net_pnl), 0.0001) if commission > 0 else 0.0
+        if net_pnl <= 0 and fee_ratio >= float(config.get("live_credit_fee_pressure_ratio", 0.20)):
             fee_mult = float(config.get("live_credit_fee_pressure_risk_multiplier", 0.75))
             multiplier *= fee_mult
             candidate["score"] = round(float(candidate["score"]) - min(8.0, fee_ratio * 4.0), 4)
-            reasons.append(f"fee pressure {fee_ratio:.2f}x, risk {fee_mult:.2f}x")
+            reasons.append(f"手续费压力 {fee_ratio:.2f}x，降仓 {fee_mult:.2f}x")
 
     bypass_allowed = False
     if cooldown["active"]:
@@ -589,7 +578,7 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
             and multiplier > 0
         )
         if bypass_allowed:
-            reasons.append("强信号穿透冷却，仓位仍受冷却倍率限制")
+            reasons.append("强信号穿透冷却，但仓位仍受冷却倍率限制")
 
     if multiplier <= 0:
         candidate["passed"] = False
@@ -622,12 +611,13 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
     candidate["live_credit_adjustment"] = {
         "score_delta": round(score_delta, 4),
         "risk_multiplier": round(multiplier, 4),
+        "boost_qualified": boost_ok,
+        "boost_failures": boost_failures,
         "cooldown": cooldown,
         "cooldown_bypass": bypass_allowed,
         "reasons": reasons,
     }
     return candidate
-
 
 def _signed_open(position_side: str, side: str, quantity: float) -> float:
     if position_side == "LONG":

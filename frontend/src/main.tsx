@@ -53,14 +53,11 @@ const intervalOptions = [
 ];
 
 const modeOptions = [
-  ["conservative", "稳健：4小时，信号少，控制回撤优先"],
-  ["balanced", "均衡：1小时，信号和稳定性折中"],
-  ["attack", "进攻：15分钟，小资金进攻模式"],
-  ["tournament", "锦标赛：5分钟，高风险机会模式"],
+  ["yolo_scalp", "极限梭哈：50-300U，满仓短打，快进快出，风险极高"],
+  ["extreme_sprint", "极限冲刺：300-10000U，强信号放大仓位，保留硬风控"],
+  ["attack", "进攻增长：10000-100000U，多币种轮动进攻"],
+  ["balanced", "稳健过渡：100000U 以后降低回撤，准备网格"],
 ];
-
-modeOptions.push(["tournament_sprint", "锦标赛冲刺：5分钟，更高频、更高风险"]);
-modeOptions.push(["extreme_sprint", "极限冲刺：5分钟，强信号放大仓位，回撤自动降档"]);
 
 const defaultSymbolOptions = [
   "BTCUSDT",
@@ -624,7 +621,7 @@ function LiveLearningPanel({ rows, onSync }: { rows: any[]; onSync: () => Promis
         <div className="panel-head">
           <div>
             <h2>币种实盘信用分</h2>
-            <p>信用分按线性倍率控制仓位：倍率 = 信用分 / 50，最高 2x；亏损会降仓，时间会自然恢复到 50 分。</p>
+            <p>信用分用于排序和仓位倍率：亏损会降仓，时间会自然恢复；只有净收益、PF 和手续费占比达标的连续盈利方向才允许加仓到 1x 以上。</p>
           </div>
           <button className="secondary" onClick={onSync}>同步历史信用分</button>
         </div>
@@ -734,11 +731,11 @@ function RiskPanel({ config, state, account }: { config: any; state: any; accoun
   return (
     <section className="stack">
       <div className="metrics">
-        <MetricCard title="标准风险" value={`${fmt(config.risk_per_trade_pct)}% / ${fmt(config.attack_risk_per_trade_pct)}% / ${fmt(config.tournament_risk_per_trade_pct)}% / ${fmt(config.tournament_sprint_risk_per_trade_pct)}% / ${fmt(config.extreme_sprint_risk_per_trade_pct)}%`} sub="稳健 / 进攻 / 锦标赛 / 冲刺 / 极限" />
+        <MetricCard title="标准风险" value={`${fmt(config.yolo_scalp_risk_per_trade_pct)}% / ${fmt(config.extreme_sprint_risk_per_trade_pct)}% / ${fmt(config.attack_risk_per_trade_pct)}% / ${fmt(config.risk_per_trade_pct)}%`} sub="极限梭哈 / 极限冲刺 / 进攻 / 稳健" />
         <MetricCard title="抢跑风险折扣" value={`${fmt(config.preemptive_risk_multiplier, 2)} / ${fmt(config.short_preemptive_risk_multiplier, 2)}`} sub="做多 / 做空" />
-        <MetricCard title="每日亏损上限" value={`${fmt(config.daily_loss_limit_pct)}% / ${fmt(config.attack_daily_loss_limit_pct)}% / ${fmt(config.tournament_daily_loss_limit_pct)}% / ${fmt(config.tournament_sprint_daily_loss_limit_pct)}% / ${fmt(config.extreme_sprint_daily_loss_limit_pct)}%`} />
+        <MetricCard title="每日亏损上限" value={`${fmt(config.yolo_scalp_daily_loss_limit_pct)}% / ${fmt(config.extreme_sprint_daily_loss_limit_pct)}% / ${fmt(config.attack_daily_loss_limit_pct)}% / ${fmt(config.daily_loss_limit_pct)}%`} sub="极限梭哈 / 极限冲刺 / 进攻 / 稳健" />
         <MetricCard title="最大回撤" value={`${fmt(config.max_drawdown_pct)}%`} />
-        <MetricCard title="最大持仓" value={`${config.max_open_positions} / 冲刺 ${config.tournament_sprint_max_open_positions || 1}`} />
+        <MetricCard title="最大持仓" value={`梭哈 ${config.yolo_scalp_max_open_positions || 1} / 极限 ${config.extreme_sprint_max_open_positions || 1} / 普通 ${config.max_open_positions}`} />
         <MetricCard title="同币冷却" value={`${fmt(config.symbol_cooldown_minutes, 0)} 分钟`} />
       </div>
       <div className="panel">
@@ -856,7 +853,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("fast_lane_max_symbols", "快车道单次币数", "默认 3；优先最高分异动，避免挤占交易API预算")}
           {number("fast_lane_budget_seconds", "快车道计算预算", "默认 5 秒；超过预算只完成最高优先级币")}
           {number("telemetry_retention_days", "系统明细保留天数", "默认 30 天；成交与实盘学习记录不受影响")}
-          {toggle("auto_risk_by_equity", "按权益自动切换风险", "50U 自动锦标赛，100U 后进攻")}
+          {toggle("auto_risk_by_equity", "按权益自动切换风险", "小于 300U 自动极限梭哈；300-10000U 自动极限冲刺；更高权益转进攻/稳健")}
           {toggle("target_controller_enabled", "开启目标进度控制器", "按 30 天到 1万、再 30 天到 10万、再 30 天到 100万计算进度")}
           {toggle("target_risk_adjustment_enabled", "目标进度参与仓位", "默认关闭；开启后系统会根据领先或落后目标曲线调整风险倍率")}
           {number("target_phase_a_equity", "阶段A目标权益", "默认 10000U")}
@@ -903,6 +900,26 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("tournament_sprint_momentum_stop_atr", "冲刺动量止损 ATR", "默认 0.8")}
           {number("tournament_sprint_momentum_take_profit_atr", "冲刺动量止盈 ATR", "默认 1.2")}
           {number("tournament_sprint_momentum_max_hold_bars", "冲刺动量最多K线", "默认 5 根 5m K线，回测使用")}
+          {toggle("yolo_scalp_enabled", "开启极限梭哈", "高风险开关：必须配合确认短语 ENABLE_YOLO_SCALP 才会生效")}
+          {text("yolo_scalp_confirmation", "极限梭哈确认短语", "填写 ENABLE_YOLO_SCALP 后，增长模式选择极限梭哈才会启用")}
+          {select("yolo_scalp_interval", "极限梭哈周期", intervalOptions)}
+          {number("yolo_scalp_loop_seconds", "极限梭哈扫描秒数", "默认 8 秒；全量漏斗仍受预算和 API 频控保护")}
+          {number("yolo_scalp_auto_under_equity", "自动梭哈权益线", "默认 300U；低于该权益且已确认时自动进入极限梭哈")}
+          {number("yolo_scalp_risk_per_trade_pct", "极限梭哈基础风险%", "默认 55%；好机会大仓位，舔一口就走，可能快速亏完本金")}
+          {number("yolo_scalp_daily_loss_limit_pct", "极限梭哈每日亏损上限%", "默认 65%；触发后停止新开仓")}
+          {number("yolo_scalp_max_open_positions", "极限梭哈最大持仓数", "默认 1；满仓短打阶段不建议同时持有多个币")}
+          {number("yolo_scalp_standard_min_score", "梭哈标准最低评分", "默认 72；比极限冲刺更宽，靠更快止盈止损控制风险")}
+          {number("yolo_scalp_preemptive_min_score", "梭哈抢跑最低评分", "默认 58；允许火药桶和抢跑信号更早试错")}
+          {number("yolo_scalp_momentum_min_score", "梭哈动量最低评分", "默认 54；强异动可进入短打")}
+          {number("yolo_scalp_min_expected_profit_cost_ratio", "梭哈最低收益/成本比", "默认 0.85；低于此值手续费和滑点可能吃掉毛利")}
+          {number("yolo_scalp_standard_stop_atr", "梭哈标准止损 ATR", "默认 0.38；更快认错")}
+          {number("yolo_scalp_standard_take_profit_atr", "梭哈标准止盈 ATR", "默认 0.55；更快落袋")}
+          {number("yolo_scalp_preemptive_stop_atr", "梭哈抢跑止损 ATR", "默认 0.32")}
+          {number("yolo_scalp_preemptive_take_profit_atr", "梭哈抢跑止盈 ATR", "默认 0.48")}
+          {number("yolo_scalp_high_score", "梭哈加仓评分", "默认 95；达到后进入高仓位档")}
+          {number("yolo_scalp_super_score", "梭哈强加仓评分", "默认 118；达到后进入顶级仓位档")}
+          {number("yolo_scalp_high_risk_multiplier", "梭哈加仓倍率", "默认 1.35")}
+          {number("yolo_scalp_super_risk_multiplier", "梭哈强加仓倍率", "默认 1.80")}
           {toggle("extreme_sprint_enabled", "开启极限冲刺", "必须配合确认短语 ENABLE_EXTREME_SPRINT 才会生效")}
           {text("extreme_sprint_confirmation", "极限冲刺确认短语", "填写 ENABLE_EXTREME_SPRINT 后，增长模式选择极限冲刺才会启用")}
           {select("extreme_sprint_interval", "极限冲刺周期", intervalOptions)}

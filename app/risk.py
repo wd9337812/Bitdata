@@ -25,12 +25,12 @@ def equity_guard_status(
         return {"enabled": True, "allowed": False, "risk_multiplier": 0.0, "drawdown_pct": 0.0, "reason": "account_unavailable"}
     baseline_mode = "global"
     high_watermark_key = "equity_high_watermark"
-    if mode == "extreme_sprint":
-        baseline_mode = "extreme_sprint"
+    if mode in {"extreme_sprint", "yolo_scalp"}:
+        baseline_mode = str(mode)
         high_watermark_key = "extreme_sprint_equity_high_watermark"
     high_watermark = max(float(state.get(high_watermark_key) or equity), float(equity))
     drawdown_pct = max(0.0, (high_watermark - float(equity)) / high_watermark * 100) if high_watermark > 0 else 0.0
-    pause_key = "extreme_equity_guard_pause_drawdown_pct" if mode == "extreme_sprint" else "equity_guard_pause_drawdown_pct"
+    pause_key = "yolo_scalp_equity_guard_pause_drawdown_pct" if mode == "yolo_scalp" else "extreme_equity_guard_pause_drawdown_pct" if mode == "extreme_sprint" else "equity_guard_pause_drawdown_pct"
     pause_pct = float(config.get(pause_key, config.get("equity_guard_pause_drawdown_pct", 35.0)))
     if drawdown_pct >= pause_pct:
         return {

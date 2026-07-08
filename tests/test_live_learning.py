@@ -103,6 +103,79 @@ def test_live_credit_multiplier_is_score_divided_by_50():
     assert live_credit_multiplier({"score": 1.5, "penalty_until": None}, config) == 0.0
 
 
+def test_live_credit_blocks_boost_until_profitability_is_proven(monkeypatch):
+    monkeypatch.setattr(
+        "app.live_learning.live_score_for",
+        lambda symbol, direction, config: {
+            "enabled": True,
+            "score": 80,
+            "status": "strong",
+            "status_label": "strong",
+            "closed_trades": 2,
+            "wins": 1,
+            "losses": 1,
+            "consecutive_wins": 0,
+            "consecutive_losses": 0,
+            "penalty_until": None,
+            "commission": 0.1,
+            "net_pnl": -0.1,
+            "profit_factor": 0.8,
+            "notes": [],
+        },
+    )
+
+    candidate = apply_live_credit_to_candidate(
+        {"symbol": "TESTUSDT", "direction": "LONG", "score": 90, "passed": True, "risk_pct": 10},
+        {
+            "live_credit_enabled": True,
+            "live_credit_multiplier_divisor": 50,
+            "live_credit_max_risk_multiplier": 2.0,
+            "live_credit_unqualified_boost_cap": 1.0,
+        },
+    )
+
+    assert candidate["risk_pct"] == 7.5
+    assert candidate["live_credit_adjustment"]["risk_multiplier"] == 0.75
+    assert candidate["live_credit_adjustment"]["boost_qualified"] is False
+
+
+def test_live_credit_allows_extra_boost_after_profitable_streak(monkeypatch):
+    monkeypatch.setattr(
+        "app.live_learning.live_score_for",
+        lambda symbol, direction, config: {
+            "enabled": True,
+            "score": 90,
+            "status": "strong",
+            "status_label": "strong",
+            "closed_trades": 4,
+            "wins": 4,
+            "losses": 0,
+            "consecutive_wins": 3,
+            "consecutive_losses": 0,
+            "penalty_until": None,
+            "commission": 0.1,
+            "net_pnl": 2.0,
+            "profit_factor": 3.0,
+            "notes": [],
+        },
+    )
+
+    candidate = apply_live_credit_to_candidate(
+        {"symbol": "WINUSDT", "direction": "SHORT", "score": 90, "passed": True, "risk_pct": 10},
+        {
+            "live_credit_enabled": True,
+            "live_credit_multiplier_divisor": 50,
+            "live_credit_max_risk_multiplier": 2.0,
+            "live_credit_tail_win_count": 3,
+            "live_credit_streak_profit_multiplier": 1.15,
+        },
+    )
+
+    assert candidate["risk_pct"] == 20
+    assert candidate["live_credit_adjustment"]["boost_qualified"] is True
+    assert any("连续盈利且净收益/PF达标" in item for item in candidate["live_credit_adjustment"]["reasons"])
+
+
 def test_quick_loss_cooldown_caps_risk_and_marks_bypass(monkeypatch):
     penalty_until = (datetime.now(timezone.utc) + timedelta(minutes=30)).replace(microsecond=0).isoformat()
 

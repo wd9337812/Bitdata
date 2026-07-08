@@ -70,6 +70,34 @@ def test_extreme_sprint_requires_confirmation_and_uses_fast_protection():
     assert standard.max_hold_bars == 4
 
 
+def test_yolo_scalp_requires_confirmation_and_uses_short_protection():
+    assert active_growth_mode({"auto_risk_by_equity": False, "growth_mode": "yolo_scalp"}, 50) == "balanced"
+    assert active_growth_mode(
+        {
+            "auto_risk_by_equity": True,
+            "growth_mode": "balanced",
+            "yolo_scalp_enabled": True,
+            "yolo_scalp_confirmation": "ENABLE_YOLO_SCALP",
+            "yolo_scalp_auto_under_equity": 300,
+        },
+        50,
+    ) == "yolo_scalp"
+
+    standard = strategy_params_for_mode({}, {"mode": "yolo_scalp"}, "standard")
+    preemptive = strategy_params_for_mode({}, {"mode": "yolo_scalp"}, "preemptive")
+    momentum = strategy_params_for_mode({}, {"mode": "yolo_scalp"}, "momentum")
+
+    assert standard.stop_atr == 0.38
+    assert standard.take_profit_atr == 0.55
+    assert standard.max_hold_bars == 2
+    assert preemptive.stop_atr == 0.32
+    assert preemptive.take_profit_atr == 0.48
+    assert preemptive.max_hold_bars == 2
+    assert momentum.stop_atr == 0.35
+    assert momentum.take_profit_atr == 0.6
+    assert momentum.max_hold_bars == 2
+
+
 def test_execution_viability_blocks_below_min_notional():
     filters = ExchangeFilters(
         {
