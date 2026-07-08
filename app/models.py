@@ -117,6 +117,7 @@ class TradingConfig(BaseModel):
     live_credit_streak_profit_multiplier: float = Field(default=1.15, ge=0.1, le=3)
     live_reaction_enabled: bool = True
     live_reaction_check_seconds: int = Field(default=20, ge=5, le=3600)
+    live_reaction_background_check_seconds: int = Field(default=180, ge=20, le=3600)
     live_reaction_sync_lookback_minutes: int = Field(default=180, ge=10, le=1440)
     live_reaction_sync_max_symbols: int = Field(default=8, ge=1, le=50)
     live_reaction_history_hours: int = Field(default=96, ge=1, le=720)

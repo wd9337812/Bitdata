@@ -116,6 +116,8 @@ def maybe_sync_live_reaction(
         return
     last = state.get("last_live_reaction_sync")
     min_seconds = int(config.get("live_reaction_check_seconds", 20))
+    if not symbols:
+        min_seconds = int(config.get("live_reaction_background_check_seconds", max(180, min_seconds)))
     now = datetime.now(timezone.utc)
     if last:
         try:
@@ -137,6 +139,23 @@ def maybe_sync_live_reaction(
                 "last_live_reaction_records": result.get("records", 0),
                 "last_live_reaction_symbols": result.get("symbols", []),
             }
+        )
+    except BinanceRateLimitError as exc:
+        if not symbols:
+            record_event_throttled(
+                "info",
+                "live_reaction",
+                "后台实时风控同步因 REST 预算预留跳过",
+                {"retry_after": exc.retry_after},
+                throttle_seconds=300,
+            )
+            return
+        record_event_throttled(
+            "warning",
+            "live_reaction",
+            f"实时风控同步失败：{exc}",
+            {"symbols": symbols or []},
+            throttle_seconds=60,
         )
     except Exception as exc:
         record_event_throttled(

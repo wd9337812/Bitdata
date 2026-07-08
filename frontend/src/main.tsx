@@ -1165,6 +1165,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
                 {number("live_credit_tail_risk_multiplier", "防追尾仓位倍率", "默认 0.75")}
                 {toggle("live_reaction_enabled", "启用实时反应风控", "平仓后快速学习：一亏降仓、两连亏暂停同向、连续盈利后防追尾")}
                 {number("live_reaction_check_seconds", "实时风控同步秒数", "默认 20 秒；快车道也会按该频率吸收最新平仓")}
+                {number("live_reaction_background_check_seconds", "后台风控同步秒数", "默认 180 秒；降低后台扫描对 REST 预算的占用")}
                 {number("live_reaction_sync_max_symbols", "实时风控同步币种数", "默认 8；只同步近期相关币种，避免私有 API 压力过高")}
                 {number("live_reaction_one_loss_cooldown_minutes", "一亏降仓分钟", "默认 5 分钟")}
                 {number("live_reaction_one_loss_multiplier", "一亏仓位倍率", "默认 0.4x")}

@@ -133,6 +133,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "live_credit_streak_profit_multiplier": 1.15,
     "live_reaction_enabled": True,
     "live_reaction_check_seconds": 20,
+    "live_reaction_background_check_seconds": 180,
     "live_reaction_sync_lookback_minutes": 180,
     "live_reaction_sync_max_symbols": 8,
     "live_reaction_history_hours": 96,
