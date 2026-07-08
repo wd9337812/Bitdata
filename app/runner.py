@@ -12,6 +12,7 @@ from app.binance_rate import BinanceRateLimitError, rate_status, request_priorit
 from app.config_store import load_config
 from app.learning_report import save_daily_learning_report
 from app.live_learning import sync_live_learning_from_binance
+from app.live_reaction import sync_live_reaction_from_binance
 from app.market_stream import start_market_stream_thread
 from app.opportunity_queue import read_opportunities
 from app.protection_audit import audit_account_protection
@@ -104,6 +105,49 @@ def maybe_sync_live_learning(client: BinanceFuturesClient, config: dict, state: 
 
 
 
+def maybe_sync_live_reaction(
+    client: BinanceFuturesClient,
+    config: dict,
+    state: dict,
+    account: dict,
+    symbols: list[str] | None = None,
+) -> None:
+    if config.get("dry_run", True) or not config.get("live_reaction_enabled", True):
+        return
+    last = state.get("last_live_reaction_sync")
+    min_seconds = int(config.get("live_reaction_check_seconds", 20))
+    now = datetime.now(timezone.utc)
+    if last:
+        try:
+            if (now - datetime.fromisoformat(last)).total_seconds() < min_seconds:
+                return
+        except ValueError:
+            pass
+    try:
+        result = sync_live_reaction_from_binance(
+            client,
+            config,
+            account=account,
+            symbols=symbols,
+            equity=float(account.get("equity") or 0),
+        )
+        save_state(
+            {
+                "last_live_reaction_sync": now.isoformat(),
+                "last_live_reaction_records": result.get("records", 0),
+                "last_live_reaction_symbols": result.get("symbols", []),
+            }
+        )
+    except Exception as exc:
+        record_event_throttled(
+            "warning",
+            "live_reaction",
+            f"实时风控同步失败：{exc}",
+            {"symbols": symbols or []},
+            throttle_seconds=60,
+        )
+
+
 def maybe_generate_daily_report(config: dict, state: dict) -> None:
     if not config.get("daily_learning_report_enabled", True):
         return
@@ -176,6 +220,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     else:
         raise RuntimeError("实盘模式需要先配置 Binance API Key 和 Secret。")
     state = sync_stage(config, state, account)
+    maybe_sync_live_reaction(client, config, state, account, symbols_override)
     if not fast_lane:
         maybe_sync_live_learning(client, config, state)
         with request_priority("critical"):

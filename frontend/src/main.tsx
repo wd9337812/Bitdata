@@ -32,6 +32,7 @@ type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
 type LiveLearningData = { scores: any[] };
+type LiveReactionData = { reactions: any[]; recent_trades: any[] };
 type SimulationData = Record<string, any>;
 type ReportData = Record<string, any>;
 
@@ -39,6 +40,7 @@ const menu = [
   { id: "overview", label: "总览", icon: Activity },
   { id: "scan", label: "多币种扫描", icon: CandlestickChart },
   { id: "learning", label: "实盘学习", icon: Zap },
+  { id: "reaction", label: "实时风控", icon: AlertTriangle },
   { id: "pnl", label: "收益曲线", icon: LineChart },
   { id: "risk", label: "风控中心", icon: Shield },
   { id: "config", label: "配置中心", icon: Settings },
@@ -84,6 +86,7 @@ function useData() {
   const [snapshots, setSnapshots] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
   const [liveLearning, setLiveLearning] = useState<any[]>([]);
+  const [liveReaction, setLiveReaction] = useState<LiveReactionData | null>(null);
   const [health, setHealth] = useState<any>(null);
   const [simulation, setSimulation] = useState<any>(null);
   const [report, setReport] = useState<any>(null);
@@ -107,6 +110,7 @@ function useData() {
         setDecisions(await api<DecisionsData>("/api/decisions"));
         const learningRes = await api<LiveLearningData>("/api/live-learning?limit=100");
         setLiveLearning(learningRes.scores || []);
+        setLiveReaction(await api<LiveReactionData>("/api/live-reaction?limit=100"));
         setSimulation(await api<SimulationData>("/api/simulation/stage"));
         setReport(await api<ReportData>("/api/reports/latest"));
       }
@@ -128,7 +132,7 @@ function useData() {
     };
   }, []);
 
-  return { status, decisions, market, snapshots, logs, liveLearning, health, simulation, report, error, refresh };
+  return { status, decisions, market, snapshots, logs, liveLearning, liveReaction, health, simulation, report, error, refresh };
 }
 
 function MetricCard({ title, value, sub, tone }: { title: string; value: string; sub?: string; tone?: string }) {
@@ -368,6 +372,7 @@ function App() {
         )}
 
         {active === "learning" && <LiveLearningPanel rows={data.liveLearning} onSync={syncLiveLearning} />}
+        {active === "reaction" && <LiveReactionPanel data={data.liveReaction} />}
 
         {active === "pnl" && (
           <section className="stack">
@@ -584,6 +589,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
             <th>信号类型</th>
             <th>评分</th>
             <th>实盘信用</th>
+            <th>实时风控</th>
             {!compact && <th>不开仓原因</th>}
             {!compact && <th>距离触发</th>}
             {!compact && <th>胜率</th>}
@@ -606,6 +612,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               <td>{entryTypeLabel(row, "-")}</td>
               <td>{fmt(row.score, 2)}</td>
               <td>{row.live_credit ? `${fmt(row.live_credit.score, 1)} · ${row.live_credit.status_label || "-"}` : "-"}</td>
+              <td>{row.live_reaction ? `${row.live_reaction.status_label || "-"} · ${fmt(row.live_reaction.risk_multiplier, 2)}x` : "-"}</td>
               {!compact && <td className="reason-cell">{row.decision_reason || row.reason}</td>}
               {!compact && <td>{fmt(row.signal?.distance_to_trigger_pct, 3)}%</td>}
               {!compact && <td>{fmt(row.recent?.win_rate, 1)}%</td>}
@@ -744,6 +751,87 @@ function MarketTable({ rows }: { rows: any[] }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+function LiveReactionPanel({ data }: { data: LiveReactionData | null }) {
+  const reactions = data?.reactions || [];
+  const trades = data?.recent_trades || [];
+  const banned = reactions.filter((row) => row.status === "banned").length;
+  const reduced = reactions.filter((row) => ["cooldown", "tail_guard"].includes(row.status)).length;
+  const recentNet = trades.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
+  return (
+    <section className="stack">
+      <div className="metrics">
+        <MetricCard title="实时监控方向" value={String(reactions.length)} sub="按币种 + 做多/做空拆开统计" />
+        <MetricCard title="暂停同向" value={String(banned)} sub="连亏或短时间净亏触发" tone={banned ? "negative" : ""} />
+        <MetricCard title="降仓观察" value={String(reduced)} sub="一亏降仓、连盈防追尾" />
+        <MetricCard title="近期归因净盈亏" value={`${fmt(recentNet, 4)} U`} tone={recentNet >= 0 ? "positive" : "negative"} />
+      </div>
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>实时反应风控</h2>
+            <p>这层专门处理分钟级反馈：刚亏过会小仓观察，连续亏损会暂停同币种同方向，连续盈利后会防止继续追尾。</p>
+          </div>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>币种</th>
+                <th>方向</th>
+                <th>状态</th>
+                <th>仓位倍率</th>
+                <th>连续盈亏</th>
+                <th>近窗净盈亏</th>
+                <th>当日净盈亏</th>
+                <th>解除时间</th>
+                <th>原因</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reactions.map((row) => (
+                <tr key={`${row.symbol}-${row.direction}`}>
+                  <td className="symbol">{row.symbol}</td>
+                  <td>{signalLabel(row.direction)}</td>
+                  <td><span className={row.status === "banned" ? "pill bad" : row.status === "normal" ? "pill ok" : "pill"}>{row.status_label}</span></td>
+                  <td>{fmt(row.risk_multiplier, 2)}x</td>
+                  <td>{Number(row.consecutive_wins || 0) > 0 ? `连赢 ${row.consecutive_wins}` : Number(row.consecutive_losses || 0) > 0 ? `连亏 ${row.consecutive_losses}` : "-"}</td>
+                  <td className={Number(row.recent_net_pnl) >= 0 ? "positive-text" : "negative-text"}>{fmt(row.recent_net_pnl, 4)} U</td>
+                  <td className={Number(row.day_net_pnl) >= 0 ? "positive-text" : "negative-text"}>{fmt(row.day_net_pnl, 4)} U</td>
+                  <td>{row.ban_until || row.cooldown_until ? new Date(row.ban_until || row.cooldown_until).toLocaleString("zh-CN") : "-"}</td>
+                  <td className="reason-cell">{row.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div className="panel">
+        <h2>最近实盘成交归因</h2>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr><th>平仓时间</th><th>币种</th><th>方向</th><th>净盈亏</th><th>手续费</th><th>持仓秒数</th><th>成交笔数</th></tr>
+            </thead>
+            <tbody>
+              {trades.map((row) => (
+                <tr key={`${row.symbol}-${row.direction}-${row.open_time}-${row.close_time}`}>
+                  <td>{row.close_time_iso ? new Date(row.close_time_iso).toLocaleString("zh-CN") : "-"}</td>
+                  <td className="symbol">{row.symbol}</td>
+                  <td>{signalLabel(row.direction)}</td>
+                  <td className={Number(row.net_pnl) >= 0 ? "positive-text" : "negative-text"}>{fmt(row.net_pnl, 4)} U</td>
+                  <td>{fmt(row.commission, 4)} U</td>
+                  <td>{fmt(row.hold_seconds, 1)}</td>
+                  <td>{row.trade_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -1075,6 +1163,17 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
                 {number("live_credit_two_loss_cooldown_hours", "同方向两连亏冷却小时", "默认 4 小时")}
                 {number("live_credit_tail_win_count", "连续盈利防追尾笔数", "默认 3 笔")}
                 {number("live_credit_tail_risk_multiplier", "防追尾仓位倍率", "默认 0.75")}
+                {toggle("live_reaction_enabled", "启用实时反应风控", "平仓后快速学习：一亏降仓、两连亏暂停同向、连续盈利后防追尾")}
+                {number("live_reaction_check_seconds", "实时风控同步秒数", "默认 20 秒；快车道也会按该频率吸收最新平仓")}
+                {number("live_reaction_sync_max_symbols", "实时风控同步币种数", "默认 8；只同步近期相关币种，避免私有 API 压力过高")}
+                {number("live_reaction_one_loss_cooldown_minutes", "一亏降仓分钟", "默认 5 分钟")}
+                {number("live_reaction_one_loss_multiplier", "一亏仓位倍率", "默认 0.4x")}
+                {number("live_reaction_two_loss_ban_minutes", "两连亏暂停分钟", "默认 30 分钟；同币种同方向暂停")}
+                {number("live_reaction_three_loss_ban_hours", "三连亏暂停小时", "默认 4 小时")}
+                {number("live_reaction_profit_tail_count", "盈利防追尾笔数", "默认 2 笔")}
+                {number("live_reaction_tail_multiplier", "防追尾仓位倍率", "默认 0.5x")}
+                {number("live_reaction_recent_loss_equity_pct", "短窗净亏权益%", "默认 12%；超过后暂停同方向")}
+                {number("live_reaction_symbol_direction_daily_loss_pct", "当日同向净亏权益%", "默认 20%；超过后暂停到次日")}
                 {number("symbol_cooldown_minutes", "同币开仓冷却分钟", "默认 15")}
           {toggle("position_rotation_enabled", "持仓轮换", "满仓时，只有明显更强的新信号才会替换当前弱仓")}
           {number("tournament_rotation_min_new_score", "锦标赛轮换最低新评分", "默认 95")}

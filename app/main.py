@@ -16,6 +16,7 @@ from app.binance_client import BinanceFuturesClient
 from app.config_store import load_config, save_config
 from app.learning_report import latest_daily_learning_report, save_daily_learning_report
 from app.live_learning import list_live_scores, sync_live_learning_from_binance
+from app.live_reaction import list_live_reactions, list_recent_live_reaction_trades, sync_live_reaction_from_binance
 from app.models import BotControlPayload, ExecutePayload, TradingConfig
 from app.market_stream import stream_status
 from app.opportunity_queue import opportunity_status
@@ -239,6 +240,32 @@ def sync_live_learning() -> dict[str, Any]:
         return sync_live_learning_from_binance(client_from_config(), config)
     except Exception as exc:
         record_event("error", "live_learning", str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/live-reaction", dependencies=[Depends(require_auth)])
+def live_reaction(limit: int = 100) -> dict[str, Any]:
+    return {
+        "reactions": list_live_reactions(limit),
+        "recent_trades": list_recent_live_reaction_trades(50),
+    }
+
+
+@app.post("/api/live-reaction/sync", dependencies=[Depends(require_auth)])
+def sync_live_reaction() -> dict[str, Any]:
+    config = load_config()
+    if not config.get("api_key") or not config.get("api_secret"):
+        raise HTTPException(status_code=400, detail="请先配置 Binance API Key 和 Secret。")
+    try:
+        account = summarize_account(client_from_config().account_live()) if not config.get("dry_run", True) else synthetic_account()
+        return sync_live_reaction_from_binance(
+            client_from_config(),
+            config,
+            account=account,
+            equity=float(account.get("equity") or 0),
+        )
+    except Exception as exc:
+        record_event("error", "live_reaction", str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
