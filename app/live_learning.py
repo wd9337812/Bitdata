@@ -587,21 +587,34 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
     else:
         candidate["risk_pct"] = float(candidate.get("risk_pct") or 0) * multiplier
         if str(candidate.get("entry_type") or "") == "extreme_probe":
+            is_yolo = str(candidate.get("mode") or "") == "yolo_scalp"
             closed = int(credit.get("closed_trades") or 0)
             losses = int(credit.get("losses") or 0)
             if closed <= 0:
-                cap = float(config.get("extreme_probe_new_symbol_max_risk_pct", 2.2))
+                cap = float(
+                    config.get("yolo_scalp_firecracker_max_risk_pct", 70.0)
+                    if is_yolo
+                    else config.get("extreme_probe_new_symbol_max_risk_pct", 2.2)
+                )
                 if candidate["risk_pct"] > cap:
                     candidate["risk_pct"] = cap
-                    reasons.append(f"new probe cap {cap:.2f}%")
+                    reasons.append(("yolo firecracker cap" if is_yolo else "new probe cap") + f" {cap:.2f}%")
             if losses > 0 or cooldown["active"]:
-                loss_mult = float(config.get("extreme_probe_loss_risk_multiplier", 0.55))
+                loss_mult = float(
+                    config.get("yolo_scalp_loss_probe_risk_multiplier", 0.75)
+                    if is_yolo
+                    else config.get("extreme_probe_loss_risk_multiplier", 0.55)
+                )
                 candidate["risk_pct"] *= loss_mult
-                cap = float(config.get("extreme_probe_after_loss_max_risk_pct", 1.2))
+                cap = float(
+                    config.get("yolo_scalp_loss_probe_max_risk_pct", 12.0)
+                    if is_yolo
+                    else config.get("extreme_probe_after_loss_max_risk_pct", 1.2)
+                )
                 if candidate["risk_pct"] > cap:
                     candidate["risk_pct"] = cap
                 candidate["score"] = round(float(candidate["score"]) - min(10.0, 3.0 + losses * 2.0), 4)
-                reasons.append(f"probe after loss {loss_mult:.2f}x, cap {cap:.2f}%")
+                reasons.append(f"{'yolo probe after loss' if is_yolo else 'probe after loss'} {loss_mult:.2f}x, cap {cap:.2f}%")
             candidate["risk_pct"] = round(float(candidate["risk_pct"]), 8)
         reasons.append(f"仓位倍率 {multiplier:.2f}x")
         if not candidate.get("decision_reason"):

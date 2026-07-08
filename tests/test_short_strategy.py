@@ -258,6 +258,87 @@ def test_execute_does_not_lift_ineffective_order_to_exchange_floor():
     assert not any(order[0] == "MARKET" for order in client.orders)
 
 
+def test_yolo_execute_lifts_strong_small_order_to_exchange_floor():
+    client = FakeFiltersClient()
+    decision = {
+        "symbol": "TESTUSDT",
+        "action": "OPEN_SHORT",
+        "direction": "SHORT",
+        "quantity": 0.03,
+        "leverage": 3,
+        "mode": "yolo_scalp",
+        "equity": 50,
+        "risk": {"max_notional": 20},
+        "order_viability": {"min_order_lift_candidate": True},
+        "candidate": {
+            "mode": "yolo_scalp",
+            "expected_profit_pct": 1.2,
+            "estimated_cost_pct": 0.1,
+            "cost_ratio": 12,
+        },
+        "signal": {"last_price": 100.0, "stop": 102.0, "take_profit": 96.0},
+    }
+
+    result = execute_stage1_market_order(
+        client,
+        decision,
+        {
+            "dry_run": False,
+            "live_trading_enabled": True,
+            "live_trading_confirmation": "ENABLE_LIVE_TRADING",
+            "effective_position_sizing_enabled": True,
+            "yolo_scalp_min_order_lift_enabled": True,
+            "yolo_scalp_effective_min_order_notional_usdt": 5,
+            "yolo_scalp_min_order_lift_max_loss_pct": 8,
+            "yolo_scalp_min_order_lift_min_cost_ratio": 3,
+            "yolo_scalp_min_order_lift_min_net_profit_usdt": 0.03,
+        },
+    )
+
+    assert result["mode"] == "live"
+    assert ("MARKET", "SELL", 0.052, "SHORT") in client.orders
+
+
+def test_yolo_execute_refuses_lift_when_stop_loss_risk_is_too_high():
+    client = FakeFiltersClient()
+    decision = {
+        "symbol": "TESTUSDT",
+        "action": "OPEN_SHORT",
+        "direction": "SHORT",
+        "quantity": 0.03,
+        "leverage": 3,
+        "mode": "yolo_scalp",
+        "equity": 50,
+        "risk": {"max_notional": 20},
+        "order_viability": {"min_order_lift_candidate": True},
+        "candidate": {
+            "mode": "yolo_scalp",
+            "expected_profit_pct": 1.2,
+            "estimated_cost_pct": 0.1,
+            "cost_ratio": 12,
+        },
+        "signal": {"last_price": 100.0, "stop": 300.0, "take_profit": 96.0},
+    }
+
+    result = execute_stage1_market_order(
+        client,
+        decision,
+        {
+            "dry_run": False,
+            "live_trading_enabled": True,
+            "live_trading_confirmation": "ENABLE_LIVE_TRADING",
+            "effective_position_sizing_enabled": True,
+            "yolo_scalp_min_order_lift_enabled": True,
+            "yolo_scalp_effective_min_order_notional_usdt": 5,
+            "yolo_scalp_min_order_lift_max_loss_pct": 8,
+        },
+    )
+
+    assert result["mode"] == "blocked"
+    assert result["order"]["min_order_lift"]["allowed"] is False
+    assert not any(order[0] == "MARKET" for order in client.orders)
+
+
 def test_execute_rotation_closes_old_position_before_new_entry():
     client = FakeFiltersClient()
     decision = {

@@ -86,6 +86,35 @@ def test_effective_risk_gives_top_signal_more_drawdown_access():
     assert sizing["final_risk_pct"] == 6
 
 
+def test_yolo_firecracker_gets_scalp_risk_floor():
+    sizing = effective_position_risk(
+        candidate_risk_pct=2.2,
+        candidate={
+            "mode": "yolo_scalp",
+            "entry_type": "extreme_probe",
+            "score": 96,
+            "cost_ratio": 8,
+            "symbol_quality": {"score": 62},
+            "live_credit": {"score": 50, "losses": 0},
+        },
+        guard={"risk_multiplier": 1.0},
+        target={"effective_risk_multiplier": 1.0},
+        config={
+            "effective_position_sizing_enabled": True,
+            "yolo_scalp_firecracker_min_risk_pct": 30,
+            "yolo_scalp_firecracker_max_risk_pct": 70,
+            "yolo_scalp_high_score": 95,
+            "yolo_scalp_high_risk_multiplier": 1.35,
+            "yolo_scalp_min_cost_ratio": 4,
+        },
+        mode="yolo_scalp",
+    )
+
+    assert sizing["scalp_tier"] == "firecracker"
+    assert sizing["final_risk_pct"] == 30
+    assert sizing["yolo_scalp_profile"]["label"] == "火药桶剥头皮"
+
+
 def test_effective_order_viability_rejects_fee_noise_orders():
     result = effective_order_viability(
         notional=8,

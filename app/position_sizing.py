@@ -4,6 +4,7 @@ from typing import Any
 
 
 PROBE_ENTRY_TYPES = {"extreme_probe", "weak_quality_probe", "preemptive", "momentum", "small_standard", "observe_standard"}
+YOLO_SCALP_ENTRY_TYPES = {"standard", "extreme_scalp", "preemptive", "momentum", "extreme_probe", "weak_quality_probe", "observe_standard", "small_standard"}
 
 
 def signal_strength_tier(candidate: dict[str, Any] | None) -> str:
@@ -45,6 +46,68 @@ def extreme_scalp_tier(candidate: dict[str, Any] | None, config: dict[str, Any])
     return "none"
 
 
+def yolo_scalp_execution_profile(candidate: dict[str, Any] | None, config: dict[str, Any]) -> dict[str, Any]:
+    candidate = candidate or {}
+    if str(candidate.get("mode") or "") != "yolo_scalp":
+        return {"enabled": False, "tier": "none", "label": "非极限梭哈"}
+    entry_type = str(candidate.get("entry_type") or "standard")
+    score = float(candidate.get("score") or 0.0)
+    quality_score = float((candidate.get("symbol_quality") or {}).get("score") or 0.0)
+    cost_ratio = float(candidate.get("cost_ratio") or 0.0)
+    live_credit = candidate.get("live_credit") or {}
+    credit_adjustment = candidate.get("live_credit_adjustment") or {}
+    has_loss_pressure = (
+        int(live_credit.get("losses") or 0) > 0
+        or int(live_credit.get("consecutive_losses") or 0) > 0
+        or bool((credit_adjustment.get("cooldown") or {}).get("active"))
+        or str(live_credit.get("status") or "") in {"weak", "penalty"}
+    )
+
+    if entry_type == "weak_quality_probe":
+        tier = "weak_probe"
+        label = "小单探路"
+        min_key = "yolo_scalp_weak_probe_min_risk_pct"
+        max_key = "yolo_scalp_weak_probe_max_risk_pct"
+    elif entry_type == "extreme_probe":
+        tier = "firecracker"
+        label = "火药桶剥头皮"
+        min_key = "yolo_scalp_firecracker_min_risk_pct"
+        max_key = "yolo_scalp_firecracker_max_risk_pct"
+    elif entry_type in {"preemptive", "momentum", "observe_standard", "small_standard"}:
+        tier = "preemptive"
+        label = "抢跑剥头皮"
+        min_key = "yolo_scalp_preemptive_min_risk_pct"
+        max_key = "yolo_scalp_preemptive_max_risk_pct"
+    else:
+        tier = "standard"
+        label = "标准剥头皮"
+        min_key = "yolo_scalp_standard_min_risk_pct"
+        max_key = "yolo_scalp_standard_max_risk_pct"
+
+    min_risk = float(config.get(min_key, 0.0))
+    max_risk = float(config.get(max_key, min_risk))
+    multiplier = 1.0
+    if score >= float(config.get("yolo_scalp_super_score", 118.0)) and cost_ratio >= float(config.get("yolo_scalp_min_cost_ratio", 4.0)):
+        multiplier = float(config.get("yolo_scalp_super_risk_multiplier", 1.8))
+    elif score >= float(config.get("yolo_scalp_high_score", 95.0)) and cost_ratio >= float(config.get("yolo_scalp_min_cost_ratio", 4.0)):
+        multiplier = float(config.get("yolo_scalp_high_risk_multiplier", 1.35))
+    if quality_score < float(config.get("yolo_scalp_min_quality_score", 58.0)) and tier != "weak_probe":
+        multiplier *= 0.75
+    if has_loss_pressure:
+        multiplier *= float(config.get("yolo_scalp_loss_probe_risk_multiplier", 0.75))
+        max_risk = min(max_risk, float(config.get("yolo_scalp_loss_probe_max_risk_pct", 12.0)))
+    return {
+        "enabled": entry_type in YOLO_SCALP_ENTRY_TYPES,
+        "tier": tier,
+        "label": label,
+        "entry_type": entry_type,
+        "min_risk_pct": round(min_risk, 6),
+        "max_risk_pct": round(max_risk, 6),
+        "risk_multiplier": round(multiplier, 6),
+        "loss_pressure": has_loss_pressure,
+    }
+
+
 def effective_position_risk(
     *,
     candidate_risk_pct: float,
@@ -69,6 +132,7 @@ def effective_position_risk(
         guard_multiplier = max(guard_multiplier, guard_floor)
         risk_floor = float(config.get(f"effective_{tier}_min_risk_pct", 0.0))
     calculated = raw_risk * guard_multiplier * target_multiplier
+    yolo_profile = yolo_scalp_execution_profile(candidate, config) if mode == "yolo_scalp" else {"enabled": False}
     scalp_tier = extreme_scalp_tier(candidate, config) if mode in {"extreme_sprint", "yolo_scalp"} else "none"
     scalp_multiplier = 1.0
     if scalp_tier == "high":
@@ -77,13 +141,20 @@ def effective_position_risk(
     elif scalp_tier == "super":
         key_prefix = "yolo_scalp" if mode == "yolo_scalp" else "extreme_scalp"
         scalp_multiplier = float(config.get(f"{key_prefix}_super_risk_multiplier", config.get("extreme_scalp_super_risk_multiplier", 1.55)))
+    if yolo_profile.get("enabled"):
+        scalp_tier = str(yolo_profile.get("tier") or scalp_tier)
+        scalp_multiplier *= float(yolo_profile.get("risk_multiplier") or 1.0)
     calculated *= scalp_multiplier
     final_risk = max(calculated, risk_floor) if raw_risk > 0 else 0.0
+    if yolo_profile.get("enabled") and raw_risk > 0:
+        final_risk = max(final_risk, float(yolo_profile.get("min_risk_pct") or 0.0))
     max_risk = float(config.get(f"effective_{tier}_max_risk_pct", raw_risk or final_risk))
     if scalp_tier != "none":
         key_prefix = "yolo_scalp" if mode == "yolo_scalp" else "extreme_scalp"
         scalp_cap = float(config.get(f"{key_prefix}_max_risk_pct", config.get("extreme_scalp_max_risk_pct", 18.0)))
         max_risk = scalp_cap if scalp_cap > 0 else max_risk
+    if yolo_profile.get("enabled"):
+        max_risk = float(yolo_profile.get("max_risk_pct") or max_risk)
     if max_risk > 0:
         final_risk = min(final_risk, max_risk)
     return {
@@ -97,6 +168,7 @@ def effective_position_risk(
         "risk_floor_pct": round(risk_floor, 6),
         "max_risk_pct": round(max_risk, 6),
         "final_risk_pct": round(final_risk, 8),
+        "yolo_scalp_profile": yolo_profile,
     }
 
 
@@ -111,9 +183,22 @@ def effective_order_viability(
     estimated_cost_pct = max(0.0, float(candidate.get("estimated_cost_pct") or 0.0))
     cost_ratio = float(candidate.get("cost_ratio") or (expected_profit_pct / estimated_cost_pct if estimated_cost_pct else 999.0))
     expected_net_profit = float(notional) * max(0.0, expected_profit_pct - estimated_cost_pct) / 100
-    min_notional = float(config.get("effective_min_order_notional_usdt", 10.0))
-    min_cost_ratio = float(config.get("effective_min_profit_cost_ratio", 3.0))
-    min_net_profit = float(config.get("effective_min_net_profit_usdt", 0.15))
+    is_yolo = str(candidate.get("mode") or "") == "yolo_scalp"
+    min_notional = float(
+        config.get("yolo_scalp_effective_min_order_notional_usdt", 5.0)
+        if is_yolo
+        else config.get("effective_min_order_notional_usdt", 10.0)
+    )
+    min_cost_ratio = float(
+        config.get("yolo_scalp_min_order_lift_min_cost_ratio", 3.0)
+        if is_yolo
+        else config.get("effective_min_profit_cost_ratio", 3.0)
+    )
+    min_net_profit = float(
+        config.get("yolo_scalp_min_order_lift_min_net_profit_usdt", 0.03)
+        if is_yolo
+        else config.get("effective_min_net_profit_usdt", 0.15)
+    )
     reasons = []
     if float(notional) < min_notional:
         reasons.append("below_effective_min_notional")

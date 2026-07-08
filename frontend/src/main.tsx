@@ -493,6 +493,26 @@ function TargetProgressPanel({ target }: { target: Record<string, any> }) {
   );
 }
 
+function entryTypeLabel(item: any, fallback = "观察") {
+  const signal = item?.signal || {};
+  const mode = String(item?.mode || signal.mode || "");
+  const entryType = String(item?.entry_type || signal.entry_type || "");
+  if (mode === "yolo_scalp") {
+    const labels: Record<string, string> = {
+      standard: "标准剥头皮",
+      extreme_scalp: "强势剥头皮",
+      preemptive: "抢跑剥头皮",
+      momentum: "动量剥头皮",
+      observe_standard: "抢跑剥头皮",
+      small_standard: "抢跑剥头皮",
+      extreme_probe: "火药桶剥头皮",
+      weak_quality_probe: "小单探路",
+    };
+    return labels[entryType] || item?.entry_type_label || signal.entry_type_label || fallback;
+  }
+  return item?.entry_type_label || signal.entry_type_label || fallback;
+}
+
 function SignalExplain({ best }: { best?: any }) {
   if (!best) {
     return <div className="panel"><h2>当前策略解释</h2><p>还没有扫描结果。</p></div>;
@@ -509,7 +529,7 @@ function SignalExplain({ best }: { best?: any }) {
       <div className="explain-grid">
         <div><span>最高候选</span><strong>{best.symbol || "-"}</strong></div>
         <div><span>方向</span><strong>{signalLabel(best.direction || signal.signal)}</strong></div>
-        <div><span>信号类型</span><strong>{best.entry_type_label || signal.entry_type_label || "观察"}</strong></div>
+        <div><span>信号类型</span><strong>{entryTypeLabel(best)}</strong></div>
         <div><span>综合评分</span><strong>{fmt(best.score, 2)}</strong></div>
         <div><span>离触发价</span><strong>{fmt(signal.distance_to_trigger_pct, 3)}%</strong></div>
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
@@ -583,7 +603,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               <td><span className={row.passed ? "pill ok" : "pill"}>{row.passed ? "通过" : "等待"}</span></td>
               <td className="symbol">{row.symbol}</td>
               <td>{signalLabel(row.direction || row.signal?.signal)}</td>
-              <td>{row.entry_type_label || row.signal?.entry_type_label || "-"}</td>
+              <td>{entryTypeLabel(row, "-")}</td>
               <td>{fmt(row.score, 2)}</td>
               <td>{row.live_credit ? `${fmt(row.live_credit.score, 1)} · ${row.live_credit.status_label || "-"}` : "-"}</td>
               {!compact && <td className="reason-cell">{row.decision_reason || row.reason}</td>}
@@ -920,6 +940,21 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("yolo_scalp_super_score", "梭哈强加仓评分", "默认 118；达到后进入顶级仓位档")}
           {number("yolo_scalp_high_risk_multiplier", "梭哈加仓倍率", "默认 1.35")}
           {number("yolo_scalp_super_risk_multiplier", "梭哈强加仓倍率", "默认 1.80")}
+          {number("yolo_scalp_standard_min_risk_pct", "标准剥头皮最低风险%", "默认 35%；标准信号不再被小仓抢跑倍率压得太低")}
+          {number("yolo_scalp_standard_max_risk_pct", "标准剥头皮最高风险%", "默认 75%；仍受账户权益、杠杆和最大名义价值约束")}
+          {number("yolo_scalp_preemptive_min_risk_pct", "抢跑剥头皮最低风险%", "默认 28%；强抢跑信号可以用有效仓位试错")}
+          {number("yolo_scalp_preemptive_max_risk_pct", "抢跑剥头皮最高风险%", "默认 65%；防止普通抢跑直接满仓")}
+          {number("yolo_scalp_firecracker_min_risk_pct", "火药桶最低风险%", "默认 30%；放量异动满足时不再只下极小仓")}
+          {number("yolo_scalp_firecracker_max_risk_pct", "火药桶最高风险%", "默认 70%；亏损后会自动降到亏损保护上限")}
+          {number("yolo_scalp_weak_probe_min_risk_pct", "小单探路最低风险%", "默认 8%；质量较弱时只收集样本")}
+          {number("yolo_scalp_weak_probe_max_risk_pct", "小单探路最高风险%", "默认 25%")}
+          {number("yolo_scalp_loss_probe_max_risk_pct", "亏损后探路风险上限%", "默认 12%；刚亏过的币种方向只允许小仓恢复")}
+          {number("yolo_scalp_loss_probe_risk_multiplier", "亏损后探路倍率", "默认 0.75；用于连续亏损或冷却状态")}
+          {toggle("yolo_scalp_min_order_lift_enabled", "梭哈最小下单智能补齐", "强信号低于币安最小下单量时，先评估止损风险和扣费利润，再决定是否补齐")}
+          {number("yolo_scalp_effective_min_order_notional_usdt", "梭哈有效最小订单U", "默认 5U；和币安最小下单量取更高值")}
+          {number("yolo_scalp_min_order_lift_max_loss_pct", "补齐订单最大止损风险%", "默认 8%；补齐后如果止损风险过大，仍然跳过")}
+          {number("yolo_scalp_min_order_lift_min_cost_ratio", "补齐订单最低成本比", "默认 3；预期波动至少覆盖手续费和滑点")}
+          {number("yolo_scalp_min_order_lift_min_net_profit_usdt", "补齐订单最低净利润U", "默认 0.03U；太小的毛利不强行成交")}
           {toggle("extreme_sprint_enabled", "开启极限冲刺", "必须配合确认短语 ENABLE_EXTREME_SPRINT 才会生效")}
           {text("extreme_sprint_confirmation", "极限冲刺确认短语", "填写 ENABLE_EXTREME_SPRINT 后，增长模式选择极限冲刺才会启用")}
           {select("extreme_sprint_interval", "极限冲刺周期", intervalOptions)}

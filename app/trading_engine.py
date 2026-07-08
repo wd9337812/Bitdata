@@ -434,7 +434,16 @@ def build_stage1_decision(
         candidate=scan_candidate,
         config=config,
     )
-    if config.get("effective_position_sizing_enabled", True) and not order_viability["allowed"]:
+    lift_candidate = (
+        active_mode["mode"] == "yolo_scalp"
+        and config.get("yolo_scalp_min_order_lift_enabled", True)
+        and risk.allowed
+        and quantity > 0
+        and "insufficient_profit_cost_ratio" not in order_viability.get("reasons", [])
+    )
+    if lift_candidate:
+        order_viability = {**order_viability, "min_order_lift_candidate": True}
+    if config.get("effective_position_sizing_enabled", True) and not order_viability["allowed"] and not lift_candidate:
         risk_dict = risk.__dict__
         return {
             "symbol": symbol,
@@ -453,6 +462,7 @@ def build_stage1_decision(
             "equity_guard": guard,
             "target_progress": target,
             "protection_plan": protection_plan,
+            "equity": equity,
         }
     risk_dict = risk.__dict__
     sizing = explain_position_sizing(
@@ -496,6 +506,7 @@ def build_stage1_decision(
         "scalp_tier": scalp_tier,
         "risk_pct": active_mode["risk_pct"],
         "leverage": active_mode["leverage"],
+        "equity": equity,
     }
 
 
@@ -631,7 +642,12 @@ def execute_stage1_market_order(
     notional = quantity * entry_price
     min_notional = filters.min_notional(symbol)
     min_notional_with_buffer = min_notional * (1 + max(float(config.get("min_order_notional_buffer_pct", 3.0)), 0.0) / 100)
-    effective_min_notional = float(config.get("effective_min_order_notional_usdt", 10.0))
+    is_yolo = str(decision.get("mode") or "") == "yolo_scalp"
+    effective_min_notional = float(
+        config.get("yolo_scalp_effective_min_order_notional_usdt", 5.0)
+        if is_yolo
+        else config.get("effective_min_order_notional_usdt", 10.0)
+    )
     max_notional = float((decision.get("risk") or {}).get("max_notional") or 0)
     if not config.get("effective_position_sizing_enabled", True) and 0 < notional < min_notional_with_buffer:
         min_quantity = filters.min_quantity_for_notional(
@@ -657,6 +673,52 @@ def execute_stage1_market_order(
         "protection_plan": protection_plan,
     }
     required_notional = max(min_notional, effective_min_notional) if config.get("effective_position_sizing_enabled", True) else min_notional
+    if (
+        is_yolo
+        and config.get("effective_position_sizing_enabled", True)
+        and config.get("yolo_scalp_min_order_lift_enabled", True)
+        and 0 < notional < required_notional
+        and (decision.get("order_viability") or {}).get("min_order_lift_candidate")
+    ):
+        required_quantity = filters.min_quantity_for_notional(
+            symbol,
+            entry_price,
+            buffer_pct=max(
+                float(config.get("min_order_notional_buffer_pct", 3.0)),
+                (required_notional / max(min_notional, 0.00000001) - 1) * 100 if min_notional > 0 else 0,
+            ),
+        )
+        lifted_notional = required_quantity * entry_price
+        stop_loss_usdt = required_quantity * abs(entry_price - stop)
+        equity = float(decision.get("equity") or 0)
+        stop_loss_pct = stop_loss_usdt / equity * 100 if equity > 0 else 999.0
+        candidate = decision.get("candidate") or {}
+        lifted_viability = effective_order_viability(notional=lifted_notional, candidate=candidate, config=config)
+        max_loss_pct = float(config.get("yolo_scalp_min_order_lift_max_loss_pct", 8.0))
+        lift_allowed = (
+            required_quantity > quantity
+            and (max_notional <= 0 or lifted_notional <= max_notional)
+            and stop_loss_pct <= max_loss_pct
+            and lifted_viability["cost_ratio"] >= float(config.get("yolo_scalp_min_order_lift_min_cost_ratio", 3.0))
+            and lifted_viability["expected_net_profit"] >= float(config.get("yolo_scalp_min_order_lift_min_net_profit_usdt", 0.03))
+        )
+        order["min_order_lift"] = {
+            "attempted": True,
+            "allowed": lift_allowed,
+            "from_quantity": quantity,
+            "to_quantity": required_quantity,
+            "from_notional": notional,
+            "to_notional": lifted_notional,
+            "stop_loss_usdt": round(stop_loss_usdt, 8),
+            "stop_loss_pct": round(stop_loss_pct, 6),
+            "max_loss_pct": max_loss_pct,
+            "viability": lifted_viability,
+        }
+        if lift_allowed:
+            quantity = required_quantity
+            notional = lifted_notional
+            order["quantity"] = quantity
+            order["notional"] = notional
     if quantity <= 0 or notional < required_notional:
         return {"mode": "blocked", "message": "Quantity is below effective order minimum.", "order": order}
     rotation = decision.get("rotation") or {}
