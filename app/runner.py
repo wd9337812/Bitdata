@@ -74,6 +74,22 @@ def set_rotation_cooldown(state: dict, symbol: str, minutes: float) -> None:
     save_state({"rotation_cooldowns": cooldowns})
 
 
+def track_runtime_position(decision: dict) -> None:
+    symbol = str(decision.get("symbol") or "").upper()
+    direction = str(decision.get("direction") or (decision.get("signal") or {}).get("signal") or "LONG").upper()
+    if not symbol or direction not in {"LONG", "SHORT"}:
+        return
+    protection_plan = decision.get("protection_plan") or (decision.get("signal") or {}).get("protection_plan") or {}
+    tracked = dict(load_state().get("runtime_protection_positions") or {})
+    tracked[f"{symbol}:{direction}"] = {
+        "opened_at": datetime.now(timezone.utc).isoformat(),
+        "entry_type": decision.get("entry_type"),
+        "max_hold_bars": protection_plan.get("max_hold_bars"),
+        "max_hold_seconds": ((decision.get("signal") or {}).get("protection_profile") or {}).get("max_hold_seconds"),
+    }
+    save_state({"runtime_protection_positions": tracked})
+
+
 def synthetic_account(equity: float = 50.0) -> dict:
     return {"equity": equity, "available_balance": equity, "unrealized_pnl": 0.0, "positions": []}
 
@@ -326,6 +342,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             {"decision": {"symbol": decision.get("symbol"), "action": decision.get("action")}, "error": str(exc)},
         )
     if result.get("mode") in {"live", "rotation_live"} and decision.get("symbol"):
+        track_runtime_position(decision)
         cooldown_minutes = float(config.get("symbol_cooldown_minutes", 0))
         if config.get("directional_cooldown_enabled", True):
             set_symbol_direction_cooldown(

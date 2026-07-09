@@ -512,6 +512,9 @@ function entryTypeLabel(item: any, fallback = "观察") {
       small_standard: "抢跑剥头皮",
       extreme_probe: "火药桶剥头皮",
       weak_quality_probe: "小单探路",
+      orderbook_impact: "盘口冲击",
+      volume_scalp: "放量剥头皮",
+      imbalance_probe: "失衡试探",
     };
     return labels[entryType] || item?.entry_type_label || signal.entry_type_label || fallback;
   }
@@ -528,6 +531,7 @@ function SignalExplain({ best }: { best?: any }) {
   const protectionLabel = protection.label || signal.entry_type_label || best.entry_type_label || "-";
   const protectionStopAtr = protection.stop_atr ?? profile.stop_atr;
   const protectionTakeAtr = protection.take_profit_atr ?? profile.take_profit_atr;
+  const scalp = best.scalp_signal || {};
   return (
     <div className="panel signal-explain">
       <h2>当前策略解释</h2>
@@ -540,9 +544,16 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
         <div><span>{"\u4fdd\u62a4\u6863\u6848"}</span><strong>{protectionLabel}</strong></div>
         <div><span>{"\u6b62\u635f / \u6b62\u76c8 ATR"}</span><strong>{fmt(protectionStopAtr, 2)} / {fmt(protectionTakeAtr, 2)}</strong></div>
+        <div><span>盘口点差</span><strong>{scalp.enabled ? `${fmt(scalp.spread_pct, 3)}%` : "-"}</strong></div>
+        <div><span>盘口失衡</span><strong>{scalp.enabled ? fmt(scalp.directed_imbalance, 3) : "-"}</strong></div>
+        <div><span>扣费后空间</span><strong>{scalp.enabled ? `${fmt(scalp.net_profit_pct, 3)}%` : "-"}</strong></div>
+        <div><span>最长持仓</span><strong>{profile.max_hold_seconds ? `${fmt(profile.max_hold_seconds, 0)} 秒` : `${protection.max_hold_bars || profile.max_hold_bars || "-"} 根K线`}</strong></div>
         <div><span>{"\u521d\u59cb\u6b62\u635f"}</span><strong>{fmt(protection.initial_stop ?? signal.stop, 6)}</strong></div>
         <div><span>{"\u521d\u59cb\u6b62\u76c8"}</span><strong>{fmt(protection.initial_take_profit ?? signal.take_profit, 6)}</strong></div>
       </div>
+      {scalp.enabled && !scalp.passed && scalp.blockers?.length ? (
+        <p>盘口剥头皮未通过：{scalp.blockers.slice(0, 4).join("；")}</p>
+      ) : null}
       <p>{best.decision_reason || signal.reason || best.reason || "等待下一轮扫描。"}</p>
     </div>
   );
@@ -572,6 +583,11 @@ function FunnelPanel({ funnel }: { funnel: any }) {
             : `${item.label || label} / 预算`;
         return <MetricCard key={key} title={label} value={value} sub={sub} />;
       })}
+      <MetricCard
+        title="剥头皮信号"
+        value={`${fmt(funnel?.extreme_v2?.scalp, 0)} 个`}
+        sub="盘口冲击 / 放量剥头皮 / 失衡试探"
+      />
       <MetricCard title="本轮耗时" value={`${fmt(funnel?.elapsed_seconds, 3)} 秒`} sub="用于判断是否需要自动降级" />
     </div>
   );
@@ -598,6 +614,8 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
             {!compact && <th>质量分</th>}
             {!compact && <th>质量倍率</th>}
             {!compact && <th>质量拆分</th>}
+            {!compact && <th>盘口</th>}
+            {!compact && <th>扣费后</th>}
             <th>PF</th>
             <th>成本比</th>
             <th>风险%</th>
@@ -621,6 +639,8 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               {!compact && <td>{fmt(row.symbol_quality?.score, 2)}</td>}
               {!compact && <td>{fmt(row.quality_risk_multiplier ?? row.symbol_quality?.quality_risk_multiplier, 2)}x</td>}
               {!compact && <td className="reason-cell">{qualitySummary(row.symbol_quality)}</td>}
+              {!compact && <td>{row.scalp_signal?.enabled ? `点差 ${fmt(row.scalp_signal.spread_pct, 3)}% / 失衡 ${fmt(row.scalp_signal.directed_imbalance, 2)}` : "-"}</td>}
+              {!compact && <td>{row.scalp_signal?.enabled ? `${fmt(row.scalp_signal.net_profit_pct, 3)}%` : "-"}</td>}
               <td>{fmt(row.recent?.profit_factor, 2)}</td>
               <td>{fmt(row.cost_ratio, 2)}</td>
               <td>{fmt(row.risk_pct, 2)}%</td>
@@ -1020,6 +1040,18 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("yolo_scalp_risk_per_trade_pct", "极限梭哈基础风险%", "默认 55%；好机会大仓位，舔一口就走，可能快速亏完本金")}
           {number("yolo_scalp_daily_loss_limit_pct", "极限梭哈每日亏损上限%", "默认 65%；触发后停止新开仓")}
           {number("yolo_scalp_max_open_positions", "极限梭哈最大持仓数", "默认 1；满仓短打阶段不建议同时持有多个币")}
+          {toggle("yolo_scalp_orderbook_engine_enabled", "盘口剥头皮引擎", "极限梭哈优先使用 WebSocket 盘口、1m 异动和扣费后空间来触发快进快出")}
+          {number("yolo_scalp_orderbook_max_spread_pct", "剥头皮最大点差%", "默认 0.08%；点差太大时手续费和滑点会吃掉毛利")}
+          {number("yolo_scalp_orderbook_min_depth_notional_usdt", "剥头皮最低盘口深度U", "默认 1000U；depth5 太薄不做")}
+          {number("yolo_scalp_orderbook_min_imbalance", "剥头皮最小盘口失衡", "默认 0.08；买卖盘优势不明显就等待")}
+          {number("yolo_scalp_orderbook_min_1m_move_pct", "剥头皮1m最小异动%", "默认 0.08%；没有短时波动就不硬开")}
+          {number("yolo_scalp_orderbook_min_profit_cost_ratio", "剥头皮最低收益/成本比", "默认 1.15；必须覆盖手续费和滑点后仍有空间")}
+          {number("yolo_scalp_orderbook_target_net_profit_pct", "剥头皮目标净利%", "默认 0.06%；舔一口就走的最小目标")}
+          {number("yolo_scalp_orderbook_stop_pct", "剥头皮硬止损%", "默认 0.20%；盘口失败时快速认错")}
+          {number("yolo_scalp_orderbook_max_hold_seconds", "剥头皮最长持仓秒数", "默认 120 秒；超过仍没利润就撤")}
+          {toggle("yolo_scalp_orderbook_runtime_exit_enabled", "盘口失效自动退出", "剥头皮持仓中如果点差扩大或盘口反向，运行时保护会提前平仓")}
+          {number("yolo_scalp_orderbook_exit_spread_multiplier", "盘口退出点差倍数", "默认 2；超过入场点差上限的 2 倍视为盘口恶化")}
+          {number("yolo_scalp_orderbook_exit_reverse_imbalance", "盘口反向退出阈值", "默认 0.04；同向盘口优势翻转后提前撤")}
           {number("yolo_scalp_standard_min_score", "梭哈标准最低评分", "默认 72；比极限冲刺更宽，靠更快止盈止损控制风险")}
           {number("yolo_scalp_preemptive_min_score", "梭哈抢跑最低评分", "默认 58；允许火药桶和抢跑信号更早试错")}
           {number("yolo_scalp_momentum_min_score", "梭哈动量最低评分", "默认 54；强异动可进入短打")}

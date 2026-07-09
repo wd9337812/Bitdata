@@ -5,6 +5,7 @@ from typing import Any
 
 from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
+from app.market_stream import stream_depth
 from app.protection_audit import enrich_positions_with_prices
 from app.risk import live_trading_allowed
 from app.state_store import save_state
@@ -50,6 +51,34 @@ def _tracked_positions(state: dict[str, Any]) -> dict[str, Any]:
     return tracked if isinstance(tracked, dict) else {}
 
 
+def _orderbook_exit_signal(symbol: str, direction: str, config: dict[str, Any]) -> dict[str, Any]:
+    depth = stream_depth(symbol, max_age_seconds=int(config.get("yolo_scalp_stream_max_age_seconds", 12)))
+    if not depth:
+        return {"enabled": True, "triggered": False, "reason": "depth_missing"}
+    bids = depth.get("bids") or []
+    asks = depth.get("asks") or []
+    bid_notional = sum(float(price) * float(qty) for price, qty in bids[:5])
+    ask_notional = sum(float(price) * float(qty) for price, qty in asks[:5])
+    total = bid_notional + ask_notional
+    imbalance = (bid_notional - ask_notional) / total if total > 0 else 0.0
+    directed_imbalance = imbalance if direction == "LONG" else -imbalance
+    spread_pct = float(depth.get("spread_pct") or 999.0)
+    max_spread = float(config.get("yolo_scalp_orderbook_max_spread_pct", 0.08)) * float(
+        config.get("yolo_scalp_orderbook_exit_spread_multiplier", 2.0)
+    )
+    reverse_threshold = -float(config.get("yolo_scalp_orderbook_exit_reverse_imbalance", 0.04))
+    triggered = spread_pct > max_spread or directed_imbalance <= reverse_threshold
+    return {
+        "enabled": True,
+        "triggered": triggered,
+        "reason": "orderbook_invalid" if triggered else "orderbook_ok",
+        "spread_pct": round(spread_pct, 6),
+        "max_spread_pct": round(max_spread, 6),
+        "directed_imbalance": round(directed_imbalance, 6),
+        "reverse_threshold": round(reverse_threshold, 6),
+    }
+
+
 def _atr_value(client: BinanceFuturesClient, symbol: str, interval: str) -> float:
     bars = client.klines(symbol, interval, 120)
     values = atr(bars, 14)
@@ -77,6 +106,7 @@ def build_runtime_protection_action(
     adverse_pct = max(0.0, -pnl_pct)
     tracked = _tracked_positions(state)
     key = _position_key(symbol, direction)
+    tracked_item = tracked.get(key) or {}
     opened_at_raw = (tracked.get(key) or {}).get("opened_at")
     opened_at = _now()
     if opened_at_raw:
@@ -97,13 +127,25 @@ def build_runtime_protection_action(
     atr_pct = atr_value / mark * 100 if mark > 0 and atr_value > 0 else 0.0
     fast_invalid_pct = atr_pct * float(config.get("protection_fast_invalid_atr", 0.35))
     fast_invalid_seconds = int(config.get("protection_fast_invalid_seconds", 90))
+    max_hold_seconds = int((tracked.get(key) or {}).get("max_hold_seconds") or 0)
     max_hold_bars = int((tracked.get(key) or {}).get("max_hold_bars") or config.get("runtime_protection_max_hold_bars", 12))
-    max_hold_seconds = max_hold_bars * 300
+    if max_hold_seconds <= 0:
+        max_hold_seconds = max_hold_bars * 300
     break_even_trigger_pct = atr_pct * float(config.get("protection_break_even_trigger_atr", 0.55))
     trailing_trigger_pct = atr_pct * float(config.get("protection_trailing_trigger_atr", 0.9))
     trailing_distance_pct = atr_pct * float(config.get("protection_trailing_distance_atr", 0.55))
     action = "observe"
     reason = "holding"
+    orderbook_exit = {"enabled": False}
+    if (
+        config.get("yolo_scalp_orderbook_runtime_exit_enabled", True)
+        and tracked_item.get("entry_type") in {"orderbook_impact", "volume_scalp", "imbalance_probe"}
+        and age_seconds >= 5
+    ):
+        orderbook_exit = _orderbook_exit_signal(symbol, direction, config)
+        if orderbook_exit.get("triggered"):
+            action = "close_orderbook_invalid"
+            reason = "orderbook_invalid"
     if fast_invalid_seconds > 0 and age_seconds <= fast_invalid_seconds and fast_invalid_pct > 0 and adverse_pct >= fast_invalid_pct:
         action = "close_fast_invalid"
         reason = "fast_invalid"
@@ -127,6 +169,7 @@ def build_runtime_protection_action(
         "atr_pct": round(atr_pct, 6),
         "fast_invalid_pct": round(fast_invalid_pct, 6),
         "trailing_distance_pct": round(trailing_distance_pct, 6),
+        "orderbook_exit": orderbook_exit,
         "action": action,
         "reason": reason,
     }
@@ -166,7 +209,7 @@ def manage_runtime_protection(
         tracked.setdefault(key, {"opened_at": now_iso})
         action = build_runtime_protection_action(position, config=config, state={**state, "runtime_protection_positions": tracked}, client=client)
         actions.append(action)
-        if action["action"] not in {"close_fast_invalid", "close_time_stop"}:
+        if action["action"] not in {"close_fast_invalid", "close_time_stop", "close_orderbook_invalid"}:
             continue
         if not (live_trading_allowed(config) and config.get("dynamic_protection_runtime_trade_enabled", False)):
             record_event("info", "runtime_protection", "runtime protection signal generated", action)

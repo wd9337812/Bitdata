@@ -11,6 +11,9 @@ ENTRY_LABELS = {
     "weak_quality_probe": "\u5f31\u8d28\u91cf\u8bd5\u63a2\u4fdd\u62a4",
     "observe_standard": "\u89c2\u5bdf\u6c60\u8bd5\u5355\u4fdd\u62a4",
     "extreme_scalp": "极限短打保护",
+    "orderbook_impact": "盘口冲击保护",
+    "volume_scalp": "放量剥头皮保护",
+    "imbalance_probe": "失衡试探保护",
 }
 
 
@@ -37,6 +40,8 @@ def _entry_defaults(entry_type: str) -> tuple[float, float, int]:
         return 0.8, 1.2, 5
     if entry_type == "extreme_scalp":
         return 0.55, 0.75, 2
+    if entry_type in {"orderbook_impact", "volume_scalp", "imbalance_probe"}:
+        return 0.35, 0.45, 2
     return 1.0, 1.5, 18
 
 
@@ -56,6 +61,8 @@ def build_protection_plan(
     default_stop_atr, default_take_atr, default_hold = _entry_defaults(entry_type)
     stop_atr = _float(profile.get("stop_atr"), default_stop_atr)
     take_profit_atr = _float(profile.get("take_profit_atr"), default_take_atr)
+    stop_pct = _float(profile.get("stop_pct"), 0.0)
+    take_profit_pct = _float(profile.get("take_profit_pct"), 0.0)
     max_hold_bars = int(profile.get("max_hold_bars") or default_hold)
     if price <= 0 or atr <= 0:
         return {
@@ -68,8 +75,16 @@ def build_protection_plan(
             "max_hold_bars": max_hold_bars,
         }
     is_short = direction == "SHORT"
-    initial_stop = price + atr * stop_atr if is_short else price - atr * stop_atr
-    initial_take_profit = price - atr * take_profit_atr if is_short else price + atr * take_profit_atr
+    initial_stop = (
+        price * (1 + stop_pct / 100)
+        if is_short
+        else price * (1 - stop_pct / 100)
+    ) if stop_pct > 0 else (price + atr * stop_atr if is_short else price - atr * stop_atr)
+    initial_take_profit = (
+        price * (1 - take_profit_pct / 100)
+        if is_short
+        else price * (1 + take_profit_pct / 100)
+    ) if take_profit_pct > 0 else (price - atr * take_profit_atr if is_short else price + atr * take_profit_atr)
     fast_invalid_atr = _float(config.get("protection_fast_invalid_atr", 0.35))
     fast_invalid_price = price + atr * fast_invalid_atr if is_short else price - atr * fast_invalid_atr
     break_even_trigger_atr = _float(config.get("protection_break_even_trigger_atr", 0.55))
@@ -90,6 +105,8 @@ def build_protection_plan(
         "atr": atr,
         "stop_atr": stop_atr,
         "take_profit_atr": take_profit_atr,
+        "stop_pct": stop_pct,
+        "take_profit_pct": take_profit_pct,
         "initial_stop": initial_stop,
         "initial_take_profit": initial_take_profit,
         "fast_invalid": {
@@ -126,6 +143,8 @@ def apply_initial_protection_to_signal(signal: dict[str, Any], plan: dict[str, A
     updated["protection_profile"] = {
         "stop_atr": plan.get("stop_atr"),
         "take_profit_atr": plan.get("take_profit_atr"),
+        "stop_pct": plan.get("stop_pct"),
+        "take_profit_pct": plan.get("take_profit_pct"),
         "max_hold_bars": plan.get("max_hold_bars"),
     }
     return updated

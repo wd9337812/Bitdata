@@ -307,6 +307,8 @@ def _market_stream_url(symbols: list[str], interval: str) -> str:
                 f"{lower}@kline_{interval}",
             ]
         )
+        if interval != "1m":
+            streams.append(f"{lower}@kline_1m")
     return _combined_url("market", streams)
 
 

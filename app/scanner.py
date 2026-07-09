@@ -12,6 +12,7 @@ from app.live_reaction import apply_live_reaction_to_candidate
 from app.market_stream import stream_triggers, write_stream_intent
 from app.opportunity_queue import read_opportunities
 from app.position_sizing import effective_position_risk
+from app.scalp_engine import build_scalp_signal
 from app.strategy import StrategyParams, atr, ema
 
 
@@ -1635,6 +1636,7 @@ def scan_growth_candidates(
     except Exception:
         funding_by_symbol = {}
     opportunity_by_symbol = {str(event.get("symbol") or "").upper(): event for event in opportunity_events}
+    trigger_by_symbol = {str(event.get("symbol") or "").upper(): event for event in trigger_events}
     ranked_symbols, coarse_rows = _coarse_rank_symbols(recalled_symbols, tickers, config, mode, opportunity_by_symbol)
     opportunity_symbols = [str(event.get("symbol") or "").upper() for event in opportunity_events]
     trigger_symbols = [str(event.get("symbol") or "").upper() for event in trigger_events]
@@ -1721,6 +1723,11 @@ def scan_growth_candidates(
                     and (
                         signal.get("signal") == direction
                         or current_score >= float(config.get("depth_check_min_current_score", 38.0))
+                        or (
+                            mode["mode"] == "yolo_scalp"
+                            and config.get("yolo_scalp_orderbook_engine_enabled", True)
+                            and symbol in (opportunity_by_symbol.keys() | trigger_by_symbol.keys())
+                        )
                     )
                 )
                 if should_check_depth and symbol not in depth_by_symbol:
@@ -1808,6 +1815,49 @@ def scan_growth_candidates(
                 passed = standard_passed and score >= standard_min_score
                 risk_adjustment: dict[str, Any] | None = None
                 decision_reason = "标准突破信号通过" if passed else "等待触发"
+                scalp_signal: dict[str, Any] = {"enabled": False}
+                if (
+                    mode["mode"] == "yolo_scalp"
+                    and config.get("yolo_scalp_orderbook_engine_enabled", True)
+                    and not passed
+                    and quality.get("pool") != "disabled"
+                    and market_state.get("state") not in {"liquidity_trap", "spike_wick"}
+                ):
+                    scalp_signal = build_scalp_signal(
+                        symbol=symbol,
+                        direction=direction,
+                        bars=bars,
+                        ticker=ticker,
+                        depth=depth,
+                        event=opportunity_by_symbol.get(symbol) or trigger_by_symbol.get(symbol),
+                        base_signal=signal,
+                        recent=recent,
+                        config=config,
+                    )
+                    if scalp_signal.get("passed"):
+                        entry_type = str(scalp_signal.get("entry_type") or "volume_scalp")
+                        signal = dict(scalp_signal["signal"])
+                        expected_profit_pct = float(
+                            scalp_signal.get("expected_profit_pct") or signal.get("expected_profit_pct") or 0
+                        )
+                        cost_ratio = float(scalp_signal.get("cost_ratio") or (expected_profit_pct / cost_pct if cost_pct else 0))
+                        score = max(score, float(scalp_signal.get("score") or score) + float(quality.get("score") or 0) * 0.12)
+                        if entry_type == "orderbook_impact":
+                            risk_pct = float(mode["risk_pct"]) * 0.95
+                        elif entry_type == "volume_scalp":
+                            risk_pct = float(mode["risk_pct"]) * 0.75
+                        else:
+                            risk_pct = float(mode["risk_pct"]) * 0.42
+                        risk_pct *= quality_multiplier
+                        passed = True
+                        decision_reason = (
+                            f"{scalp_signal.get('label', '盘口剥头皮')}通过："
+                            f"点差 {scalp_signal.get('spread_pct')}%，"
+                            f"盘口失衡 {scalp_signal.get('directed_imbalance')}，"
+                            f"扣费后净空间 {scalp_signal.get('net_profit_pct')}%"
+                        )
+                    elif scalp_signal.get("enabled") and scalp_signal.get("blockers"):
+                        decision_reason = "盘口剥头皮未通过：" + "；".join(str(item) for item in scalp_signal.get("blockers", [])[:3])
                 if passed and quality["pool"] == "small_trade":
                     entry_type = "small_standard"
                     risk_pct *= float(config.get("small_trade_risk_multiplier", 0.5))
@@ -2014,6 +2064,7 @@ def scan_growth_candidates(
                         "symbol_pool": quality["pool"],
                         "live_performance": live_perf,
                         "market_state": market_state,
+                        "scalp_signal": scalp_signal,
                         "firecracker": firecracker,
                         "derivatives": derivatives,
                         "spot_proxy": spot_proxy,
@@ -2095,7 +2146,7 @@ def scan_growth_candidates(
         candidate
         for candidate in candidates
         if candidate.get("symbol_quality", {}).get("pool") in {"trade", "small_trade", "adaptive_live", "observe_hot"}
-        or candidate.get("entry_type") in {"extreme_probe", "weak_quality_probe"}
+        or candidate.get("entry_type") in {"extreme_probe", "weak_quality_probe", "orderbook_impact", "volume_scalp", "imbalance_probe"}
     ][: int(config.get("max_trade_pool_symbols", 15))]
     observe_pool = [
         candidate
@@ -2104,6 +2155,7 @@ def scan_growth_candidates(
     ][:max_candidates]
     firecracker_count = sum(1 for candidate in candidates if candidate.get("firecracker", {}).get("is_firecracker"))
     probe_count = sum(1 for candidate in candidates if candidate.get("entry_type") in {"extreme_probe", "weak_quality_probe"})
+    scalp_count = sum(1 for candidate in candidates if candidate.get("entry_type") in {"orderbook_impact", "volume_scalp", "imbalance_probe"})
     sprint_count = sum(1 for candidate in candidates if candidate.get("passed") and candidate.get("entry_type") not in {"extreme_probe", "weak_quality_probe"})
     blocked_reasons: dict[str, int] = {}
     for candidate in candidates:
@@ -2148,6 +2200,7 @@ def scan_growth_candidates(
             "enabled": bool(is_extreme_mode(mode.get("mode")) and config.get("extreme_v2_enabled", True)),
             "firecracker": firecracker_count,
             "probe": probe_count,
+            "scalp": scalp_count,
             "sprint": sprint_count,
             "blocked_reasons": blocked_reasons,
             "label": "极限V2",

@@ -3,8 +3,30 @@ from __future__ import annotations
 from typing import Any
 
 
-PROBE_ENTRY_TYPES = {"extreme_probe", "weak_quality_probe", "preemptive", "momentum", "small_standard", "observe_standard"}
-YOLO_SCALP_ENTRY_TYPES = {"standard", "extreme_scalp", "preemptive", "momentum", "extreme_probe", "weak_quality_probe", "observe_standard", "small_standard"}
+PROBE_ENTRY_TYPES = {
+    "extreme_probe",
+    "weak_quality_probe",
+    "preemptive",
+    "momentum",
+    "small_standard",
+    "observe_standard",
+    "orderbook_impact",
+    "volume_scalp",
+    "imbalance_probe",
+}
+YOLO_SCALP_ENTRY_TYPES = {
+    "standard",
+    "extreme_scalp",
+    "preemptive",
+    "momentum",
+    "extreme_probe",
+    "weak_quality_probe",
+    "observe_standard",
+    "small_standard",
+    "orderbook_impact",
+    "volume_scalp",
+    "imbalance_probe",
+}
 
 
 ORDER_VIABILITY_LABELS = {
@@ -70,7 +92,22 @@ def yolo_scalp_execution_profile(candidate: dict[str, Any] | None, config: dict[
         or str(live_credit.get("status") or "") in {"weak", "penalty"}
     )
 
-    if entry_type == "weak_quality_probe":
+    if entry_type == "orderbook_impact":
+        tier = "orderbook_impact"
+        label = "盘口冲击"
+        min_key = "yolo_scalp_orderbook_impact_min_risk_pct"
+        max_key = "yolo_scalp_orderbook_impact_max_risk_pct"
+    elif entry_type == "volume_scalp":
+        tier = "volume_scalp"
+        label = "放量剥头皮"
+        min_key = "yolo_scalp_orderbook_volume_min_risk_pct"
+        max_key = "yolo_scalp_orderbook_volume_max_risk_pct"
+    elif entry_type == "imbalance_probe":
+        tier = "imbalance_probe"
+        label = "失衡试探"
+        min_key = "yolo_scalp_orderbook_probe_min_risk_pct"
+        max_key = "yolo_scalp_orderbook_probe_max_risk_pct"
+    elif entry_type == "weak_quality_probe":
         tier = "weak_probe"
         label = "小单探路"
         min_key = "yolo_scalp_weak_probe_min_risk_pct"
