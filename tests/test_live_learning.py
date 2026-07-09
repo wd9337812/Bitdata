@@ -94,6 +94,58 @@ def test_live_credit_uses_linear_multiplier_instead_of_blocking(monkeypatch):
     assert "冷却倍率上限" in "；".join(candidate["live_credit_adjustment"]["reasons"])
 
 
+def test_yolo_orderbook_scalp_uses_experiment_credit_with_legacy_soft_discount(monkeypatch):
+    penalty_until = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(microsecond=0).isoformat()
+
+    monkeypatch.setattr(
+        "app.live_learning.live_score_for",
+        lambda symbol, direction, config: {
+            "enabled": True,
+            "score": 12,
+            "status": "penalty",
+            "status_label": "penalty",
+            "penalty_until": penalty_until,
+            "closed_trades": 3,
+            "wins": 0,
+            "losses": 3,
+            "consecutive_wins": 0,
+            "consecutive_losses": 3,
+            "commission": 0.2,
+            "net_pnl": -5,
+            "profit_factor": 0,
+            "notes": ["legacy loss"],
+        },
+    )
+
+    candidate = apply_live_credit_to_candidate(
+        {
+            "symbol": "LABUSDT",
+            "direction": "SHORT",
+            "mode": "yolo_scalp",
+            "entry_type": "orderbook_impact",
+            "score": 100,
+            "passed": True,
+            "risk_pct": 50,
+        },
+        {
+            "live_credit_enabled": True,
+            "live_credit_multiplier_divisor": 50,
+            "live_credit_max_risk_multiplier": 2.0,
+            "live_credit_fuse_score": 2,
+            "yolo_scalp_credit_experiment_enabled": True,
+            "yolo_scalp_legacy_credit_soft_multiplier": 0.70,
+            "yolo_scalp_legacy_credit_soft_penalty_multiplier": 0.70,
+        },
+    )
+
+    assert candidate["passed"] is True
+    assert candidate["risk_pct"] == 35
+    assert candidate["live_credit"]["status"] == "new"
+    assert candidate["legacy_live_credit"]["score"] == 12
+    assert candidate["live_credit_adjustment"]["strategy_family"] == "yolo_orderbook_scalp_experiment"
+    assert candidate["live_credit_adjustment"]["legacy_soft_multiplier"] == 0.7
+
+
 def test_live_credit_multiplier_is_score_divided_by_50():
     config = {"live_credit_multiplier_divisor": 50, "live_credit_max_risk_multiplier": 2.0, "live_credit_fuse_score": 2}
 

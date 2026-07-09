@@ -629,7 +629,10 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               <td>{signalLabel(row.direction || row.signal?.signal)}</td>
               <td>{entryTypeLabel(row, "-")}</td>
               <td>{fmt(row.score, 2)}</td>
-              <td>{row.live_credit ? `${fmt(row.live_credit.score, 1)} · ${row.live_credit.status_label || "-"}` : "-"}</td>
+              <td>
+                {row.live_credit ? `${fmt(row.live_credit.score, 1)} · ${row.live_credit.status_label || "-"}` : "-"}
+                {row.legacy_live_credit ? <small>旧信用 {fmt(row.legacy_live_credit.score, 1)}</small> : null}
+              </td>
               <td>{row.live_reaction ? `${row.live_reaction.status_label || "-"} · ${fmt(row.live_reaction.risk_multiplier, 2)}x` : "-"}</td>
               {!compact && <td className="reason-cell">{row.decision_reason || row.reason}</td>}
               {!compact && <td>{fmt(row.signal?.distance_to_trigger_pct, 3)}%</td>}
@@ -1043,7 +1046,12 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("yolo_scalp_orderbook_engine_enabled", "盘口剥头皮引擎", "极限梭哈优先使用 WebSocket 盘口、1m 异动和扣费后空间来触发快进快出")}
           {number("yolo_scalp_orderbook_max_spread_pct", "剥头皮最大点差%", "默认 0.08%；点差太大时手续费和滑点会吃掉毛利")}
           {number("yolo_scalp_orderbook_min_depth_notional_usdt", "剥头皮最低盘口深度U", "默认 1000U；depth5 太薄不做")}
-          {number("yolo_scalp_orderbook_min_imbalance", "剥头皮最小盘口失衡", "默认 0.08；买卖盘优势不明显就等待")}
+          {number("yolo_scalp_orderbook_probe_min_depth_notional_usdt", "失衡试探最低盘口深度U", "默认 300U；只用于小仓试探，盘口冲击和放量剥头皮仍用更高深度")}
+          {number("yolo_scalp_orderbook_min_imbalance", "剥头皮最小盘口失衡", "默认 0.05；买卖盘优势不明显就等待")}
+          {toggle("yolo_scalp_orderbook_allow_strong_imbalance_direction_probe", "强盘口允许小仓试探", "实时方向不一致但盘口失衡很强时，只允许按失衡试探小仓进入")}
+          {toggle("yolo_scalp_credit_experiment_enabled", "剥头皮信用试验层", "新盘口剥头皮不再被旧策略信用硬拦截，旧亏损只做仓位软折扣")}
+          {number("yolo_scalp_legacy_credit_soft_multiplier", "旧低分软折扣", "默认 0.70x；旧策略信用很低时仍能小仓试验")}
+          {number("yolo_scalp_legacy_credit_soft_penalty_multiplier", "旧冷却软折扣", "默认 0.70x；旧策略处于冷却时只降仓不熔断")}
           {number("yolo_scalp_orderbook_min_1m_move_pct", "剥头皮1m最小异动%", "默认 0.08%；没有短时波动就不硬开")}
           {number("yolo_scalp_orderbook_min_profit_cost_ratio", "剥头皮最低收益/成本比", "默认 1.15；必须覆盖手续费和滑点后仍有空间")}
           {number("yolo_scalp_orderbook_target_net_profit_pct", "剥头皮目标净利%", "默认 0.06%；舔一口就走的最小目标")}

@@ -12,6 +12,38 @@ from app.telemetry import connect, now_iso, record_event
 
 
 DEFAULT_SCORE = 50.0
+ORDERBOOK_SCALP_ENTRY_TYPES = {"orderbook_impact", "volume_scalp", "imbalance_probe"}
+YOLO_SCALP_EXPERIMENT_FAMILY = "yolo_orderbook_scalp_experiment"
+
+
+def _is_yolo_orderbook_scalp_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> bool:
+    return (
+        bool(config.get("yolo_scalp_credit_experiment_enabled", True))
+        and str(candidate.get("mode") or "") == "yolo_scalp"
+        and str(candidate.get("entry_type") or "") in ORDERBOOK_SCALP_ENTRY_TYPES
+    )
+
+
+def _experiment_credit(symbol: str, direction: str, config: dict[str, Any]) -> dict[str, Any]:
+    score = float(config.get("live_credit_default_score", DEFAULT_SCORE))
+    return {
+        "enabled": True,
+        "symbol": symbol,
+        "direction": direction,
+        "score": score,
+        "status": "new",
+        "status_label": "剥头皮新引擎试验",
+        "closed_trades": 0,
+        "wins": 0,
+        "losses": 0,
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "penalty_until": None,
+        "commission": 0.0,
+        "net_pnl": 0.0,
+        "profit_factor": 0.0,
+        "notes": ["orderbook_scalp_credit_experiment"],
+    }
 
 
 def init_live_learning_schema() -> None:
@@ -530,7 +562,13 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
     direction = str(candidate.get("direction") or "").upper()
     if not symbol or direction not in {"LONG", "SHORT"}:
         return candidate
+    legacy_credit: dict[str, Any] | None = None
+    experiment_family: str | None = None
     credit = live_score_for(symbol, direction, config)
+    if _is_yolo_orderbook_scalp_candidate(candidate, config):
+        legacy_credit = credit
+        experiment_family = YOLO_SCALP_EXPERIMENT_FAMILY
+        credit = _experiment_credit(symbol, direction, config)
     score = float(credit.get("score", DEFAULT_SCORE))
     weight = float(config.get("live_credit_score_weight", 0.35))
     score_delta = (score - float(config.get("live_credit_default_score", DEFAULT_SCORE))) * weight
@@ -567,6 +605,33 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
             multiplier *= fee_mult
             candidate["score"] = round(float(candidate["score"]) - min(8.0, fee_ratio * 4.0), 4)
             reasons.append(f"手续费压力 {fee_ratio:.2f}x，降仓 {fee_mult:.2f}x")
+
+    legacy_soft_multiplier = 1.0
+    legacy_soft_reasons: list[str] = []
+    legacy_cooldown: dict[str, Any] | None = None
+    if legacy_credit is not None:
+        legacy_score = float(legacy_credit.get("score", DEFAULT_SCORE))
+        legacy_cooldown = live_credit_cooldown_summary(legacy_credit, config)
+        if legacy_score < float(config.get("yolo_scalp_legacy_credit_soft_score_threshold", 30.0)):
+            legacy_soft_multiplier = min(
+                legacy_soft_multiplier,
+                float(config.get("yolo_scalp_legacy_credit_soft_multiplier", 0.70)),
+            )
+            legacy_soft_reasons.append(f"旧信用低分 {legacy_score:.1f}")
+        if legacy_cooldown["active"] or int(legacy_credit.get("consecutive_losses") or 0) > 0:
+            legacy_soft_multiplier = min(
+                legacy_soft_multiplier,
+                float(config.get("yolo_scalp_legacy_credit_soft_penalty_multiplier", 0.70)),
+            )
+            legacy_soft_reasons.append("旧策略亏损/冷却")
+        if legacy_soft_multiplier < 1.0:
+            multiplier *= legacy_soft_multiplier
+            reasons.append(
+                f"剥头皮试验期：旧信用仅软折扣 {legacy_soft_multiplier:.2f}x（{','.join(legacy_soft_reasons)}）"
+            )
+        else:
+            reasons.append("剥头皮试验期：旧信用不硬拦截")
+        candidate["legacy_live_credit"] = legacy_credit
 
     bypass_allowed = False
     if cooldown["active"]:
@@ -629,6 +694,10 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
         "cooldown": cooldown,
         "cooldown_bypass": bypass_allowed,
         "reasons": reasons,
+        "strategy_family": experiment_family,
+        "legacy_soft_multiplier": round(legacy_soft_multiplier, 4),
+        "legacy_soft_reasons": legacy_soft_reasons,
+        "legacy_cooldown": legacy_cooldown,
     }
     return candidate
 

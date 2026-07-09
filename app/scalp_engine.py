@@ -6,6 +6,9 @@ from typing import Any
 from app.market_stream import stream_kline
 
 
+ORDERBOOK_SCALP_ENTRY_TYPES = {"orderbook_impact", "volume_scalp", "imbalance_probe"}
+
+
 def _float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -71,6 +74,27 @@ def _signal_direction_from_event(event: dict[str, Any] | None, one_minute_move_p
     return "LONG" if ticker_change_pct >= 0 else "SHORT"
 
 
+def _entry_type_for(
+    *,
+    directed_imbalance: float,
+    strong_imbalance: float,
+    min_imbalance: float,
+    event_active: bool,
+    one_minute_active: bool,
+    one_minute_quote_volume: float,
+    min_quote_volume: float,
+    direction_confirmed: bool,
+    direction_probe: bool,
+) -> tuple[str, str]:
+    if directed_imbalance >= strong_imbalance and event_active and direction_confirmed:
+        return "orderbook_impact", "盘口冲击"
+    if one_minute_active and one_minute_quote_volume >= min_quote_volume and direction_confirmed:
+        return "volume_scalp", "放量剥头皮"
+    if directed_imbalance >= min_imbalance or direction_probe:
+        return "imbalance_probe", "失衡试探"
+    return "scalp_watch", "剥头皮观察"
+
+
 def build_scalp_signal(
     *,
     symbol: str,
@@ -114,13 +138,40 @@ def build_scalp_signal(
 
     min_spread = float(config.get("yolo_scalp_orderbook_max_spread_pct", 0.08))
     min_depth = float(config.get("yolo_scalp_orderbook_min_depth_notional_usdt", 1000.0))
-    min_imbalance = float(config.get("yolo_scalp_orderbook_min_imbalance", 0.08))
-    strong_imbalance = float(config.get("yolo_scalp_orderbook_strong_imbalance", 0.18))
+    probe_min_depth = float(config.get("yolo_scalp_orderbook_probe_min_depth_notional_usdt", 300.0))
+    min_imbalance = float(config.get("yolo_scalp_orderbook_min_imbalance", 0.05))
+    strong_imbalance = float(config.get("yolo_scalp_orderbook_strong_imbalance", 0.14))
+    allow_strong_direction_probe = bool(config.get("yolo_scalp_orderbook_allow_strong_imbalance_direction_probe", True))
     max_event_age = float(config.get("yolo_scalp_orderbook_event_max_age_seconds", 45))
     min_move = float(config.get("yolo_scalp_orderbook_min_1m_move_pct", 0.08))
     min_quote_volume = float(config.get("yolo_scalp_orderbook_min_1m_quote_volume_usdt", 25000.0))
-    min_cost_ratio = float(config.get("yolo_scalp_orderbook_min_profit_cost_ratio", 1.15))
-    min_net_pct = float(config.get("yolo_scalp_orderbook_min_net_profit_pct", 0.04))
+    min_cost_ratio = float(config.get("yolo_scalp_orderbook_min_profit_cost_ratio", 1.05))
+    min_net_pct = float(config.get("yolo_scalp_orderbook_min_net_profit_pct", 0.025))
+
+    event_active = event_age <= max_event_age and (event_move_pct >= min_move or event_quote_volume >= min_quote_volume)
+    one_minute_active = abs(one_minute_move_pct) >= min_move or one_minute_quote_volume >= min_quote_volume
+    direction_confirmed = intended_direction == direction
+    direction_probe = (
+        (not direction_confirmed)
+        and allow_strong_direction_probe
+        and directed_imbalance >= strong_imbalance
+        and (event_active or one_minute_active)
+    )
+    entry_type, label = _entry_type_for(
+        directed_imbalance=directed_imbalance,
+        strong_imbalance=strong_imbalance,
+        min_imbalance=min_imbalance,
+        event_active=event_active,
+        one_minute_active=one_minute_active,
+        one_minute_quote_volume=one_minute_quote_volume,
+        min_quote_volume=min_quote_volume,
+        direction_confirmed=direction_confirmed,
+        direction_probe=direction_probe,
+    )
+    if entry_type in {"orderbook_impact", "volume_scalp"} and depth_notional < min_depth and depth_notional >= probe_min_depth:
+        entry_type = "imbalance_probe"
+        label = "失衡试探"
+    required_depth = probe_min_depth if entry_type == "imbalance_probe" else min_depth
 
     reasons: list[str] = []
     blockers: list[str] = []
@@ -128,21 +179,20 @@ def build_scalp_signal(
         reasons.append("点差合格")
     else:
         blockers.append(f"点差过大 {spread_pct:.3f}%>{min_spread:.3f}%")
-    if depth_notional >= min_depth:
+    if depth_notional >= required_depth:
         reasons.append("盘口深度合格")
     else:
-        blockers.append(f"盘口深度不足 {depth_notional:.0f}U<{min_depth:.0f}U")
+        blockers.append(f"盘口深度不足 {depth_notional:.0f}U<{required_depth:.0f}U")
     if directed_imbalance >= min_imbalance:
         reasons.append("盘口同向失衡")
     else:
         blockers.append(f"盘口失衡不足 {directed_imbalance:.3f}<{min_imbalance:.3f}")
-    if intended_direction == direction:
+    if direction_confirmed:
         reasons.append("实时方向一致")
+    elif direction_probe:
+        reasons.append("强盘口允许小仓方向试探")
     else:
         blockers.append("实时方向不一致")
-
-    event_active = event_age <= max_event_age and (event_move_pct >= min_move or event_quote_volume >= min_quote_volume)
-    one_minute_active = abs(one_minute_move_pct) >= min_move or one_minute_quote_volume >= min_quote_volume
     if event_active or one_minute_active:
         reasons.append("实时异动有效")
     else:
@@ -164,26 +214,13 @@ def build_scalp_signal(
 
     score = 45.0
     score += max(0.0, min((min_spread - spread_pct) / max(min_spread, 0.0001) * 14, 14))
-    score += min(depth_notional / max(min_depth, 1) * 8, 18)
+    score += min(depth_notional / max(required_depth, 1) * 8, 18)
     score += min(max(directed_imbalance, 0.0) * 80, 24)
     score += min(abs(one_minute_move_pct) * 20, 18)
     score += min(event_move_pct * 10, 12)
     score += min(cost_ratio * 5, 16)
     score += min(float(recent.get("profit_factor") or 0) * 1.5, 6)
     score = round(max(0.0, min(score, 160.0)), 4)
-
-    if directed_imbalance >= strong_imbalance and event_active:
-        entry_type = "orderbook_impact"
-        label = "盘口冲击"
-    elif one_minute_active and one_minute_quote_volume >= min_quote_volume:
-        entry_type = "volume_scalp"
-        label = "放量剥头皮"
-    elif directed_imbalance >= min_imbalance:
-        entry_type = "imbalance_probe"
-        label = "失衡试探"
-    else:
-        entry_type = "scalp_watch"
-        label = "剥头皮观察"
 
     passed = not blockers
     stop_pct = float(config.get("yolo_scalp_orderbook_stop_pct", 0.20))
@@ -212,10 +249,12 @@ def build_scalp_signal(
         "reasons": reasons,
         "spread_pct": round(spread_pct, 6),
         "depth_notional": round(depth_notional, 6),
+        "required_depth_notional": round(required_depth, 6),
         "bid_notional": round(bid_notional, 6),
         "ask_notional": round(ask_notional, 6),
         "imbalance": round(imbalance, 6),
         "directed_imbalance": round(directed_imbalance, 6),
+        "direction_probe": direction_probe,
         "one_minute_move_pct": round(one_minute_move_pct, 6),
         "one_minute_quote_volume": round(one_minute_quote_volume, 6),
         "event_age_seconds": round(event_age, 3),
