@@ -58,6 +58,46 @@ def test_tail_loss_bans_after_profit_chase_failure():
     assert "追尾亏损" in state["reason"]
 
 
+def test_large_single_loss_extends_same_direction_ban():
+    now = datetime(2026, 7, 9, 0, 40, tzinfo=timezone.utc)
+    state = score_reaction_records(
+        [_record(-6.0, 30)],
+        {
+            "live_reaction_single_loss_ban_equity_pct": 10,
+            "live_reaction_single_loss_ban_minutes": 180,
+        },
+        equity=50,
+        now=now,
+    )
+
+    assert state["status"] == "banned"
+    assert state["risk_multiplier"] == 0
+    assert state["payload"]["largest_single_loss_pct"] == 12
+    assert "最大单笔亏损" in state["reason"]
+
+
+def test_profit_giveback_bans_after_winning_session_turns_over():
+    now = datetime(2026, 7, 9, 0, 40, tzinfo=timezone.utc)
+    state = score_reaction_records(
+        [_record(8.0, 600), _record(7.0, 500), _record(-8.0, 220), _record(-8.0, 30)],
+        {
+            "live_reaction_giveback_min_profit_usdt": 1,
+            "live_reaction_giveback_ban_pct": 80,
+            "live_reaction_giveback_ban_minutes": 180,
+            "live_reaction_single_loss_ban_equity_pct": 30,
+            "live_reaction_recent_loss_equity_pct": 99,
+            "live_reaction_symbol_direction_daily_loss_pct": 99,
+        },
+        equity=50,
+        now=now,
+    )
+
+    assert state["status"] == "banned"
+    assert state["payload"]["day_peak_profit"] == 15
+    assert state["payload"]["day_profit_giveback_pct"] > 100
+    assert "回吐" in state["reason"]
+
+
 def test_apply_live_reaction_blocks_candidate(monkeypatch):
     monkeypatch.setattr(
         "app.live_reaction.live_reaction_for",

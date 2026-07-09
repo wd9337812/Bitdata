@@ -445,6 +445,7 @@ def build_stage1_decision(
         order_viability = {**order_viability, "min_order_lift_candidate": True}
     if config.get("effective_position_sizing_enabled", True) and not order_viability["allowed"] and not lift_candidate:
         risk_dict = risk.__dict__
+        viability_summary = order_viability.get("summary") or "订单预期净收益不足以覆盖交易成本和噪声"
         return {
             "symbol": symbol,
             "action": "WAIT",
@@ -458,7 +459,7 @@ def build_stage1_decision(
             "mode": active_mode["mode"],
             "strategy": active_mode["strategy"],
             "entry_type": entry_type,
-            "decision_reason": "订单预期净收益不足以覆盖交易成本和噪声",
+            "decision_reason": f"不开仓：{viability_summary}",
             "equity_guard": guard,
             "target_progress": target,
             "protection_plan": protection_plan,
@@ -720,7 +721,16 @@ def execute_stage1_market_order(
             order["quantity"] = quantity
             order["notional"] = notional
     if quantity <= 0 or notional < required_notional:
-        return {"mode": "blocked", "message": "Quantity is below effective order minimum.", "order": order}
+        return {
+            "mode": "blocked",
+            "message": "Quantity is below effective order minimum.",
+            "display_message": "下单数量低于币安或系统有效最小下单额，已跳过以避免实盘报错。",
+            "reason": "below_required_notional",
+            "order": order,
+            "required_notional": required_notional,
+            "min_notional": min_notional,
+            "effective_min_notional": effective_min_notional,
+        }
     rotation = decision.get("rotation") or {}
     if not live_trading_allowed(config):
         if rotation.get("allowed"):

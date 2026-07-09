@@ -786,6 +786,8 @@ function LiveReactionPanel({ data }: { data: LiveReactionData | null }) {
                 <th>连续盈亏</th>
                 <th>近窗净盈亏</th>
                 <th>当日净盈亏</th>
+                <th>最大单笔伤害</th>
+                <th>盈利回吐</th>
                 <th>解除时间</th>
                 <th>原因</th>
               </tr>
@@ -800,6 +802,8 @@ function LiveReactionPanel({ data }: { data: LiveReactionData | null }) {
                   <td>{Number(row.consecutive_wins || 0) > 0 ? `连赢 ${row.consecutive_wins}` : Number(row.consecutive_losses || 0) > 0 ? `连亏 ${row.consecutive_losses}` : "-"}</td>
                   <td className={Number(row.recent_net_pnl) >= 0 ? "positive-text" : "negative-text"}>{fmt(row.recent_net_pnl, 4)} U</td>
                   <td className={Number(row.day_net_pnl) >= 0 ? "positive-text" : "negative-text"}>{fmt(row.day_net_pnl, 4)} U</td>
+                  <td>{fmt(row.payload?.largest_single_loss_pct, 2)}%</td>
+                  <td>{fmt(row.payload?.day_profit_giveback_pct, 2)}%</td>
                   <td>{row.ban_until || row.cooldown_until ? new Date(row.ban_until || row.cooldown_until).toLocaleString("zh-CN") : "-"}</td>
                   <td className="reason-cell">{row.reason}</td>
                 </tr>
@@ -1174,7 +1178,16 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
                 {number("live_reaction_profit_tail_count", "盈利防追尾笔数", "默认 2 笔")}
                 {number("live_reaction_tail_multiplier", "防追尾仓位倍率", "默认 0.5x")}
                 {number("live_reaction_recent_loss_equity_pct", "短窗净亏权益%", "默认 12%；超过后暂停同方向")}
-                {number("live_reaction_symbol_direction_daily_loss_pct", "当日同向净亏权益%", "默认 20%；超过后暂停到次日")}
+                {number("live_reaction_symbol_direction_daily_loss_pct", "当日同向净亏权益%", "默认 15%；超过后暂停到次日")}
+                {number("live_reaction_single_loss_cooldown_equity_pct", "单笔伤害降仓阈值%", "默认 6%；单笔亏损过大会延长降仓观察")}
+                {number("live_reaction_single_loss_ban_equity_pct", "单笔伤害暂停阈值%", "默认 10%；单笔重伤会暂停同向")}
+                {number("live_reaction_single_loss_cooldown_minutes", "单笔伤害降仓分钟", "默认 60 分钟")}
+                {number("live_reaction_single_loss_ban_minutes", "单笔伤害暂停分钟", "默认 180 分钟")}
+                {number("live_reaction_giveback_min_profit_usdt", "回吐保护最低盈利U", "默认 1U；盈利达到后才计算回吐比例")}
+                {number("live_reaction_giveback_cooldown_pct", "盈利回吐降仓%", "默认 50%；回吐一半后降仓")}
+                {number("live_reaction_giveback_ban_pct", "盈利回吐暂停%", "默认 80%；大幅吐回后暂停同向")}
+                {number("live_reaction_giveback_cooldown_minutes", "回吐降仓分钟", "默认 60 分钟")}
+                {number("live_reaction_giveback_ban_minutes", "回吐暂停分钟", "默认 180 分钟")}
                 {number("symbol_cooldown_minutes", "同币开仓冷却分钟", "默认 15")}
           {toggle("position_rotation_enabled", "持仓轮换", "满仓时，只有明显更强的新信号才会替换当前弱仓")}
           {number("tournament_rotation_min_new_score", "锦标赛轮换最低新评分", "默认 95")}

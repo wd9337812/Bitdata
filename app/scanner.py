@@ -2072,7 +2072,10 @@ def scan_growth_candidates(
                 if candidate.get("passed") and viability.get("enabled") and not viability.get("executable"):
                     candidate["passed"] = False
                     candidate["reason"] = "min_order_not_executable"
-                    candidate["decision_reason"] = "低于币安最小下单量，跳过避免启动后失败"
+                    candidate["decision_reason"] = (
+                        f"低于币安最小下单量，当前约 {viability.get('notional')}U，"
+                        f"最低 {viability.get('min_notional')}U，跳过避免启动后失败"
+                    )
                 candidates.append(candidate)
         except Exception as exc:
             candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})

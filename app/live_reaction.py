@@ -6,7 +6,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.binance_client import BinanceFuturesClient
-from app.live_learning import build_trade_records_from_user_trades, init_live_learning_schema, upsert_trade_records
+from app.live_learning import (
+    build_trade_records_from_user_trades,
+    init_live_learning_schema,
+    rebuild_symbol_scores,
+    upsert_trade_records,
+)
 from app.telemetry import connect, now_iso, record_event, record_event_throttled
 
 
@@ -86,6 +91,38 @@ def _previous_win_streak_before_last(records: list[dict[str, Any]]) -> int:
     return streak
 
 
+def _day_damage_metrics(
+    records: list[dict[str, Any]],
+    day_start_ms: int,
+    equity_base: float,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    day_records = [item for item in records if int(item.get("close_time") or 0) >= day_start_ms]
+    cumulative = 0.0
+    peak_profit = 0.0
+    largest_loss = 0.0
+    largest_loss_pct = 0.0
+    for item in day_records:
+        net = float(item.get("net_pnl") or 0)
+        cumulative += net
+        if cumulative > peak_profit:
+            peak_profit = cumulative
+        if net < largest_loss:
+            largest_loss = net
+            largest_loss_pct = abs(net) / equity_base * 100
+    giveback = max(0.0, peak_profit - cumulative) if peak_profit > 0 else 0.0
+    min_profit = float(config.get("live_reaction_giveback_min_profit_usdt", 1.0))
+    giveback_pct = giveback / peak_profit * 100 if peak_profit >= min_profit and peak_profit > 0 else 0.0
+    return {
+        "day_records": day_records,
+        "largest_loss": round(largest_loss, 8),
+        "largest_loss_pct": round(largest_loss_pct, 4),
+        "peak_profit": round(peak_profit, 8),
+        "giveback": round(giveback, 8),
+        "giveback_pct": round(giveback_pct, 4),
+    }
+
+
 def score_reaction_records(
     records: list[dict[str, Any]],
     config: dict[str, Any],
@@ -160,6 +197,26 @@ def score_reaction_records(
         reason_parts.append(f"上一笔亏损，降仓到 {risk_multiplier:.2f}x")
 
     equity_base = max(float(equity or 0), 0.0001)
+    damage = _day_damage_metrics(records, _ms(day_start), equity_base, config)
+    single_loss_pct = float(damage["largest_loss_pct"])
+    if single_loss_pct >= float(config.get("live_reaction_single_loss_ban_equity_pct", 10.0)):
+        until = _until_from_close(last, minutes=float(config.get("live_reaction_single_loss_ban_minutes", 180)))
+        if ban_until is None or until > ban_until:
+            ban_until = until
+        status = "banned"
+        risk_multiplier = 0.0
+        score_penalty = max(score_penalty, 34.0)
+        reason_parts.append(f"当日最大单笔亏损 {single_loss_pct:.1f}% 权益，暂停同向")
+    elif single_loss_pct >= float(config.get("live_reaction_single_loss_cooldown_equity_pct", 6.0)):
+        until = _until_from_close(last, minutes=float(config.get("live_reaction_single_loss_cooldown_minutes", 60)))
+        if cooldown_until is None or until > cooldown_until:
+            cooldown_until = until
+        if status != "banned":
+            status = "cooldown"
+            risk_multiplier = min(risk_multiplier, float(config.get("live_reaction_one_loss_multiplier", 0.4)))
+        score_penalty = max(score_penalty, 18.0)
+        reason_parts.append(f"当日最大单笔亏损 {single_loss_pct:.1f}% 权益，延长降仓观察")
+
     recent_loss_pct = abs(recent_net) / equity_base * 100 if recent_net < 0 else 0.0
     if recent_loss_pct >= float(config.get("live_reaction_recent_loss_equity_pct", 12.0)):
         until = _until_from_close(last, minutes=float(config.get("live_reaction_recent_loss_ban_minutes", 120)))
@@ -171,7 +228,7 @@ def score_reaction_records(
         reason_parts.append(f"{recent_window_minutes:.0f} 分钟净亏 {recent_loss_pct:.1f}% 权益，暂停同向")
 
     day_loss_pct = abs(day_net) / equity_base * 100 if day_net < 0 else 0.0
-    if day_loss_pct >= float(config.get("live_reaction_symbol_direction_daily_loss_pct", 20.0)):
+    if day_loss_pct >= float(config.get("live_reaction_symbol_direction_daily_loss_pct", 15.0)):
         until = day_start + timedelta(days=1)
         if ban_until is None or until > ban_until:
             ban_until = until
@@ -179,6 +236,29 @@ def score_reaction_records(
         risk_multiplier = 0.0
         score_penalty = max(score_penalty, 40.0)
         reason_parts.append(f"当日同向净亏 {day_loss_pct:.1f}% 权益，暂停到次日")
+
+    giveback_pct = float(damage["giveback_pct"])
+    if giveback_pct >= float(config.get("live_reaction_giveback_ban_pct", 80.0)):
+        until = _until_from_close(last, minutes=float(config.get("live_reaction_giveback_ban_minutes", 180)))
+        if ban_until is None or until > ban_until:
+            ban_until = until
+        status = "banned"
+        risk_multiplier = 0.0
+        score_penalty = max(score_penalty, 36.0)
+        reason_parts.append(
+            f"当日盈利从 {damage['peak_profit']:.2f}U 回吐 {giveback_pct:.1f}%，暂停同向"
+        )
+    elif giveback_pct >= float(config.get("live_reaction_giveback_cooldown_pct", 50.0)):
+        until = _until_from_close(last, minutes=float(config.get("live_reaction_giveback_cooldown_minutes", 60)))
+        if cooldown_until is None or until > cooldown_until:
+            cooldown_until = until
+        if status != "banned":
+            status = "tail_guard"
+            risk_multiplier = min(risk_multiplier, float(config.get("live_reaction_tail_multiplier", 0.5)))
+        score_penalty = max(score_penalty, 20.0)
+        reason_parts.append(
+            f"当日盈利从 {damage['peak_profit']:.2f}U 回吐 {giveback_pct:.1f}%，防追尾降仓"
+        )
 
     tail_count = int(config.get("live_reaction_profit_tail_count", 2))
     if consecutive_wins >= tail_count and status != "banned":
@@ -235,6 +315,11 @@ def score_reaction_records(
             "recent_loss_pct": round(recent_loss_pct, 4),
             "day_loss_pct": round(day_loss_pct, 4),
             "last_net_pnl": round(float(last.get("net_pnl") or 0), 8),
+            "largest_single_loss_pct": single_loss_pct,
+            "largest_single_loss": damage["largest_loss"],
+            "day_peak_profit": damage["peak_profit"],
+            "day_profit_giveback": damage["giveback"],
+            "day_profit_giveback_pct": giveback_pct,
         },
     }
 
@@ -446,6 +531,7 @@ def sync_live_reaction_from_binance(
             trades_by_symbol[symbol] = rows
     records = build_trade_records_from_user_trades(trades_by_symbol, income)
     upserted = upsert_trade_records(records)
+    scores = rebuild_symbol_scores(config, lookback_hours=max(1.0, lookback_minutes / 60))
     reactions = rebuild_live_reaction_state(
         config,
         lookback_hours=max(1.0, lookback_minutes / 60),
@@ -456,6 +542,7 @@ def sync_live_reaction_from_binance(
         "lookback_minutes": lookback_minutes,
         "symbols": symbol_pool,
         "records": upserted,
+        "scores": scores,
         "reactions": reactions,
     }
     record_event_throttled(

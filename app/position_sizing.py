@@ -7,6 +7,13 @@ PROBE_ENTRY_TYPES = {"extreme_probe", "weak_quality_probe", "preemptive", "momen
 YOLO_SCALP_ENTRY_TYPES = {"standard", "extreme_scalp", "preemptive", "momentum", "extreme_probe", "weak_quality_probe", "observe_standard", "small_standard"}
 
 
+ORDER_VIABILITY_LABELS = {
+    "below_effective_min_notional": "低于系统有效下单额",
+    "insufficient_profit_cost_ratio": "预期收益/手续费滑点成本比不足",
+    "insufficient_expected_net_profit": "扣费后预期净利润不足",
+}
+
+
 def signal_strength_tier(candidate: dict[str, Any] | None) -> str:
     candidate = candidate or {}
     entry_type = str(candidate.get("entry_type") or "standard")
@@ -206,6 +213,17 @@ def effective_order_viability(
         reasons.append("insufficient_profit_cost_ratio")
     if expected_net_profit < min_net_profit:
         reasons.append("insufficient_expected_net_profit")
+    reason_details = {
+        "below_effective_min_notional": (
+            f"当前名义金额 {float(notional):.4f}U，低于最低有效下单额 {min_notional:.4f}U"
+        ),
+        "insufficient_profit_cost_ratio": (
+            f"收益/成本比 {cost_ratio:.2f}，低于最低 {min_cost_ratio:.2f}"
+        ),
+        "insufficient_expected_net_profit": (
+            f"扣费后预期净利润 {expected_net_profit:.4f}U，低于最低 {min_net_profit:.4f}U"
+        ),
+    }
     return {
         "allowed": not reasons,
         "notional": round(float(notional), 8),
@@ -215,6 +233,9 @@ def effective_order_viability(
         "expected_net_profit": round(expected_net_profit, 8),
         "minimum_net_profit": min_net_profit,
         "reasons": reasons,
+        "reason_labels": [ORDER_VIABILITY_LABELS.get(reason, reason) for reason in reasons],
+        "reason_details": [reason_details[reason] for reason in reasons],
+        "summary": "；".join(reason_details[reason] for reason in reasons) if reasons else "订单金额、成本比和预期净利润均达标",
     }
 
 
