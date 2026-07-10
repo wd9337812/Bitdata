@@ -26,8 +26,9 @@ def test_exchange_info_limits_drive_internal_priority_budgets(monkeypatch, tmp_p
     status = rate_status()
 
     assert status["budgets"]["advertised"] == 1000
-    assert status["budgets"]["normal"] == 250
-    assert status["budgets"]["realtime"] == 500
+    assert status["budgets"]["background"] == 400
+    assert status["budgets"]["normal"] == 550
+    assert status["budgets"]["realtime"] == 750
     assert status["budgets"]["critical"] == 900
 
 
@@ -38,7 +39,7 @@ def test_background_requests_leave_capacity_for_realtime(monkeypatch, tmp_path):
     )
 
     with request_priority("background"):
-        before_request(13)
+        before_request(40)
         with pytest.raises(BinanceRateLimitError):
             before_request(1)
     with request_priority("realtime"):

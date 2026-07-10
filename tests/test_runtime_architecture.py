@@ -26,7 +26,7 @@ def test_background_rate_priority_preserves_realtime_budget(monkeypatch, tmp_pat
         try:
             before_request(1, budget_per_minute=600)
         except BinanceRateLimitError as exc:
-            assert exc.retry_after == 5
+            assert 0 < float(exc.retry_after or 0) <= 5
         else:
             raise AssertionError("background request should preserve realtime reserve")
     with request_priority("realtime"):

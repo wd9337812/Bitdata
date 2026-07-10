@@ -176,12 +176,18 @@ def estimate_weight(path: str, params: dict[str, Any] | None = None, signed: boo
 
 def _rate_budgets(state: dict[str, Any], budget_per_minute: int | None = None) -> dict[str, int]:
     advertised = max(1, int(state.get("request_weight_limit") or 2400))
-    normal = max(1, int(budget_per_minute or advertised * 0.25))
-    hard = max(normal, int(advertised * 0.50))
+    if budget_per_minute is not None:
+        normal = max(1, int(budget_per_minute))
+        background = max(1, int(normal * 0.55))
+        hard = max(normal, int(advertised * 0.50))
+    else:
+        background = max(1, int(advertised * 0.40))
+        normal = max(background, int(advertised * 0.55))
+        hard = max(normal, int(advertised * 0.75))
     critical = max(hard, int(advertised * 0.90))
     return {
         "advertised": advertised,
-        "background": max(1, int(normal * 0.55)),
+        "background": background,
         "normal": normal,
         "realtime": hard,
         "critical": critical,
