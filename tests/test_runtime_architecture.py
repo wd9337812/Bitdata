@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.binance_rate import BinanceRateLimitError, before_request, cache_get, cache_set, cache_status, request_priority
 from app.runtime_snapshot import read_runtime_snapshot, update_runtime_snapshot
+from app.runner import background_loop_seconds
 from app.scanner import scan_growth_candidates
 from app.telemetry import compact_decision, connect
 
@@ -31,6 +32,11 @@ def test_background_rate_priority_preserves_realtime_budget(monkeypatch, tmp_pat
             raise AssertionError("background request should preserve realtime reserve")
     with request_priority("realtime"):
         before_request(1, budget_per_minute=600)
+
+
+def test_background_scan_has_independent_minimum_interval():
+    assert background_loop_seconds({"background_scan_min_interval_seconds": 30}, {"loop_seconds": 5}) == 30
+    assert background_loop_seconds({"background_scan_min_interval_seconds": 30}, {"loop_seconds": 60}) == 60
 
 
 def test_runtime_snapshot_is_atomic_and_reports_age(monkeypatch, tmp_path):

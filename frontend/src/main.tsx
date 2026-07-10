@@ -1131,6 +1131,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("stream_hot_symbols_limit", "热点进入盯盘数量", "默认 40；来自漏斗粗排和候选")}
           {toggle("fast_lane_enabled", "WebSocket 实时快车道", "异动事件独立于全量扫描，优先在数秒内完成决策")}
           {number("fast_lane_poll_seconds", "快车道轮询秒数", "默认 2 秒；只读取本地事件队列，不持续消耗 Binance REST")}
+          {number("background_scan_min_interval_seconds", "后台全量扫描最短间隔", "默认 30 秒；实时机会仍由快车道立即处理，避免重复拉取 K 线耗尽 REST 预算")}
           {number("fast_lane_symbol_cooldown_seconds", "同币快车道冷却秒数", "默认 10 秒；合并连续推送，避免重复计算和追单")}
           {number("fast_lane_event_max_age_seconds", "快车道事件有效期", "默认 45 秒；过期异动不再追单")}
           {number("fast_lane_max_symbols", "快车道单次币数", "默认 3；优先最高分异动，避免挤占交易API预算")}

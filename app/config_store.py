@@ -61,6 +61,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "user_stream_account_max_age_seconds": 90,
     "fast_lane_enabled": True,
     "fast_lane_poll_seconds": 2,
+    "background_scan_min_interval_seconds": 30,
     "fast_lane_symbol_cooldown_seconds": 10,
     "fast_lane_event_max_age_seconds": 45,
     "fast_lane_max_symbols": 3,

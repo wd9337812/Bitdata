@@ -44,10 +44,11 @@ This file tracks local verification for the two-stage futures system.
 - Added S4 grid plus low-risk scalp overlay with grid-symbol exclusion.
 - Added Chinese stage route, API budget, and public/private stream status to the React Dashboard.
 - Desktop and 390px mobile layouts were inspected in a running local build; mobile page width stayed inside the viewport.
-- `python -m pytest -q`: `158 passed` (one local `requests` dependency compatibility warning).
+- `python -m pytest -q`: `159 passed` (one local `requests` dependency compatibility warning).
 - `python -m compileall -q app`: passed.
 - `npm run build`: passed; Vite reported only the existing large-chunk advisory.
 - `git diff --check`: passed; Git reported only Windows LF/CRLF conversion notices.
 - Latest local HTTP smoke on `127.0.0.1:8091`: `/`, `/api/status`, `/api/live-learning`, and `/api/health/binance` returned `200`; status returned S0, `extreme_sprint`, five profiles, and a valid REST budget.
 - Binance Futures live stream probe passed: `public` delivered depth/book ticker data, `market` delivered aggregate trades, and the in-process trade-flow snapshot contained positive notional plus imbalance.
 - VPS rollout feedback raised the default REST priority budgets to 40% background, 55% normal, 75% realtime, and 90% critical after the old 13.75% background ceiling deferred most deep checks at only 22% exchange usage. Explicit caller budgets keep the legacy 55% background split.
+- Separated the background full-funnel cadence from the strategy execution cadence: full scans now have a configurable 30-second minimum while the WebSocket fast lane remains at two seconds.

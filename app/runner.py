@@ -52,6 +52,12 @@ def loop_seconds_for(config: dict, mode: str | None) -> int:
     return int(config.get(f"{mode}_loop_seconds", os.getenv("BOT_LOOP_SECONDS", "300")))
 
 
+def background_loop_seconds(config: dict, result: dict | None = None) -> int:
+    requested = int((result or {}).get("loop_seconds") or os.getenv("BOT_LOOP_SECONDS", "300"))
+    minimum = int(config.get("background_scan_min_interval_seconds", 30))
+    return max(10, minimum, requested)
+
+
 def set_symbol_cooldown(state: dict, symbol: str, minutes: float) -> None:
     if minutes <= 0:
         return
@@ -502,6 +508,7 @@ def _background_scan_loop() -> None:
     while True:
         started = time.monotonic()
         try:
+            config = load_config()
             state = load_state()
             if state.get("bot_status") != "running":
                 time.sleep(2)
@@ -509,7 +516,7 @@ def _background_scan_loop() -> None:
             with request_priority("background"):
                 result = run_once()
             save_state({"last_error": ""})
-            interval_seconds = int(result.get("loop_seconds") or interval_seconds)
+            interval_seconds = background_loop_seconds(config, result)
             print({"status": "background_scan", "elapsed": time.monotonic() - started}, flush=True)
         except BinanceRateLimitError as exc:
             record_event("warning", "background_scan_deferred", str(exc), {"retry_after": exc.retry_after})

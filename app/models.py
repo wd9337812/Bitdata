@@ -44,6 +44,7 @@ class TradingConfig(BaseModel):
     user_stream_account_max_age_seconds: int = Field(default=90, ge=5, le=3600)
     fast_lane_enabled: bool = True
     fast_lane_poll_seconds: int = Field(default=2, ge=1, le=60)
+    background_scan_min_interval_seconds: int = Field(default=30, ge=10, le=3600)
     fast_lane_symbol_cooldown_seconds: int = Field(default=10, ge=1, le=300)
     fast_lane_event_max_age_seconds: int = Field(default=45, ge=5, le=600)
     fast_lane_max_symbols: int = Field(default=3, ge=1, le=20)
