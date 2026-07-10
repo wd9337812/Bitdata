@@ -13,7 +13,8 @@ from app.telemetry import connect, now_iso, record_event
 
 DEFAULT_SCORE = 50.0
 ORDERBOOK_SCALP_ENTRY_TYPES = {"orderbook_impact", "volume_scalp", "imbalance_probe"}
-YOLO_SCALP_EXPERIMENT_FAMILY = "yolo_orderbook_scalp_experiment"
+ORDERBOOK_SCALP_FAMILY = "orderbook_scalp"
+LEGACY_STRATEGY_FAMILY = "legacy_mixed"
 
 
 def _is_yolo_orderbook_scalp_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> bool:
@@ -32,7 +33,8 @@ def _experiment_credit(symbol: str, direction: str, config: dict[str, Any]) -> d
         "direction": direction,
         "score": score,
         "status": "new",
-        "status_label": "剥头皮新引擎试验",
+        "strategy_family": ORDERBOOK_SCALP_FAMILY,
+        "status_label": "剥头皮新策略观察",
         "closed_trades": 0,
         "wins": 0,
         "losses": 0,
@@ -100,6 +102,38 @@ def init_live_learning_schema() -> None:
                 PRIMARY KEY(symbol, direction)
             )
             """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS symbol_strategy_live_scores (
+                symbol TEXT NOT NULL,
+                direction TEXT NOT NULL,
+                strategy_family TEXT NOT NULL,
+                score REAL NOT NULL,
+                status TEXT NOT NULL,
+                closed_trades INTEGER NOT NULL,
+                wins INTEGER NOT NULL,
+                losses INTEGER NOT NULL,
+                win_rate REAL NOT NULL,
+                net_pnl REAL NOT NULL,
+                commission REAL NOT NULL,
+                funding_fee REAL NOT NULL,
+                profit_factor REAL NOT NULL,
+                consecutive_wins INTEGER NOT NULL,
+                consecutive_losses INTEGER NOT NULL,
+                avg_hold_seconds REAL NOT NULL,
+                last_hold_seconds REAL DEFAULT 0,
+                penalty_until TEXT,
+                last_trade_time INTEGER,
+                notes TEXT,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(symbol, direction, strategy_family)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_symbol_strategy_live_scores_family "
+            "ON symbol_strategy_live_scores(strategy_family, score DESC, net_pnl DESC)"
         )
         try:
             conn.execute("ALTER TABLE symbol_live_scores ADD COLUMN last_hold_seconds REAL DEFAULT 0")
@@ -359,9 +393,13 @@ def rebuild_symbol_scores(config: dict[str, Any], lookback_hours: float | None =
         else:
             rows = conn.execute("SELECT * FROM live_trade_records ORDER BY close_time ASC").fetchall()
         grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        grouped_strategy: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
         for row in rows:
             item = dict(row)
             grouped.setdefault((item["symbol"], item["direction"]), []).append(item)
+            family = _strategy_family_for_record(conn, item, config)
+            item["strategy_family"] = family
+            grouped_strategy.setdefault((item["symbol"], item["direction"], family), []).append(item)
         results = []
         for (symbol, direction), records in grouped.items():
             score = score_records(records, config)
@@ -399,8 +437,119 @@ def rebuild_symbol_scores(config: dict[str, Any], lookback_hours: float | None =
                 ),
             )
             results.append({"symbol": symbol, "direction": direction, **score})
+        for (symbol, direction, family), records in grouped_strategy.items():
+            score = score_records(records, _strategy_score_config(config, family))
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO symbol_strategy_live_scores (
+                    symbol, direction, strategy_family, score, status, closed_trades, wins, losses,
+                    win_rate, net_pnl, commission, funding_fee, profit_factor,
+                    consecutive_wins, consecutive_losses, avg_hold_seconds,
+                    last_hold_seconds,
+                    penalty_until, last_trade_time, notes, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    symbol,
+                    direction,
+                    family,
+                    score["score"],
+                    score["status"],
+                    score["closed_trades"],
+                    score["wins"],
+                    score["losses"],
+                    score["win_rate"],
+                    score["net_pnl"],
+                    score["commission"],
+                    score["funding_fee"],
+                    score["profit_factor"],
+                    score["consecutive_wins"],
+                    score["consecutive_losses"],
+                    score["avg_hold_seconds"],
+                    score["last_hold_seconds"],
+                    score["penalty_until"],
+                    score["last_trade_time"],
+                    json.dumps(score["notes"], ensure_ascii=False),
+                    now_iso(),
+                ),
+            )
         conn.commit()
     return sorted(results, key=lambda item: (item["score"], item["net_pnl"]), reverse=True)
+
+
+def _parse_iso_ms(value: Any) -> int | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
+    except ValueError:
+        return None
+
+
+def _strategy_score_config(config: dict[str, Any], family: str) -> dict[str, Any]:
+    if family != ORDERBOOK_SCALP_FAMILY:
+        return config
+    scoped = dict(config)
+    scoped["live_credit_quick_stop_seconds"] = int(config.get("scalp_credit_quick_stop_seconds", 35))
+    scoped["live_credit_win_reward"] = float(config.get("scalp_credit_win_reward", 5.0))
+    scoped["live_credit_loss_penalty"] = float(config.get("scalp_credit_loss_penalty", 7.5))
+    scoped["live_credit_consecutive_loss_penalty"] = float(config.get("scalp_credit_consecutive_loss_penalty", 12.0))
+    scoped["live_credit_fee_drag_penalty"] = float(config.get("scalp_credit_fee_drag_penalty", 4.5))
+    scoped["live_credit_penalty_cooldown_hours"] = float(config.get("scalp_credit_penalty_cooldown_hours", 1.0))
+    scoped["live_credit_recovery_interval_hours"] = float(config.get("scalp_credit_recovery_interval_hours", 3.0))
+    scoped["live_credit_recovery_points"] = float(config.get("scalp_credit_recovery_points", 4.0))
+    return scoped
+
+
+def _strategy_family_from_payload(payload: dict[str, Any]) -> str:
+    decision = payload.get("decision") if isinstance(payload, dict) else {}
+    if not isinstance(decision, dict):
+        return LEGACY_STRATEGY_FAMILY
+    entry_type = str(decision.get("entry_type") or ((decision.get("candidate") or {}).get("entry_type")) or "")
+    mode = str(decision.get("mode") or ((decision.get("scan") or {}).get("mode") or {}).get("mode") or "")
+    if mode == "yolo_scalp" and entry_type in ORDERBOOK_SCALP_ENTRY_TYPES:
+        return ORDERBOOK_SCALP_FAMILY
+    return LEGACY_STRATEGY_FAMILY
+
+
+def _strategy_family_for_record(conn: sqlite3.Connection, record: dict[str, Any], config: dict[str, Any]) -> str:
+    if not config.get("yolo_scalp_strategy_credit_enabled", True):
+        return LEGACY_STRATEGY_FAMILY
+    symbol = str(record.get("symbol") or "").upper()
+    direction = str(record.get("direction") or "").upper()
+    open_time = int(record.get("open_time") or 0)
+    if not symbol or direction not in {"LONG", "SHORT"} or open_time <= 0:
+        return LEGACY_STRATEGY_FAMILY
+    window_ms = int(float(config.get("strategy_credit_match_window_minutes", 30)) * 60_000)
+    rows = conn.execute(
+        """
+        SELECT ts, payload FROM strategy_runs
+        WHERE symbol = ? AND action = ?
+        ORDER BY ts DESC
+        LIMIT 80
+        """,
+        (symbol, f"OPEN_{direction}"),
+    ).fetchall()
+    best_family = LEGACY_STRATEGY_FAMILY
+    best_distance = window_ms + 1
+    for row in rows:
+        ts_ms = _parse_iso_ms(row["ts"])
+        if ts_ms is None:
+            continue
+        distance = abs(ts_ms - open_time)
+        if distance > window_ms or distance >= best_distance:
+            continue
+        try:
+            payload = json.loads(row["payload"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        family = _strategy_family_from_payload(payload)
+        best_family = family
+        best_distance = distance
+    return best_family
 
 
 def enrich_live_score(item: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -434,6 +583,38 @@ def list_live_scores(limit: int = 100, config: dict[str, Any] | None = None) -> 
             item["notes"] = []
         item["last_trade_time_iso"] = _iso_from_ms(item.get("last_trade_time"))
         item = enrich_live_score(item, config)
+        results.append(item)
+    return results
+
+
+def list_strategy_live_scores(
+    limit: int = 100,
+    config: dict[str, Any] | None = None,
+    strategy_family: str | None = None,
+) -> list[dict[str, Any]]:
+    config = config or {}
+    init_live_learning_schema()
+    params: tuple[Any, ...]
+    sql = "SELECT * FROM symbol_strategy_live_scores"
+    if strategy_family:
+        sql += " WHERE strategy_family = ?"
+        params = (strategy_family, limit)
+    else:
+        params = (limit,)
+    sql += " ORDER BY score DESC, net_pnl DESC LIMIT ?"
+    with connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    results = []
+    for row in rows:
+        item = dict(row)
+        family = str(item.get("strategy_family") or LEGACY_STRATEGY_FAMILY)
+        try:
+            item["notes"] = json.loads(item.get("notes") or "[]")
+        except json.JSONDecodeError:
+            item["notes"] = []
+        item["last_trade_time_iso"] = _iso_from_ms(item.get("last_trade_time"))
+        item = enrich_live_score(item, _strategy_score_config(config, family))
+        item["strategy_family"] = family
         results.append(item)
     return results
 
@@ -476,6 +657,36 @@ def live_score_for(symbol: str, direction: str, config: dict[str, Any]) -> dict[
         item["notes"] = []
     item["enabled"] = True
     return enrich_live_score(item, config)
+
+
+def strategy_live_score_for(symbol: str, direction: str, strategy_family: str, config: dict[str, Any]) -> dict[str, Any]:
+    if not config.get("live_credit_enabled", True) or not config.get("yolo_scalp_strategy_credit_enabled", True):
+        return {"enabled": False, "score": DEFAULT_SCORE, "status": "normal", "status_label": "策略信用未启用"}
+    init_live_learning_schema()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM symbol_strategy_live_scores
+            WHERE symbol = ? AND direction = ? AND strategy_family = ?
+            """,
+            (symbol.upper(), direction.upper(), strategy_family),
+        ).fetchone()
+    if not row:
+        item = _experiment_credit(symbol.upper(), direction.upper(), config)
+        item["strategy_family"] = strategy_family
+        item["risk_multiplier"] = round(live_credit_multiplier(item, config), 4)
+        item["cooldown_cap"] = round(cooldown_multiplier_cap(item, config), 4)
+        item["cooldown"] = live_credit_cooldown_summary(item, config)
+        return item
+    item = dict(row)
+    try:
+        item["notes"] = json.loads(item.get("notes") or "[]")
+    except json.JSONDecodeError:
+        item["notes"] = []
+    item["last_trade_time_iso"] = _iso_from_ms(item.get("last_trade_time"))
+    item = enrich_live_score(item, _strategy_score_config(config, strategy_family))
+    item["strategy_family"] = strategy_family
+    return item
 
 
 def penalty_active(score: dict[str, Any]) -> bool:
@@ -563,12 +774,12 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
     if not symbol or direction not in {"LONG", "SHORT"}:
         return candidate
     legacy_credit: dict[str, Any] | None = None
-    experiment_family: str | None = None
+    strategy_family: str | None = None
     credit = live_score_for(symbol, direction, config)
     if _is_yolo_orderbook_scalp_candidate(candidate, config):
         legacy_credit = credit
-        experiment_family = YOLO_SCALP_EXPERIMENT_FAMILY
-        credit = _experiment_credit(symbol, direction, config)
+        strategy_family = ORDERBOOK_SCALP_FAMILY
+        credit = strategy_live_score_for(symbol, direction, strategy_family, config)
     score = float(credit.get("score", DEFAULT_SCORE))
     weight = float(config.get("live_credit_score_weight", 0.35))
     score_delta = (score - float(config.get("live_credit_default_score", DEFAULT_SCORE))) * weight
@@ -609,7 +820,7 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
     legacy_soft_multiplier = 1.0
     legacy_soft_reasons: list[str] = []
     legacy_cooldown: dict[str, Any] | None = None
-    if legacy_credit is not None:
+    if legacy_credit is not None and not config.get("yolo_scalp_strategy_credit_enabled", True):
         legacy_score = float(legacy_credit.get("score", DEFAULT_SCORE))
         legacy_cooldown = live_credit_cooldown_summary(legacy_credit, config)
         if legacy_score < float(config.get("yolo_scalp_legacy_credit_soft_score_threshold", 30.0)):
@@ -631,6 +842,9 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
             )
         else:
             reasons.append("剥头皮试验期：旧信用不硬拦截")
+        candidate["legacy_live_credit"] = legacy_credit
+    elif legacy_credit is not None:
+        reasons.append("剥头皮独立信用：旧策略信用仅展示，不参与仓位")
         candidate["legacy_live_credit"] = legacy_credit
 
     bypass_allowed = False
@@ -694,7 +908,7 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
         "cooldown": cooldown,
         "cooldown_bypass": bypass_allowed,
         "reasons": reasons,
-        "strategy_family": experiment_family,
+        "strategy_family": strategy_family,
         "legacy_soft_multiplier": round(legacy_soft_multiplier, 4),
         "legacy_soft_reasons": legacy_soft_reasons,
         "legacy_cooldown": legacy_cooldown,

@@ -1795,6 +1795,12 @@ def scan_growth_candidates(
                     and expected_profit_pct >= float(config.get(f"{fast_prefix}_min_expected_profit_pct", 0.22) if is_sprint else config.get("min_expected_profit_pct", 0.35))
                     and cost_ratio >= float(config.get(f"{fast_prefix}_min_expected_profit_cost_ratio", 1.35) if is_sprint else config.get("min_expected_profit_cost_ratio", 3.0))
                 )
+                yolo_orderbook_only = (
+                    mode["mode"] == "yolo_scalp"
+                    and config.get("yolo_scalp_orderbook_only_enabled", True)
+                )
+                if yolo_orderbook_only:
+                    standard_passed = False
                 current_score = _current_signal_score(signal, direction, cost_ratio, recent)
                 score = 0.0
                 score += min(float(ticker.get("quoteVolume", 0)) / 1_000_000_000, 5) * 0.5
@@ -1858,15 +1864,15 @@ def scan_growth_candidates(
                         )
                     elif scalp_signal.get("enabled") and scalp_signal.get("blockers"):
                         decision_reason = "盘口剥头皮未通过：" + "；".join(str(item) for item in scalp_signal.get("blockers", [])[:3])
-                if passed and quality["pool"] == "small_trade":
+                if passed and quality["pool"] == "small_trade" and not yolo_orderbook_only:
                     entry_type = "small_standard"
                     risk_pct *= float(config.get("small_trade_risk_multiplier", 0.5))
                     decision_reason = "币种质量允许小仓试探"
-                if passed and quality["pool"] == "adaptive_live":
+                if passed and quality["pool"] == "adaptive_live" and not yolo_orderbook_only:
                     entry_type = "adaptive_live_standard"
                     risk_pct *= float(config.get("live_performance_risk_multiplier", 0.6))
                     decision_reason = "recent live performance supports reduced-risk entry"
-                if signal.get("signal") == direction and not quality["allowed"]:
+                if signal.get("signal") == direction and not quality["allowed"] and not yolo_orderbook_only:
                     if observe_breakout_allows_entry(score, quality, recent, signal, cost_ratio, depth, config, mode):
                         entry_type = "observe_standard"
                         passed = score >= standard_min_score
@@ -1880,7 +1886,7 @@ def scan_growth_candidates(
                         decision_reason = "观察池高分标准突破，允许折扣仓位试单" if passed else "观察池标准突破评分不足"
                     else:
                         decision_reason = f"币种质量未达实盘准入：{quality['pool']}，评分 {quality['score']}"
-                if signal.get("signal") == direction and not passed and not quality["allowed"]:
+                if signal.get("signal") == direction and not passed and not quality["allowed"] and not yolo_orderbook_only:
                     weak_allowed, weak_reasons = weak_quality_probe_allows_entry(
                         score,
                         quality,
@@ -1919,10 +1925,15 @@ def scan_growth_candidates(
                         decision_reason = "弱质量试探：候选信号强，但币种质量仍在观察池；使用小仓位获取实盘样本；" + "；".join(risk_adjustment["reasons"])
                     elif weak_reasons:
                         decision_reason += "；弱质量试探未通过：" + "；".join(weak_reasons[:3])
-                preemptive_enabled = mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint", "yolo_scalp"} and config.get("preemptive_entries_enabled", True)
+                preemptive_enabled = (
+                    mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint", "yolo_scalp"}
+                    and config.get("preemptive_entries_enabled", True)
+                    and not yolo_orderbook_only
+                )
                 if (
                     not passed
                     and is_extreme_mode(mode["mode"])
+                    and not yolo_orderbook_only
                     and config.get("extreme_v2_enabled", True)
                     and config.get("extreme_probe_enabled", True)
                     and firecracker.get("is_firecracker")

@@ -16,6 +16,7 @@ from app.position_sizing import (
 from app.protection_audit import audit_position_protection, enrich_positions_with_prices
 from app.protection import apply_initial_protection_to_signal, build_protection_plan
 from app.risk import assess_new_position, current_stage, equity_guard_status, live_trading_allowed, position_size_from_risk
+from app.scalp_engine import ORDERBOOK_SCALP_ENTRY_TYPES
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates, strategy_params_for_mode
 from app.state_store import save_state
 from app.strategy import StrategyParams
@@ -335,6 +336,23 @@ def build_stage1_decision(
     if equity is None:
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "account_unavailable"}}
     entry_type = (scan_candidate or {}).get("entry_type", signal.get("entry_type", "standard"))
+    if (
+        active_mode.get("mode") == "yolo_scalp"
+        and config.get("yolo_scalp_orderbook_only_enabled", True)
+        and str(entry_type) not in ORDERBOOK_SCALP_ENTRY_TYPES
+    ):
+        return {
+            "symbol": symbol,
+            "action": "WAIT",
+            "direction": direction,
+            "signal": signal,
+            "risk": {"allowed": False, "reason": "yolo_orderbook_only"},
+            "mode": active_mode["mode"],
+            "strategy": active_mode["strategy"],
+            "entry_type": entry_type,
+            "decision_reason": "极限模式仅允许盘口剥头皮引擎信号执行",
+            "equity": equity,
+        }
     scalp_tier = extreme_scalp_tier(scan_candidate, config)
     if scalp_tier != "none":
         mode_prefix = "yolo_scalp" if active_mode.get("mode") == "yolo_scalp" else "extreme_scalp"

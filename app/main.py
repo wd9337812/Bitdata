@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from app.binance_client import BinanceFuturesClient
 from app.config_store import load_config, save_config
 from app.learning_report import latest_daily_learning_report, save_daily_learning_report
-from app.live_learning import list_live_scores, sync_live_learning_from_binance
+from app.live_learning import ORDERBOOK_SCALP_FAMILY, list_live_scores, list_strategy_live_scores, sync_live_learning_from_binance
 from app.live_reaction import list_live_reactions, list_recent_live_reaction_trades, sync_live_reaction_from_binance
 from app.models import BotControlPayload, ExecutePayload, TradingConfig
 from app.market_stream import stream_status
@@ -228,7 +228,12 @@ def strategy_runs(limit: int = 200) -> dict[str, Any]:
 
 @app.get("/api/live-learning", dependencies=[Depends(require_auth)])
 def live_learning(limit: int = 100) -> dict[str, Any]:
-    return {"scores": list_live_scores(limit, load_config())}
+    config = load_config()
+    return {
+        "scores": list_live_scores(limit, config),
+        "strategy_scores": list_strategy_live_scores(limit, config),
+        "scalp_scores": list_strategy_live_scores(limit, config, strategy_family=ORDERBOOK_SCALP_FAMILY),
+    }
 
 
 @app.post("/api/live-learning/sync", dependencies=[Depends(require_auth)])

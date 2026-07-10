@@ -117,6 +117,27 @@ def test_yolo_orderbook_scalp_uses_experiment_credit_with_legacy_soft_discount(m
         },
     )
 
+    monkeypatch.setattr(
+        "app.live_learning.strategy_live_score_for",
+        lambda symbol, direction, strategy_family, config: {
+            "enabled": True,
+            "score": 50,
+            "status": "new",
+            "status_label": "剥头皮新策略观察",
+            "strategy_family": strategy_family,
+            "closed_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "consecutive_wins": 0,
+            "consecutive_losses": 0,
+            "penalty_until": None,
+            "commission": 0,
+            "net_pnl": 0,
+            "profit_factor": 0,
+            "notes": [],
+        },
+    )
+
     candidate = apply_live_credit_to_candidate(
         {
             "symbol": "LABUSDT",
@@ -133,17 +154,20 @@ def test_yolo_orderbook_scalp_uses_experiment_credit_with_legacy_soft_discount(m
             "live_credit_max_risk_multiplier": 2.0,
             "live_credit_fuse_score": 2,
             "yolo_scalp_credit_experiment_enabled": True,
+            "yolo_scalp_strategy_credit_enabled": True,
             "yolo_scalp_legacy_credit_soft_multiplier": 0.70,
             "yolo_scalp_legacy_credit_soft_penalty_multiplier": 0.70,
         },
     )
 
     assert candidate["passed"] is True
-    assert candidate["risk_pct"] == 35
+    assert candidate["risk_pct"] == 50
     assert candidate["live_credit"]["status"] == "new"
+    assert candidate["live_credit"]["strategy_family"] == "orderbook_scalp"
     assert candidate["legacy_live_credit"]["score"] == 12
-    assert candidate["live_credit_adjustment"]["strategy_family"] == "yolo_orderbook_scalp_experiment"
-    assert candidate["live_credit_adjustment"]["legacy_soft_multiplier"] == 0.7
+    assert candidate["live_credit_adjustment"]["strategy_family"] == "orderbook_scalp"
+    assert candidate["live_credit_adjustment"]["legacy_soft_multiplier"] == 1.0
+    assert any("旧策略信用仅展示" in item for item in candidate["live_credit_adjustment"]["reasons"])
 
 
 def test_live_credit_multiplier_is_score_divided_by_50():

@@ -1,5 +1,5 @@
 from app.state_store import load_state, save_state
-from app.trading_engine import close_rotation_position, sync_stage
+from app.trading_engine import build_stage1_decision, close_rotation_position, sync_stage
 
 
 class RotationCloseClient:
@@ -118,3 +118,39 @@ def test_sync_stage_keeps_extreme_sprint_high_watermark(monkeypatch, tmp_path):
 
     assert updated["extreme_sprint_start_equity"] == 60
     assert updated["extreme_sprint_equity_high_watermark"] == 66
+
+
+def test_yolo_scalp_rejects_non_orderbook_entry_before_live_execution():
+    decision = build_stage1_decision(
+        "OLDUSDT",
+        [],
+        {
+            "auto_risk_by_equity": False,
+            "growth_mode": "yolo_scalp",
+            "yolo_scalp_enabled": True,
+            "yolo_scalp_confirmation": "ENABLE_YOLO_SCALP",
+            "yolo_scalp_orderbook_only_enabled": True,
+        },
+        {},
+        {"equity": 50},
+        scan_candidate={
+            "symbol": "OLDUSDT",
+            "mode": "yolo_scalp",
+            "strategy": "breakout",
+            "direction": "LONG",
+            "risk_pct": 50,
+            "leverage": 8,
+            "margin_pct": 98,
+            "entry_type": "extreme_probe",
+            "signal": {
+                "signal": "LONG",
+                "entry": 1.0,
+                "stop": 0.98,
+                "take_profit": 1.02,
+                "expected_profit_pct": 2.0,
+            },
+        },
+    )
+
+    assert decision["action"] == "WAIT"
+    assert decision["risk"]["reason"] == "yolo_orderbook_only"

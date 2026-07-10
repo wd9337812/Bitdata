@@ -312,6 +312,7 @@ class TradingConfig(BaseModel):
     yolo_scalp_take_profit_atr: float = Field(default=0.48, ge=0.05, le=20)
     yolo_scalp_max_hold_bars: int = Field(default=2, ge=1, le=100)
     yolo_scalp_orderbook_engine_enabled: bool = True
+    yolo_scalp_orderbook_only_enabled: bool = True
     yolo_scalp_orderbook_max_spread_pct: float = Field(default=0.08, ge=0, le=5)
     yolo_scalp_orderbook_min_depth_notional_usdt: float = Field(default=1000.0, ge=0)
     yolo_scalp_orderbook_probe_min_depth_notional_usdt: float = Field(default=300.0, ge=0)
@@ -340,9 +341,18 @@ class TradingConfig(BaseModel):
     yolo_scalp_orderbook_probe_min_risk_pct: float = Field(default=18.0, ge=0.1, le=100)
     yolo_scalp_orderbook_probe_max_risk_pct: float = Field(default=40.0, ge=0.1, le=100)
     yolo_scalp_credit_experiment_enabled: bool = True
-    yolo_scalp_legacy_credit_soft_multiplier: float = Field(default=0.70, ge=0.01, le=1)
+    yolo_scalp_strategy_credit_enabled: bool = True
+    yolo_scalp_legacy_credit_soft_multiplier: float = Field(default=1.0, ge=0.01, le=1)
     yolo_scalp_legacy_credit_soft_score_threshold: float = Field(default=30.0, ge=0, le=100)
-    yolo_scalp_legacy_credit_soft_penalty_multiplier: float = Field(default=0.70, ge=0.01, le=1)
+    yolo_scalp_legacy_credit_soft_penalty_multiplier: float = Field(default=1.0, ge=0.01, le=1)
+    scalp_credit_quick_stop_seconds: int = Field(default=35, ge=5, le=300)
+    scalp_credit_win_reward: float = Field(default=5.0, ge=0, le=30)
+    scalp_credit_loss_penalty: float = Field(default=7.5, ge=0, le=40)
+    scalp_credit_consecutive_loss_penalty: float = Field(default=12.0, ge=0, le=60)
+    scalp_credit_fee_drag_penalty: float = Field(default=4.5, ge=0, le=30)
+    scalp_credit_penalty_cooldown_hours: float = Field(default=1.0, ge=0, le=24)
+    scalp_credit_recovery_interval_hours: float = Field(default=3.0, ge=0.1, le=48)
+    scalp_credit_recovery_points: float = Field(default=4.0, ge=0, le=30)
     taker_fee_pct_round_trip: float = Field(default=0.08, ge=0, le=5)
     yolo_symbol_trade_score: float = Field(default=60.0, ge=0, le=100)
     yolo_symbol_small_trade_score: float = Field(default=48.0, ge=0, le=100)

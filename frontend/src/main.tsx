@@ -31,7 +31,7 @@ type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: an
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
-type LiveLearningData = { scores: any[] };
+type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[] };
 type LiveReactionData = { reactions: any[]; recent_trades: any[] };
 type SimulationData = Record<string, any>;
 type ReportData = Record<string, any>;
@@ -85,7 +85,7 @@ function useData() {
   const [market, setMarket] = useState<MarketData | null>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
-  const [liveLearning, setLiveLearning] = useState<any[]>([]);
+  const [liveLearning, setLiveLearning] = useState<LiveLearningData>({ scores: [], strategy_scores: [], scalp_scores: [] });
   const [liveReaction, setLiveReaction] = useState<LiveReactionData | null>(null);
   const [health, setHealth] = useState<any>(null);
   const [simulation, setSimulation] = useState<any>(null);
@@ -109,7 +109,11 @@ function useData() {
       if (!light) {
         setDecisions(await api<DecisionsData>("/api/decisions"));
         const learningRes = await api<LiveLearningData>("/api/live-learning?limit=100");
-        setLiveLearning(learningRes.scores || []);
+        setLiveLearning({
+          scores: learningRes.scores || [],
+          strategy_scores: learningRes.strategy_scores || [],
+          scalp_scores: learningRes.scalp_scores || [],
+        });
         setLiveReaction(await api<LiveReactionData>("/api/live-reaction?limit=100"));
         setSimulation(await api<SimulationData>("/api/simulation/stage"));
         setReport(await api<ReportData>("/api/reports/latest"));
@@ -371,7 +375,7 @@ function App() {
           </section>
         )}
 
-        {active === "learning" && <LiveLearningPanel rows={data.liveLearning} onSync={syncLiveLearning} />}
+      {active === "learning" && <LiveLearningPanel data={data.liveLearning} onSync={syncLiveLearning} />}
         {active === "reaction" && <LiveReactionPanel data={data.liveReaction} />}
 
         {active === "pnl" && (
@@ -655,68 +659,86 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
   );
 }
 
-function LiveLearningPanel({ rows, onSync }: { rows: any[]; onSync: () => Promise<void> }) {
-  const totalNet = rows.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
-  const highPower = rows.filter((row) => Number(row.risk_multiplier || 0) >= 1).length;
-  const fuse = rows.filter((row) => Number(row.risk_multiplier || 0) <= 0).length;
+function LiveLearningPanel({ data, onSync }: { data: LiveLearningData; onSync: () => Promise<void> }) {
+  const rows = data.scores || [];
+  const scalpRows = data.scalp_scores || [];
+  const totalNet = scalpRows.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
+  const highPower = scalpRows.filter((row) => Number(row.risk_multiplier || 0) >= 1).length;
+  const fuse = scalpRows.filter((row) => Number(row.risk_multiplier || 0) <= 0).length;
+  const renderRows = (items: any[], empty: string) => (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>币种</th>
+            <th>方向</th>
+            <th>策略族</th>
+            <th>信用分</th>
+            <th>开仓倍率</th>
+            <th>状态</th>
+            <th>交易数</th>
+            <th>胜率</th>
+            <th>净盈亏</th>
+            <th>PF</th>
+            <th>连续盈亏</th>
+            <th>平均持仓</th>
+            <th>自然恢复</th>
+            <th>冷却结束</th>
+            <th>学习备注</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.length === 0 ? (
+            <tr><td colSpan={15}>{empty}</td></tr>
+          ) : items.map((row) => (
+            <tr key={`${row.strategy_family || "legacy"}-${row.symbol}-${row.direction}`}>
+              <td className="symbol">{row.symbol}</td>
+              <td>{signalLabel(row.direction)}</td>
+              <td>{row.strategy_family === "orderbook_scalp" ? "盘口剥头皮" : row.strategy_family || "旧混合策略"}</td>
+              <td>{fmt(row.score, 1)}{row.raw_score !== undefined && Number(row.recovery_points || 0) > 0 ? `（原 ${fmt(row.raw_score, 1)}）` : ""}</td>
+              <td>{fmt(row.risk_multiplier, 2)}x</td>
+              <td><span className={row.status === "strong" ? "pill ok" : row.status === "penalty" ? "pill bad" : "pill"}>{row.status_label}</span></td>
+              <td>{row.closed_trades}</td>
+              <td>{fmt(row.win_rate, 1)}%</td>
+              <td className={Number(row.net_pnl) >= 0 ? "positive-text" : "negative-text"}>{fmt(row.net_pnl, 4)} U</td>
+              <td>{fmt(row.profit_factor, 2)}</td>
+              <td>{row.consecutive_wins > 0 ? `连赢 ${row.consecutive_wins}` : row.consecutive_losses > 0 ? `连亏 ${row.consecutive_losses}` : "-"}</td>
+              <td>{fmt(Number(row.avg_hold_seconds || 0) / 60, 1)} 分钟</td>
+              <td>{Number(row.recovery_points || 0) > 0 ? `已恢复 +${fmt(row.recovery_points, 1)}` : row.next_recovery_at ? new Date(row.next_recovery_at).toLocaleString("zh-CN") : "-"}</td>
+              <td>{row.penalty_until ? new Date(row.penalty_until).toLocaleString("zh-CN") : "-"}</td>
+              <td className="reason-cell">{(row.notes || []).join("；")}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
   return (
     <section className="stack">
       <div className="metrics">
-        <MetricCard title="已学习方向" value={String(rows.length)} sub="按币种 + 做多/做空分开统计" />
-        <MetricCard title="正常以上倍率" value={String(highPower)} sub="倍率 >= 1，可按锦标赛正常火力执行" />
-        <MetricCard title="熔断方向" value={String(fuse)} sub="倍率为 0，等待自然恢复" tone={fuse ? "negative" : ""} />
-        <MetricCard title="学习净盈亏" value={`${fmt(totalNet, 4)} U`} tone={totalNet >= 0 ? "positive" : "negative"} />
+        <MetricCard title="剥头皮学习方向" value={String(scalpRows.length)} sub="只统计盘口剥头皮自己的交易结果" />
+        <MetricCard title="正常以上倍率" value={String(highPower)} sub="剥头皮信用倍率 >= 1" />
+        <MetricCard title="熔断方向" value={String(fuse)} sub="剥头皮专用信用降到 0" tone={fuse ? "negative" : ""} />
+        <MetricCard title="剥头皮净盈亏" value={`${fmt(totalNet, 4)} U`} tone={totalNet >= 0 ? "positive" : "negative"} />
       </div>
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h2>币种实盘信用分</h2>
-            <p>信用分用于排序和仓位倍率：亏损会降仓，时间会自然恢复；只有净收益、PF 和手续费占比达标的连续盈利方向才允许加仓到 1x 以上。</p>
+            <h2>盘口剥头皮专用信用分</h2>
+            <p>极限模式只使用盘口剥头皮引擎；这里的信用分只由盘口剥头皮成交结果加减，旧策略记录不参与仓位。</p>
           </div>
           <button className="secondary" onClick={onSync}>同步历史信用分</button>
         </div>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>币种</th>
-                <th>方向</th>
-                <th>信用分</th>
-                <th>开仓倍率</th>
-                <th>状态</th>
-                <th>交易数</th>
-                <th>胜率</th>
-                <th>净盈亏</th>
-                <th>PF</th>
-                <th>连续盈亏</th>
-                <th>平均持仓</th>
-                <th>自然恢复</th>
-                <th>冷却结束</th>
-                <th>学习备注</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={`${row.symbol}-${row.direction}`}>
-                  <td className="symbol">{row.symbol}</td>
-                  <td>{signalLabel(row.direction)}</td>
-                  <td>{fmt(row.score, 1)}{row.raw_score !== undefined && Number(row.recovery_points || 0) > 0 ? `（原 ${fmt(row.raw_score, 1)}）` : ""}</td>
-                  <td>{fmt(row.risk_multiplier, 2)}x</td>
-                  <td><span className={row.status === "strong" ? "pill ok" : row.status === "penalty" ? "pill bad" : "pill"}>{row.status_label}</span></td>
-                  <td>{row.closed_trades}</td>
-                  <td>{fmt(row.win_rate, 1)}%</td>
-                  <td className={Number(row.net_pnl) >= 0 ? "positive-text" : "negative-text"}>{fmt(row.net_pnl, 4)} U</td>
-                  <td>{fmt(row.profit_factor, 2)}</td>
-                  <td>{row.consecutive_wins > 0 ? `连赢 ${row.consecutive_wins}` : row.consecutive_losses > 0 ? `连亏 ${row.consecutive_losses}` : "-"}</td>
-                  <td>{fmt(Number(row.avg_hold_seconds || 0) / 60, 1)} 分钟</td>
-                  <td>{Number(row.recovery_points || 0) > 0 ? `已恢复 +${fmt(row.recovery_points, 1)}` : row.next_recovery_at ? new Date(row.next_recovery_at).toLocaleString("zh-CN") : "-"}</td>
-                  <td>{row.penalty_until ? new Date(row.penalty_until).toLocaleString("zh-CN") : "-"}</td>
-                  <td className="reason-cell">{(row.notes || []).join("；")}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        {renderRows(scalpRows, "还没有归因到盘口剥头皮的实盘成交。")}
+      </div>
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>旧策略混合信用分</h2>
+            <p>这里保留旧策略历史，仅用于复盘；极限盘口剥头皮模式不会读取这张表来决定仓位。</p>
+          </div>
         </div>
+        {renderRows(rows, "暂无旧策略信用记录。")}
       </div>
     </section>
   );
@@ -1044,14 +1066,17 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("yolo_scalp_daily_loss_limit_pct", "极限梭哈每日亏损上限%", "默认 65%；触发后停止新开仓")}
           {number("yolo_scalp_max_open_positions", "极限梭哈最大持仓数", "默认 1；满仓短打阶段不建议同时持有多个币")}
           {toggle("yolo_scalp_orderbook_engine_enabled", "盘口剥头皮引擎", "极限梭哈优先使用 WebSocket 盘口、1m 异动和扣费后空间来触发快进快出")}
+          {toggle("yolo_scalp_orderbook_only_enabled", "极限只跑盘口剥头皮", "开启后极限模式不会执行旧火药桶、抢跑或弱质量试探；旧信号只保留观察")}
           {number("yolo_scalp_orderbook_max_spread_pct", "剥头皮最大点差%", "默认 0.08%；点差太大时手续费和滑点会吃掉毛利")}
           {number("yolo_scalp_orderbook_min_depth_notional_usdt", "剥头皮最低盘口深度U", "默认 1000U；depth5 太薄不做")}
           {number("yolo_scalp_orderbook_probe_min_depth_notional_usdt", "失衡试探最低盘口深度U", "默认 300U；只用于小仓试探，盘口冲击和放量剥头皮仍用更高深度")}
           {number("yolo_scalp_orderbook_min_imbalance", "剥头皮最小盘口失衡", "默认 0.05；买卖盘优势不明显就等待")}
           {toggle("yolo_scalp_orderbook_allow_strong_imbalance_direction_probe", "强盘口允许小仓试探", "实时方向不一致但盘口失衡很强时，只允许按失衡试探小仓进入")}
-          {toggle("yolo_scalp_credit_experiment_enabled", "剥头皮信用试验层", "新盘口剥头皮不再被旧策略信用硬拦截，旧亏损只做仓位软折扣")}
-          {number("yolo_scalp_legacy_credit_soft_multiplier", "旧低分软折扣", "默认 0.70x；旧策略信用很低时仍能小仓试验")}
-          {number("yolo_scalp_legacy_credit_soft_penalty_multiplier", "旧冷却软折扣", "默认 0.70x；旧策略处于冷却时只降仓不熔断")}
+          {toggle("yolo_scalp_strategy_credit_enabled", "剥头皮独立信用分", "开启后只用盘口剥头皮自己的实盘结果调整仓位；旧策略信用只展示不参与执行")}
+          {number("scalp_credit_quick_stop_seconds", "剥头皮快速止损秒数", "默认 35 秒；短打策略更快识别失败样本")}
+          {number("scalp_credit_win_reward", "剥头皮盈利奖励", "默认 +5 分；只影响盘口剥头皮专用信用")}
+          {number("scalp_credit_loss_penalty", "剥头皮亏损惩罚", "默认 -7.5 分；只影响盘口剥头皮专用信用")}
+          {number("scalp_credit_penalty_cooldown_hours", "剥头皮冷却小时", "默认 1 小时；比旧滚仓策略恢复更快")}
           {number("yolo_scalp_orderbook_min_1m_move_pct", "剥头皮1m最小异动%", "默认 0.08%；没有短时波动就不硬开")}
           {number("yolo_scalp_orderbook_min_profit_cost_ratio", "剥头皮最低收益/成本比", "默认 1.15；必须覆盖手续费和滑点后仍有空间")}
           {number("yolo_scalp_orderbook_target_net_profit_pct", "剥头皮目标净利%", "默认 0.06%；舔一口就走的最小目标")}
