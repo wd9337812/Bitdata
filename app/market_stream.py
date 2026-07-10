@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -13,12 +14,16 @@ import requests
 import websockets
 
 from app.binance_rate import after_response, before_request, estimate_weight
+from app.order_book import ORDER_BOOKS, OrderBookGap
 from app.opportunity_queue import enqueue_opportunity
 
 
 _THREAD: threading.Thread | None = None
 _STOP = threading.Event()
-_LOCK = threading.Lock()
+_LOCK = threading.RLock()
+_MEMORY_STATE: dict[str, Any] | None = None
+_MEMORY_PATH: Path | None = None
+_TRADE_FLOW_STATE: dict[str, dict[str, Any]] = {}
 
 
 def data_dir() -> Path:
@@ -54,6 +59,9 @@ def _empty_state() -> dict[str, Any]:
 
 def read_snapshot() -> dict[str, Any]:
     path = snapshot_path()
+    with _LOCK:
+        if _MEMORY_STATE is not None and _MEMORY_PATH == path:
+            return dict(_MEMORY_STATE)
     if not path.exists():
         return _empty_state()
     try:
@@ -65,8 +73,14 @@ def read_snapshot() -> dict[str, Any]:
         return state
 
 
-def write_snapshot(state: dict[str, Any]) -> None:
+def write_snapshot(state: dict[str, Any], *, persist: bool = True) -> None:
+    global _MEMORY_PATH, _MEMORY_STATE
     path = snapshot_path()
+    with _LOCK:
+        _MEMORY_STATE = state
+        _MEMORY_PATH = path
+    if not persist:
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     with tmp.open("w", encoding="utf-8") as file:
@@ -91,6 +105,8 @@ def stream_status(max_age_seconds: int = 15) -> dict[str, Any]:
         "symbols": state.get("symbols", []),
         "ticker_count": len(state.get("tickers", {})),
         "depth_count": len(state.get("depths", {})),
+        "full_orderbook_count": len(state.get("full_orderbook_symbols", []) or []),
+        "full_orderbook_symbols": state.get("full_orderbook_symbols", []),
         "kline_count": sum(len(value) for value in (state.get("klines", {}) or {}).values()),
         "last_error": state.get("last_error", ""),
         "updated_at": updated_at,
@@ -108,11 +124,12 @@ def read_stream_intent() -> dict[str, Any]:
             return {
                 "symbols": [str(symbol).upper() for symbol in data.get("symbols", [])],
                 "sources": data.get("sources", {}),
+                "active_mode": data.get("active_mode"),
                 "updated_at": data.get("updated_at"),
             }
     except Exception:
         pass
-    return {"symbols": [], "sources": {}, "updated_at": None}
+    return {"symbols": [], "sources": {}, "active_mode": None, "updated_at": None}
 
 
 def write_stream_intent(
@@ -121,6 +138,7 @@ def write_stream_intent(
     candidate_symbols: list[str] | None = None,
     position_symbols: list[str] | None = None,
     live_credit_symbols: list[str] | None = None,
+    active_mode: str | None = None,
 ) -> None:
     sources = {
         "hot": _dedupe_symbols(hot_symbols or []),
@@ -134,7 +152,12 @@ def write_stream_intent(
         + sources["hot"]
         + sources["live_credit"]
     )
-    payload = {"symbols": symbols, "sources": sources, "updated_at": _now_iso()}
+    payload = {
+        "symbols": symbols,
+        "sources": sources,
+        "active_mode": str(active_mode or ""),
+        "updated_at": _now_iso(),
+    }
     path = intent_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -159,6 +182,11 @@ def stream_ticker(symbol: str, max_age_seconds: int = 10) -> dict[str, Any] | No
     state = read_snapshot()
     item = (state.get("tickers") or {}).get(symbol.upper())
     return item if _fresh(item, max_age_seconds) else None
+
+
+def stream_tickers(max_age_seconds: int = 10) -> list[dict[str, Any]]:
+    state = read_snapshot()
+    return [item for item in (state.get("tickers") or {}).values() if _fresh(item, max_age_seconds)]
 
 
 def stream_depth(symbol: str, max_age_seconds: int = 5) -> dict[str, Any] | None:
@@ -218,14 +246,18 @@ def _discover_stream_symbols(config: dict[str, Any], limit: int) -> list[str]:
     base_url = str(config.get("binance_base_url", "https://fapi.binance.com")).rstrip("/")
     min_volume = float(config.get("min_24h_volume_usdt", 30_000_000))
     try:
+        streamed = stream_tickers(max_age_seconds=15)
         before_request(estimate_weight("/fapi/v1/exchangeInfo"))
         exchange = requests.get(f"{base_url}/fapi/v1/exchangeInfo", timeout=10)
         after_response(exchange.headers)
         exchange.raise_for_status()
-        before_request(estimate_weight("/fapi/v1/ticker/24hr"))
-        tickers_response = requests.get(f"{base_url}/fapi/v1/ticker/24hr", timeout=10)
-        after_response(tickers_response.headers)
-        tickers_response.raise_for_status()
+        tickers = streamed
+        if len(tickers) < 50:
+            before_request(estimate_weight("/fapi/v1/ticker/24hr"))
+            tickers_response = requests.get(f"{base_url}/fapi/v1/ticker/24hr", timeout=10)
+            after_response(tickers_response.headers)
+            tickers_response.raise_for_status()
+            tickers = tickers_response.json()
         coin_symbols = {
             item["symbol"]
             for item in exchange.json().get("symbols", [])
@@ -236,7 +268,7 @@ def _discover_stream_symbols(config: dict[str, Any], limit: int) -> list[str]:
         }
         ranked = [
             (item["symbol"], float(item.get("quoteVolume", 0)))
-            for item in tickers_response.json()
+            for item in tickers
             if item.get("symbol") in coin_symbols and float(item.get("quoteVolume", 0)) >= min_volume
         ]
         ranked.sort(key=lambda row: row[1], reverse=True)
@@ -297,16 +329,23 @@ def _public_stream_url(symbols: list[str]) -> str:
     return _combined_url("public", streams)
 
 
-def _market_stream_url(symbols: list[str], interval: str) -> str:
+def _diff_depth_stream_url(symbols: list[str]) -> str:
     streams: list[str] = []
     for symbol in symbols:
         lower = symbol.lower()
-        streams.extend(
-            [
-                f"{lower}@ticker",
-                f"{lower}@kline_{interval}",
-            ]
-        )
+        streams.extend([f"{lower}@depth@100ms", f"{lower}@bookTicker"])
+    return _combined_url("public", streams)
+
+
+def _trade_stream_url(symbols: list[str]) -> str:
+    return _combined_url("market", [f"{symbol.lower()}@aggTrade" for symbol in symbols])
+
+
+def _market_stream_url(symbols: list[str], interval: str) -> str:
+    streams: list[str] = ["!ticker@arr"]
+    for symbol in symbols:
+        lower = symbol.lower()
+        streams.append(f"{lower}@kline_{interval}")
         if interval != "1m":
             streams.append(f"{lower}@kline_1m")
     return _combined_url("market", streams)
@@ -399,8 +438,8 @@ def _append_trigger_event(
 
 
 def _depth_from_event(data: dict[str, Any]) -> dict[str, Any]:
-    bids = data.get("b") or []
-    asks = data.get("a") or []
+    bids = data.get("b") or data.get("bids") or []
+    asks = data.get("a") or data.get("asks") or []
     spread_pct = 999.0
     depth_notional = 0.0
     if bids and asks:
@@ -422,6 +461,105 @@ def _depth_from_event(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _book_ticker_metrics(data: dict[str, Any]) -> dict[str, Any]:
+    bid = float(data.get("b") or 0)
+    ask = float(data.get("a") or 0)
+    bid_qty = float(data.get("B") or 0)
+    ask_qty = float(data.get("A") or 0)
+    mid = (bid + ask) / 2 if bid and ask else 0.0
+    total_qty = bid_qty + ask_qty
+    micro_price = (ask * bid_qty + bid * ask_qty) / total_qty if total_qty and bid and ask else mid
+    return {
+        "best_bid": bid,
+        "best_ask": ask,
+        "best_bid_qty": bid_qty,
+        "best_ask_qty": ask_qty,
+        "mid_price": mid,
+        "micro_price": micro_price,
+        "microprice_edge_bps": (micro_price - mid) / mid * 10_000 if mid else 0.0,
+        "spread_pct": (ask - bid) / mid * 100 if mid else 999.0,
+        "book_ticker_updated_at": _now_iso(),
+    }
+
+
+def _trade_flow_metrics(data: dict[str, Any], window_seconds: float) -> dict[str, Any]:
+    symbol = str(data.get("s") or "").upper()
+    event_ms = int(data.get("T") or data.get("E") or time.time() * 1000)
+    notional = float(data.get("p") or 0) * float(data.get("q") or 0)
+    is_taker_sell = bool(data.get("m"))
+    flow = _TRADE_FLOW_STATE.setdefault(
+        symbol,
+        {"samples": deque(), "buy": 0.0, "sell": 0.0, "buy_count": 0, "sell_count": 0},
+    )
+    side = "sell" if is_taker_sell else "buy"
+    count_key = f"{side}_count"
+    flow["samples"].append((event_ms, side, notional))
+    flow[side] += notional
+    flow[count_key] += 1
+    cutoff = event_ms - max(1.0, window_seconds) * 1000
+    while flow["samples"] and flow["samples"][0][0] < cutoff:
+        _, old_side, old_notional = flow["samples"].popleft()
+        flow[old_side] = max(0.0, float(flow[old_side]) - old_notional)
+        old_count_key = f"{old_side}_count"
+        flow[old_count_key] = max(0, int(flow[old_count_key]) - 1)
+    buy = float(flow["buy"])
+    sell = float(flow["sell"])
+    total = buy + sell
+    return {
+        "trade_flow_buy_notional": buy,
+        "trade_flow_sell_notional": sell,
+        "trade_flow_notional": total,
+        "trade_flow_imbalance": (buy - sell) / total if total else 0.0,
+        "trade_flow_buy_count": int(flow["buy_count"]),
+        "trade_flow_sell_count": int(flow["sell_count"]),
+        "trade_flow_window_seconds": window_seconds,
+        "trade_flow_updated_at": _now_iso(),
+    }
+
+
+def _full_orderbook_symbols(
+    config: dict[str, Any],
+    symbols: list[str],
+    intent: dict[str, Any],
+) -> list[str]:
+    active_mode = str(intent.get("active_mode") or config.get("_active_growth_mode") or config.get("growth_mode") or "")
+    if active_mode != "yolo_scalp" or not config.get("orderbook_full_stream_enabled", True):
+        return []
+    sources = intent.get("sources") or {}
+    ranked = _dedupe_symbols(
+        list(sources.get("positions") or [])
+        + list(sources.get("candidates") or [])
+        + list(sources.get("hot") or [])
+    )
+    allowed = set(symbols)
+    limit = max(0, int(config.get("orderbook_full_symbols_limit", 20)))
+    return [symbol for symbol in ranked if symbol in allowed][:limit]
+
+
+def _seed_order_book(base_url: str, symbol: str, limit: int) -> None:
+    params = {"symbol": symbol, "limit": limit}
+    before_request(estimate_weight("/fapi/v1/depth", params))
+    response = requests.get(f"{base_url}/fapi/v1/depth", params=params, timeout=10)
+    after_response(response.headers)
+    response.raise_for_status()
+    ORDER_BOOKS.seed(symbol, response.json())
+
+
+async def _seed_order_books(config: dict[str, Any], symbols: list[str]) -> None:
+    if not symbols:
+        return
+    base_url = str(config.get("binance_base_url", "https://fapi.binance.com")).rstrip("/")
+    limit = int(config.get("orderbook_snapshot_limit", 100))
+    batch_size = max(1, min(4, int(config.get("orderbook_snapshot_concurrency", 4))))
+    for index in range(0, len(symbols), batch_size):
+        await asyncio.gather(
+            *[
+                asyncio.to_thread(_seed_order_book, base_url, symbol, limit)
+                for symbol in symbols[index : index + batch_size]
+            ]
+        )
+
+
 async def _consume_stream(
     url: str,
     symbols: list[str],
@@ -432,9 +570,21 @@ async def _consume_stream(
     trigger_move_pct: float = 0.35,
     trigger_quote_volume_usdt: float = 250_000,
     trigger_max_events: int = 80,
+    persist_seconds: float = 5.0,
+    orderbook_config: dict[str, Any] | None = None,
+    orderbook_symbols: list[str] | None = None,
+    seed_orderbooks: bool = False,
 ) -> None:
     started_at = time.time()
-    async with websockets.connect(url, ping_interval=20, ping_timeout=10, close_timeout=5) as websocket:
+    async with websockets.connect(
+        url,
+        ping_interval=20,
+        ping_timeout=10,
+        close_timeout=5,
+        max_queue=2048,
+    ) as websocket:
+        if seed_orderbooks and orderbook_symbols:
+            await _seed_order_books(orderbook_config or {}, orderbook_symbols)
         state.update({"connected": True, "symbols": symbols, "last_error": "", "updated_at": _now_iso()})
         write_snapshot(state)
         last_flush = 0.0
@@ -444,6 +594,18 @@ async def _consume_stream(
             raw = await asyncio.wait_for(websocket.recv(), timeout=35)
             payload = json.loads(raw)
             data = payload.get("data") or {}
+            if isinstance(data, list):
+                with _LOCK:
+                    for item in data:
+                        if item.get("e") == "24hrTicker":
+                            symbol = str(item.get("s") or "").upper()
+                            if symbol:
+                                state.setdefault("tickers", {})[symbol] = _ticker_from_event(item)
+                    state.update({"connected": True, "updated_at": _now_iso(), "symbols": symbols})
+                    write_snapshot(state, persist=time.time() - last_flush >= persist_seconds)
+                    if time.time() - last_flush >= persist_seconds:
+                        last_flush = time.time()
+                continue
             event_type = data.get("e")
             with _LOCK:
                 if event_type == "24hrTicker":
@@ -467,12 +629,48 @@ async def _consume_stream(
                 elif event_type == "depthUpdate" or payload.get("stream", "").endswith("depth5@500ms"):
                     symbol = str(data.get("s") or payload.get("stream", "").split("@")[0]).upper()
                     if symbol:
-                        state.setdefault("depths", {})[symbol] = _depth_from_event(data)
+                        if orderbook_symbols and symbol in orderbook_symbols:
+                            book = ORDER_BOOKS.apply(symbol, data)
+                            if book is not None:
+                                previous = state.setdefault("depths", {}).get(symbol, {})
+                                state["depths"][symbol] = {**previous, **_depth_from_event(book)}
+                        else:
+                            state.setdefault("depths", {})[symbol] = _depth_from_event(data)
+                elif event_type == "bookTicker":
+                    symbol = str(data.get("s") or payload.get("stream", "").split("@")[0]).upper()
+                    if symbol:
+                        previous = state.setdefault("depths", {}).get(symbol, {})
+                        state["depths"][symbol] = {**previous, **_book_ticker_metrics(data), "updated_at": _now_iso()}
+                elif event_type == "aggTrade":
+                    symbol = str(data.get("s") or payload.get("stream", "").split("@")[0]).upper()
+                    if symbol:
+                        flow = _trade_flow_metrics(
+                            data,
+                            float((orderbook_config or {}).get("yolo_scalp_trade_flow_window_seconds", 5.0)),
+                        )
+                        previous = state.setdefault("depths", {}).get(symbol, {})
+                        state["depths"][symbol] = {**previous, **flow, "updated_at": _now_iso()}
+                        trigger_notional = float((orderbook_config or {}).get("yolo_scalp_trade_flow_trigger_notional_usdt", 100_000.0))
+                        trigger_imbalance = float((orderbook_config or {}).get("yolo_scalp_trade_flow_trigger_imbalance", 0.15))
+                        if flow["trade_flow_notional"] >= trigger_notional and abs(flow["trade_flow_imbalance"]) >= trigger_imbalance:
+                            enqueue_opportunity(
+                                symbol=symbol,
+                                event_type="trade_flow",
+                                direction_hint="LONG" if flow["trade_flow_imbalance"] > 0 else "SHORT",
+                                quote_volume=flow["trade_flow_notional"],
+                                source="websocket_trade_flow",
+                                features=flow,
+                                max_events=trigger_max_events,
+                                min_interval_seconds=5.0,
+                            )
                 now = time.time()
-                if now - last_flush >= 2:
+                if now - last_flush >= persist_seconds:
                     state.update({"connected": True, "updated_at": _now_iso(), "symbols": symbols})
                     write_snapshot(state)
                     last_flush = now
+                else:
+                    state.update({"connected": True, "updated_at": _now_iso(), "symbols": symbols})
+                    write_snapshot(state, persist=False)
 
 
 async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
@@ -486,7 +684,7 @@ async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
             await asyncio.sleep(30)
             continue
         symbols = _symbols_from_config(config)
-        rebuild_seconds = int(config.get("market_stream_rebuild_seconds", 60))
+        rebuild_seconds = int(config.get("market_stream_rebuild_seconds", 300))
         threshold = float(config.get("market_stream_rotation_threshold_pct", 20.0))
         intent = read_stream_intent()
         required_positions = set((intent.get("sources") or {}).get("positions", []))
@@ -502,18 +700,58 @@ async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
             await asyncio.sleep(30)
             continue
         try:
-            public_url = _public_stream_url(symbols)
+            full_orderbook_symbols = _full_orderbook_symbols(config, symbols, intent)
+            partial_symbols = [symbol for symbol in symbols if symbol not in set(full_orderbook_symbols)]
             market_url = _market_stream_url(symbols, interval)
             trigger_kwargs = {
                 "trigger_enabled": bool(config.get("websocket_trigger_enabled", True)),
                 "trigger_move_pct": float(config.get("websocket_trigger_move_pct", 0.35)),
                 "trigger_quote_volume_usdt": float(config.get("websocket_trigger_quote_volume_usdt", 250_000)),
                 "trigger_max_events": int(config.get("websocket_trigger_max_events", 80)),
+                "persist_seconds": float(config.get("market_stream_persist_seconds", 5.0)),
             }
-            await asyncio.gather(
-                _consume_stream(public_url, symbols, state, rebuild_seconds, **trigger_kwargs),
-                _consume_stream(market_url, symbols, state, rebuild_seconds, **trigger_kwargs),
-            )
+            tasks = [_consume_stream(market_url, symbols, state, rebuild_seconds, **trigger_kwargs)]
+            if partial_symbols:
+                tasks.append(
+                    _consume_stream(
+                        _public_stream_url(partial_symbols),
+                        symbols,
+                        state,
+                        rebuild_seconds,
+                        **trigger_kwargs,
+                    )
+                )
+            if full_orderbook_symbols:
+                tasks.append(
+                    _consume_stream(
+                        _diff_depth_stream_url(full_orderbook_symbols),
+                        symbols,
+                        state,
+                        rebuild_seconds,
+                        orderbook_config=config,
+                        orderbook_symbols=full_orderbook_symbols,
+                        seed_orderbooks=True,
+                        **trigger_kwargs,
+                    )
+                )
+                tasks.append(
+                    _consume_stream(
+                        _trade_stream_url(full_orderbook_symbols),
+                        symbols,
+                        state,
+                        rebuild_seconds,
+                        orderbook_config=config,
+                        orderbook_symbols=full_orderbook_symbols,
+                        **trigger_kwargs,
+                    )
+                )
+            state["full_orderbook_symbols"] = full_orderbook_symbols
+            await asyncio.gather(*tasks)
+        except OrderBookGap as exc:
+            state = read_snapshot()
+            state.update({"connected": False, "last_error": str(exc), "updated_at": _now_iso(), "symbols": symbols})
+            write_snapshot(state)
+            await asyncio.sleep(1)
         except Exception as exc:
             state = read_snapshot()
             state.update({"connected": False, "last_error": str(exc), "updated_at": _now_iso(), "symbols": symbols})

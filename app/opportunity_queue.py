@@ -2,9 +2,17 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+
+_LOCK = threading.RLock()
+_MEMORY_QUEUE: dict[str, Any] | None = None
+_MEMORY_PATH: Path | None = None
+_LAST_ENQUEUE: dict[str, tuple[float, float]] = {}
 
 
 def data_dir() -> Path:
@@ -32,15 +40,22 @@ def _parse_time(value: Any) -> datetime | None:
 
 
 def _write(events: list[dict[str, Any]]) -> None:
+    global _MEMORY_PATH, _MEMORY_QUEUE
     path = queue_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps({"events": events, "updated_at": _now().isoformat()}, ensure_ascii=False), encoding="utf-8")
+    payload = {"events": events, "updated_at": _now().isoformat()}
+    _MEMORY_QUEUE = payload
+    _MEMORY_PATH = path
+    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
 
 
 def read_raw_queue() -> dict[str, Any]:
     path = queue_path()
+    with _LOCK:
+        if _MEMORY_QUEUE is not None and _MEMORY_PATH == path:
+            return {"events": list(_MEMORY_QUEUE.get("events") or []), "updated_at": _MEMORY_QUEUE.get("updated_at")}
     if not path.exists():
         return {"events": [], "updated_at": None}
     try:
@@ -53,7 +68,7 @@ def read_raw_queue() -> dict[str, Any]:
 def score_event(event_type: str, move_pct: float, quote_volume: float) -> float:
     volume_score = min(max(quote_volume, 0.0) / 250_000 * 18.0, 45.0)
     move_score = min(abs(move_pct) * 22.0, 45.0)
-    type_bonus = 12.0 if event_type in {"kline_trigger", "volume_breakout"} else 6.0
+    type_bonus = 12.0 if event_type in {"kline_trigger", "volume_breakout", "trade_flow"} else 6.0
     return round(type_bonus + volume_score + move_score, 4)
 
 
@@ -70,6 +85,7 @@ def enqueue_opportunity(
     ttl_seconds: int = 240,
     max_events: int = 120,
     min_score: float = 20.0,
+    min_interval_seconds: float = 2.0,
 ) -> dict[str, Any] | None:
     symbol = str(symbol or "").upper().strip()
     if not symbol.endswith("USDT"):
@@ -81,6 +97,13 @@ def enqueue_opportunity(
     if direction not in {"LONG", "SHORT"}:
         direction = "LONG" if move_pct > 0 else "SHORT" if move_pct < 0 else ""
     now = _now()
+    event_key = f"{symbol}:{event_type}:{interval}"
+    now_monotonic = time.monotonic()
+    with _LOCK:
+        previous_time, previous_score = _LAST_ENQUEUE.get(event_key, (0.0, 0.0))
+        if now_monotonic - previous_time < min_interval_seconds and score <= previous_score + 2.0:
+            return None
+        _LAST_ENQUEUE[event_key] = (now_monotonic, score)
     event = {
         "symbol": symbol,
         "event_type": event_type,
@@ -95,13 +118,14 @@ def enqueue_opportunity(
         "updated_at": now.isoformat(),
         "expires_at": (now + timedelta(seconds=ttl_seconds)).isoformat(),
     }
-    existing = []
-    for item in read_opportunities(max_age_seconds=ttl_seconds, limit=max_events):
-        if not (item.get("symbol") == symbol and item.get("event_type") == event_type and item.get("interval") == interval):
-            existing.append(item)
-    events = [event] + existing
-    events.sort(key=lambda item: (float(item.get("score") or 0), item.get("updated_at") or ""), reverse=True)
-    _write(events[:max_events])
+    with _LOCK:
+        existing = []
+        for item in read_opportunities(max_age_seconds=ttl_seconds, limit=max_events):
+            if not (item.get("symbol") == symbol and item.get("event_type") == event_type and item.get("interval") == interval):
+                existing.append(item)
+        events = [event] + existing
+        events.sort(key=lambda item: (float(item.get("score") or 0), item.get("updated_at") or ""), reverse=True)
+        _write(events[:max_events])
     return event
 
 

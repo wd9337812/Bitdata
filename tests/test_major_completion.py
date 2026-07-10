@@ -10,12 +10,13 @@ from app.stage_modes import stage_profile_for_equity
 from app.stage_simulation import simulate_stage_path
 
 
-def test_stage_profile_maps_small_equity_to_yolo_stage():
-    profile = stage_profile_for_equity(50, {"yolo_scalp_risk_per_trade_pct": 55})
+def test_stage_profile_maps_small_equity_to_extreme_v2_stage():
+    profile = stage_profile_for_equity(50, {"stage_s0_risk_pct": 10})
 
     assert profile["stage"] == "S0"
-    assert profile["recommended_mode"] == "yolo_scalp"
-    assert profile["base_risk_pct"] == 55
+    assert profile["recommended_mode"] == "extreme_sprint"
+    assert profile["strategy_family"] == "extreme_v2_roll"
+    assert profile["base_risk_pct"] == 10
 
 
 def test_unified_position_sizing_exposes_all_multipliers():
@@ -84,6 +85,31 @@ def test_effective_risk_gives_top_signal_more_drawdown_access():
 
     assert sizing["guard_multiplier"] == 0.6
     assert sizing["final_risk_pct"] == 6
+
+
+def test_stage_route_hard_cap_cannot_be_lifted_by_yolo_risk_floor():
+    sizing = effective_position_risk(
+        candidate_risk_pct=0.35,
+        candidate={
+            "mode": "yolo_scalp",
+            "entry_type": "orderbook_impact",
+            "score": 130,
+            "cost_ratio": 8,
+            "symbol_quality": {"score": 90},
+        },
+        guard={"risk_multiplier": 1.0},
+        target={"effective_risk_multiplier": 1.0},
+        config={
+            "_stage_route": {"stage": "S3", "risk_pct": 0.35},
+            "yolo_scalp_orderbook_impact_min_risk_pct": 45,
+            "yolo_scalp_orderbook_impact_max_risk_pct": 85,
+        },
+        mode="yolo_scalp",
+    )
+
+    assert sizing["yolo_scalp_profile"]["min_risk_pct"] == 45
+    assert sizing["stage_risk_cap_pct"] == 0.35
+    assert sizing["final_risk_pct"] == 0.35
 
 
 def test_yolo_firecracker_gets_scalp_risk_floor():

@@ -8,6 +8,7 @@ import {
   FileText,
   LineChart,
   Play,
+  Route,
   Settings,
   Shield,
   Square,
@@ -26,18 +27,19 @@ import {
 import { api, fmt, modeLabel, stageLabel, statusLabel } from "./lib/api";
 import "./styles.css";
 
-type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; opportunity_queue?: Record<string, any>; runtime?: Record<string, any>; target_progress?: Record<string, any>; stage_profile?: Record<string, any>; product_completion?: Record<string, any> };
+type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; user_stream?: Record<string, any>; binance_rate?: Record<string, any>; opportunity_queue?: Record<string, any>; runtime?: Record<string, any>; target_progress?: Record<string, any>; stage_profile?: Record<string, any>; stage_route?: Record<string, any>; stage_profiles?: Record<string, any>[]; product_completion?: Record<string, any> };
 type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any; funnel?: any }; stage2_grid: any[]; auth_error?: string };
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
-type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[] };
+type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[] };
 type LiveReactionData = { reactions: any[]; recent_trades: any[] };
 type SimulationData = Record<string, any>;
 type ReportData = Record<string, any>;
 
 const menu = [
   { id: "overview", label: "总览", icon: Activity },
+  { id: "stages", label: "阶段路线", icon: Route },
   { id: "scan", label: "多币种扫描", icon: CandlestickChart },
   { id: "learning", label: "实盘学习", icon: Zap },
   { id: "reaction", label: "实时风控", icon: AlertTriangle },
@@ -54,11 +56,14 @@ const intervalOptions = [
   ["4h", "4小时"],
 ];
 
-const modeOptions = [
-  ["yolo_scalp", "极限梭哈：50-300U，满仓短打，快进快出，风险极高"],
-  ["extreme_sprint", "极限冲刺：300-10000U，强信号放大仓位，保留硬风控"],
-  ["attack", "进攻增长：10000-100000U，多币种轮动进攻"],
-  ["balanced", "稳健过渡：100000U 以后降低回撤，准备网格"],
+const stageManualOptions = [
+  ["auto", "自动（推荐）：按账户权益选择阶段"],
+  ["extreme_sprint", "手动 Extreme V2 滚仓"],
+  ["yolo_scalp", "手动盘口剥头皮"],
+  ["grid", "手动网格"],
+  ["attack", "手动进攻模式（兼容旧配置）"],
+  ["balanced", "手动均衡模式（兼容旧配置）"],
+  ["conservative", "手动稳健模式（兼容旧配置）"],
 ];
 
 const defaultSymbolOptions = [
@@ -85,7 +90,7 @@ function useData() {
   const [market, setMarket] = useState<MarketData | null>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
-  const [liveLearning, setLiveLearning] = useState<LiveLearningData>({ scores: [], strategy_scores: [], scalp_scores: [] });
+  const [liveLearning, setLiveLearning] = useState<LiveLearningData>({ scores: [], strategy_scores: [], scalp_scores: [], extreme_scores: [] });
   const [liveReaction, setLiveReaction] = useState<LiveReactionData | null>(null);
   const [health, setHealth] = useState<any>(null);
   const [simulation, setSimulation] = useState<any>(null);
@@ -113,6 +118,7 @@ function useData() {
           scores: learningRes.scores || [],
           strategy_scores: learningRes.strategy_scores || [],
           scalp_scores: learningRes.scalp_scores || [],
+          extreme_scores: learningRes.extreme_scores || [],
         });
         setLiveReaction(await api<LiveReactionData>("/api/live-reaction?limit=100"));
         setSimulation(await api<SimulationData>("/api/simulation/stage"));
@@ -187,10 +193,15 @@ function App() {
   const state = status?.state || {};
   const config = status?.config || {};
   const stream = status?.market_stream || {};
+  const userStream = status?.user_stream || {};
+  const binanceRate = status?.binance_rate || {};
   const opportunityQueue = status?.opportunity_queue || {};
   const runtime = status?.runtime || {};
   const target = status?.target_progress || {};
   const stageProfile = status?.stage_profile || {};
+  const rawStageRoute = status?.stage_route || {};
+  const stageRoute = Object.keys(rawStageRoute).length > 0 ? rawStageRoute : stageProfile;
+  const stageProfiles = status?.stage_profiles || [];
   const completion = status?.product_completion || {};
 
   const chartData = useMemo(
@@ -304,7 +315,7 @@ function App() {
             <div className="eyebrow">LIVE OPS PANEL</div>
             <h1>{menu.find((item) => item.id === active)?.label}</h1>
             <p>
-              当前模式：{modeLabel[mode.mode] || modeLabel[config.growth_mode] || "-"} · 周期：{mode.interval || "-"} · Binance：
+              当前模式：{modeLabel[stageRoute.mode] || modeLabel[mode.mode] || modeLabel[config.growth_mode] || "-"} · 阶段：{stageRoute.stage || "-"} · Binance：
               {data.health?.ok ? "正常" : "异常"}
             </p>
           </div>
@@ -333,6 +344,8 @@ function App() {
                 value={data.health?.ok ? "正常" : "异常"}
                 sub={data.health?.offsetMs !== undefined ? `时间偏差 ${fmt(data.health.offsetMs, 0)} ms` : data.health?.error}
               />
+              <MetricCard title="自动阶段" value={`${stageRoute.stage || "-"} ${stageRoute.label || ""}`} sub={`单笔风险 ${fmt(stageRoute.risk_pct, 2)}% · 最多 ${fmt(stageRoute.max_open_positions, 0)} 仓`} />
+              <MetricCard title="私有账户流" value={userStream.connected ? "实时连接" : "REST 兜底"} sub={userStream.last_error || `账户数据年龄 ${fmt(userStream.account_age_seconds, 0)} 秒`} tone={userStream.connected ? "positive" : ""} />
             </div>
             <ProtectionAuditPanel audit={runtime?.protection_audit} />
             <TargetProgressPanel target={target} />
@@ -349,6 +362,17 @@ function App() {
               </div>
             </div>
           </section>
+        )}
+
+        {active === "stages" && (
+          <StageRoutePanel
+            route={stageRoute}
+            profiles={stageProfiles}
+            stream={stream}
+            userStream={userStream}
+            rate={binanceRate}
+            equity={account.equity}
+          />
         )}
 
         {active === "scan" && (
@@ -458,7 +482,7 @@ function ProductCompletionPanel({ completion, stageProfile, simulation, report }
       <div className="metrics">
         <MetricCard title="完成度" value={`${fmt(completion?.completed || 0, 0)} / ${fmt(completion?.total || 9, 0)}`} sub={completion?.complete ? "九大模块可验收" : "仍有缺口"} tone={completion?.complete ? "positive" : "negative"} />
         <MetricCard title="当前阶段" value={`${stageProfile?.stage || "-"} ${stageProfile?.label || ""}`} sub={stageProfile?.risk_posture || "-"} />
-        <MetricCard title="建议模式" value={stageProfile?.recommended_mode || "-"} sub={`基础风险 ${fmt(stageProfile?.base_risk_pct, 2)}%`} />
+        <MetricCard title="建议模式" value={modeLabel[stageProfile?.recommended_mode] || stageProfile?.recommended_mode || "-"} sub={`基础风险 ${fmt(stageProfile?.base_risk_pct, 2)}%`} />
         <MetricCard title="模拟终值" value={`${fmt(simulation?.final_equity, 4)} U`} sub={`目标缺口 ${fmt(simulation?.target_gap_pct, 2)}%`} tone={simulation?.target_hit ? "positive" : ""} />
         <MetricCard title="模拟交易频率" value={`${fmt(simulation?.trades_per_day, 2)} 次/天`} sub={`最大回撤 ${fmt(simulation?.max_drawdown_pct, 2)}%`} />
         <MetricCard title="学习报告" value={report?.path ? "已生成" : "生成中"} sub={reportFirstLine.replace("- ", "")} />
@@ -662,9 +686,11 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
 function LiveLearningPanel({ data, onSync }: { data: LiveLearningData; onSync: () => Promise<void> }) {
   const rows = data.scores || [];
   const scalpRows = data.scalp_scores || [];
-  const totalNet = scalpRows.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
-  const highPower = scalpRows.filter((row) => Number(row.risk_multiplier || 0) >= 1).length;
-  const fuse = scalpRows.filter((row) => Number(row.risk_multiplier || 0) <= 0).length;
+  const extremeRows = data.extreme_scores || [];
+  const extremeNet = extremeRows.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
+  const scalpNet = scalpRows.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
+  const activePower = extremeRows.filter((row) => Number(row.risk_multiplier || 0) >= 1).length;
+  const activeFuse = extremeRows.filter((row) => Number(row.risk_multiplier || 0) <= 0).length;
   const renderRows = (items: any[], empty: string) => (
     <div className="table-wrap">
       <table>
@@ -694,7 +720,7 @@ function LiveLearningPanel({ data, onSync }: { data: LiveLearningData; onSync: (
             <tr key={`${row.strategy_family || "legacy"}-${row.symbol}-${row.direction}`}>
               <td className="symbol">{row.symbol}</td>
               <td>{signalLabel(row.direction)}</td>
-              <td>{row.strategy_family === "orderbook_scalp" ? "盘口剥头皮" : row.strategy_family || "旧混合策略"}</td>
+              <td>{strategyFamilyLabel(row.strategy_family)}</td>
               <td>{fmt(row.score, 1)}{row.raw_score !== undefined && Number(row.recovery_points || 0) > 0 ? `（原 ${fmt(row.raw_score, 1)}）` : ""}</td>
               <td>{fmt(row.risk_multiplier, 2)}x</td>
               <td><span className={row.status === "strong" ? "pill ok" : row.status === "penalty" ? "pill bad" : "pill"}>{row.status_label}</span></td>
@@ -716,18 +742,28 @@ function LiveLearningPanel({ data, onSync }: { data: LiveLearningData; onSync: (
   return (
     <section className="stack">
       <div className="metrics">
-        <MetricCard title="剥头皮学习方向" value={String(scalpRows.length)} sub="只统计盘口剥头皮自己的交易结果" />
-        <MetricCard title="正常以上倍率" value={String(highPower)} sub="剥头皮信用倍率 >= 1" />
-        <MetricCard title="熔断方向" value={String(fuse)} sub="剥头皮专用信用降到 0" tone={fuse ? "negative" : ""} />
-        <MetricCard title="剥头皮净盈亏" value={`${fmt(totalNet, 4)} U`} tone={totalNet >= 0 ? "positive" : "negative"} />
+        <MetricCard title="Extreme V2 学习方向" value={String(extremeRows.length)} sub="当前滚仓策略自己的交易结果" />
+        <MetricCard title="正常以上倍率" value={String(activePower)} sub="Extreme V2 信用倍率 >= 1" />
+        <MetricCard title="熔断方向" value={String(activeFuse)} sub="Extreme V2 专用信用降到 0" tone={activeFuse ? "negative" : ""} />
+        <MetricCard title="Extreme V2 净盈亏" value={`${fmt(extremeNet, 4)} U`} tone={extremeNet >= 0 ? "positive" : "negative"} />
+      </div>
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Extreme V2 滚仓专用信用分</h2>
+            <p>S0-S2 只使用这里的实盘结果调整同币种同方向仓位；剥头皮和旧策略记录不会混入。</p>
+          </div>
+          <button className="secondary" onClick={onSync}>同步历史信用分</button>
+        </div>
+        {renderRows(extremeRows, "还没有归因到 Extreme V2 滚仓的实盘成交。")}
       </div>
       <div className="panel">
         <div className="panel-head">
           <div>
             <h2>盘口剥头皮专用信用分</h2>
-            <p>极限模式只使用盘口剥头皮引擎；这里的信用分只由盘口剥头皮成交结果加减，旧策略记录不参与仓位。</p>
+            <p>S3 以后才读取这张表；它只由盘口剥头皮成交结果加减，不继承滚仓阶段的输赢。</p>
           </div>
-          <button className="secondary" onClick={onSync}>同步历史信用分</button>
+          <span className={scalpNet >= 0 ? "positive-text" : "negative-text"}>累计净盈亏 {fmt(scalpNet, 4)} U</span>
         </div>
         {renderRows(scalpRows, "还没有归因到盘口剥头皮的实盘成交。")}
       </div>
@@ -742,6 +778,85 @@ function LiveLearningPanel({ data, onSync }: { data: LiveLearningData; onSync: (
       </div>
     </section>
   );
+}
+
+function StageRoutePanel({ route, profiles, stream, userStream, rate, equity }: { route: any; profiles: any[]; stream: any; userStream: any; rate: any; equity: any }) {
+  const routeReason: Record<string, string> = {
+    equity_range: "账户权益位于当前区间",
+    hysteresis_hold: "处于阶段切换缓冲区，暂不来回跳档",
+    awaiting_confirmation: "正在等待连续确认",
+    waiting_for_flat_position: "已有持仓，平仓后再切换策略",
+    manual_override: "人工临时指定",
+    stage_routing_disabled: "自动阶段路线已关闭",
+  };
+  const used = Number(rate.used_current_minute || 0);
+  const advertised = Number(rate.budgets?.advertised || rate.request_weight_limit || 0);
+  return (
+    <section className="stack">
+      {route.pending && (
+        <div className="alert"><AlertTriangle size={18} />当前持仓仍在保护中，系统将在空仓后切换到 {route.pending_stage}（{modeLabel[route.pending_mode] || route.pending_mode}）。</div>
+      )}
+      <div className="metrics">
+        <MetricCard title="当前阶段" value={`${route.stage || "-"} ${route.label || ""}`} sub={routeReason[route.reason] || route.reason || (route.stage ? "按账户权益默认计算" : "等待机器人同步")} tone="positive" />
+        <MetricCard title="实际执行策略" value={modeLabel[route.mode] || route.mode || "-"} sub={`策略信用：${strategyFamilyLabel(route.strategy_family)}`} />
+        <MetricCard title="账户权益" value={`${fmt(equity, 4)} U`} sub={`阶段确认 ${fmt(route.confirmation_count, 0)} / ${fmt(route.confirmation_required, 0)}`} />
+        <MetricCard title="单笔风险上限" value={`${fmt(route.risk_pct, 2)}%`} sub={`保证金上限 ${fmt(route.margin_pct, 1)}%`} tone={Number(route.risk_pct) >= 7 ? "negative" : ""} />
+        <MetricCard title="仓位约束" value={`${fmt(route.max_open_positions, 0)} 仓 / ${fmt(route.leverage, 1)}x`} sub={`当日亏损上限 ${fmt(route.daily_loss_limit_pct, 1)}%`} />
+        <MetricCard title="路由来源" value={route.source === "manual" ? "人工临时模式" : route.source === "disabled" ? "固定模式" : "权益自动路由"} sub={route.manual_until ? `到期：${new Date(route.manual_until).toLocaleString("zh-CN")}` : "使用 5% 升档、10% 降档缓冲"} />
+      </div>
+
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>自动阶段路线</h2>
+            <p>达到边界后需经过缓冲和连续确认；跨策略切换时有持仓就先保持原策略，避免半途改变保护逻辑。</p>
+          </div>
+        </div>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>阶段</th><th>权益区间</th><th>策略</th><th>策略信用</th><th>单笔风险</th><th>保证金上限</th><th>杠杆</th><th>最大持仓</th><th>当日亏损上限</th></tr></thead>
+            <tbody>
+              {profiles.map((profile) => (
+                <tr key={profile.stage} className={profile.stage === route.stage ? "active-row" : ""}>
+                  <td><span className={profile.stage === route.stage ? "pill ok" : "pill"}>{profile.stage}</span> {profile.label}</td>
+                  <td>{fmt(profile.min_equity, 0)} - {profile.max_equity === null ? "无上限" : fmt(profile.max_equity, 0)} U</td>
+                  <td>{profile.overlay_mode ? `${modeLabel[profile.recommended_mode] || profile.recommended_mode} + ${modeLabel[profile.overlay_mode] || profile.overlay_mode}` : modeLabel[profile.recommended_mode] || profile.recommended_mode}</td>
+                  <td>{profile.overlay_mode ? "网格 / 剥头皮独立" : strategyFamilyLabel(profile.strategy_family)}</td>
+                  <td>{fmt(profile.risk_pct, 2)}%</td>
+                  <td>{fmt(profile.margin_pct, 1)}%</td>
+                  <td>{fmt(profile.leverage, 1)}x</td>
+                  <td>{fmt(profile.max_open_positions, 0)}</td>
+                  <td>{fmt(profile.daily_loss_limit_pct, 1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="panel">
+        <div className="panel-head"><div><h2>行情与账户数据链路</h2><p>WebSocket 承担实时数据，REST 只用于快照、交易和断线兜底，并为保护单预留请求额度。</p></div></div>
+        <div className="metrics">
+          <MetricCard title="公共行情流" value={stream.connected ? "已连接" : "已断开"} sub={`${fmt(stream.ticker_count, 0)} 行情 · ${fmt(stream.depth_count, 0)} 盘口 · 年龄 ${fmt(stream.age_seconds, 0)} 秒`} tone={stream.connected ? "positive" : "negative"} />
+          <MetricCard title="增量订单簿" value={`${fmt(stream.full_orderbook_count, 0)} 个`} sub={route.mode === "yolo_scalp" ? "剥头皮阶段按精选候选启用" : "当前阶段保持轻量 depth5"} />
+          <MetricCard title="私有账户流" value={userStream.connected ? "已连接" : "REST 兜底"} sub={userStream.last_error || `账户年龄 ${fmt(userStream.account_age_seconds, 0)} 秒`} tone={userStream.connected ? "positive" : ""} />
+          <MetricCard title="REST 本分钟" value={`${fmt(used, 0)} / ${fmt(advertised, 0)}`} sub={`交易所额度使用 ${fmt(rate.exchange_limit_used_pct, 1)}%`} tone={rate.cooldown_active ? "negative" : "positive"} />
+          <MetricCard title="普通任务预算" value={`${fmt(rate.budgets?.normal, 0)}`} sub={`已使用普通预算 ${fmt(rate.normal_budget_used_pct, 1)}%`} />
+          <MetricCard title="限流状态" value={rate.cooldown_active ? "等待恢复" : "正常"} sub={rate.cooldown_active ? `${fmt(rate.cooldown_remaining_seconds, 0)} 秒后重试` : "关键保护和下单保留独立额度"} tone={rate.cooldown_active ? "negative" : "positive"} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function strategyFamilyLabel(value?: string) {
+  const labels: Record<string, string> = {
+    extreme_v2_roll: "Extreme V2 滚仓",
+    orderbook_scalp: "盘口剥头皮",
+    grid_stable: "稳定网格",
+    legacy_mixed: "旧混合策略",
+  };
+  return labels[value || ""] || value || "旧混合策略";
 }
 
 function signalLabel(value: string) {
@@ -976,6 +1091,15 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
   const select = (key: string, label: string, options: string[][], hint?: string) => (
     <label>{label}<select value={form[key] ?? ""} onChange={(event) => update(key, event.target.value)}>{options.map(([value, name]) => <option value={value} key={value}>{name}</option>)}</select>{hint && <small>{hint}</small>}</label>
   );
+  const datetime = (key: string, label: string, hint?: string) => {
+    const parsed = form[key] ? new Date(form[key]) : null;
+    const value = parsed && !Number.isNaN(parsed.getTime())
+      ? new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+      : "";
+    return (
+      <label>{label}<input type="datetime-local" value={value} onChange={(event) => update(key, event.target.value ? new Date(event.target.value).toISOString() : "")} />{hint && <small>{hint}</small>}</label>
+    );
+  };
   const toggle = (key: string, label: string, hint?: string) => (
     <label className="switch-row">
       <span><strong>{label}</strong>{hint && <small>{hint}</small>}</span>
@@ -988,7 +1112,9 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
       <div className="panel">
         <h2>基础配置</h2>
         <div className="form-grid">
-          {select("growth_mode", "增长模式", modeOptions, "50U 阶段建议锦标赛；系统也会按权益自动切换。")}
+          {toggle("stage_routing_enabled", "按权益自动选择阶段", "推荐开启：S0-S2 运行 Extreme V2，S3 运行盘口剥头皮，S4 进入网格阶段")}
+          {select("stage_manual_mode", "阶段控制", stageManualOptions, "选择自动时忽略人工到期时间；手动模式只建议用于临时诊断")}
+          {form.stage_manual_mode && form.stage_manual_mode !== "auto" && datetime("stage_manual_until", "手动模式到期时间", "到期后自动恢复权益路由；留空表示持续手动，风险较高")}
           <SymbolMultiPicker value={form.stage1_symbols} onChange={(symbols) => update("stage1_symbols", symbols)} />
           {number("recall_pool_limit", "召回池上限", "默认 600；只做低成本预筛，不会全部回测")}
           {number("coarse_pool_limit", "粗排池上限", "默认 220；用成交额和异动先筛选")}
@@ -1000,9 +1126,9 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("min_24h_volume_usdt", "最低 24h 成交额", "过滤流动性差的币")}
           {toggle("auto_discover_symbols", "自动发现加密币", "只纳入 Binance U 本位永续币")}
           {toggle("market_stream_dynamic_enabled", "动态 WebSocket 机会池", "粗排热点、候选币、持仓币会自动进入实时盯盘池")}
-          {number("market_stream_max_symbols", "实时盯盘币数上限", "2G VPS 默认 50；越高越实时，但连接和写入压力越大")}
-          {number("market_stream_rebuild_seconds", "实时盯盘重建间隔", "默认 60 秒；避免 WebSocket 频繁重连")}
-          {number("stream_hot_symbols_limit", "热点进入盯盘数量", "默认 25；来自漏斗粗排和候选")}
+          {number("market_stream_max_symbols", "实时盯盘币数上限", "2G VPS 默认 80；公共行情流承担大部分实时更新")}
+          {number("market_stream_rebuild_seconds", "实时盯盘重建间隔", "默认 300 秒；候选变化不足时不重连，持仓币仍会立即加入")}
+          {number("stream_hot_symbols_limit", "热点进入盯盘数量", "默认 40；来自漏斗粗排和候选")}
           {toggle("fast_lane_enabled", "WebSocket 实时快车道", "异动事件独立于全量扫描，优先在数秒内完成决策")}
           {number("fast_lane_poll_seconds", "快车道轮询秒数", "默认 2 秒；只读取本地事件队列，不持续消耗 Binance REST")}
           {number("fast_lane_symbol_cooldown_seconds", "同币快车道冷却秒数", "默认 10 秒；合并连续推送，避免重复计算和追单")}
@@ -1010,7 +1136,6 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("fast_lane_max_symbols", "快车道单次币数", "默认 3；优先最高分异动，避免挤占交易API预算")}
           {number("fast_lane_budget_seconds", "快车道计算预算", "默认 5 秒；超过预算只完成最高优先级币")}
           {number("telemetry_retention_days", "系统明细保留天数", "默认 30 天；成交与实盘学习记录不受影响")}
-          {toggle("auto_risk_by_equity", "按权益自动切换风险", "小于 300U 自动极限梭哈；300-10000U 自动极限冲刺；更高权益转进攻/稳健")}
           {toggle("target_controller_enabled", "开启目标进度控制器", "按 30 天到 1万、再 30 天到 10万、再 30 天到 100万计算进度")}
           {toggle("target_risk_adjustment_enabled", "目标进度参与仓位", "默认关闭；开启后系统会根据领先或落后目标曲线调整风险倍率")}
           {number("target_phase_a_equity", "阶段A目标权益", "默认 10000U")}
@@ -1025,6 +1150,45 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("live_trading_enabled", "允许实盘交易", "还需要确认短语才会实盘")}
         </div>
       </div>
+      <details className="panel">
+        <summary>自动阶段参数</summary>
+        <p>以下是已接入实际下单风控的默认值。新手建议保持默认，只在完整回测后调整。</p>
+        <div className="form-grid">
+          {number("stage_switch_up_buffer_pct", "升档缓冲%", "默认 5%；越过阶段线后还要多 5% 权益才升档")}
+          {number("stage_switch_down_buffer_pct", "降档缓冲%", "默认 10%；避免权益在边界附近反复切换")}
+          {number("stage_switch_confirmations", "切换连续确认次数", "默认 3 次；跨策略且有持仓时还会等到空仓")}
+          {toggle("strategy_family_credit_enabled", "按策略隔离实盘信用", "Extreme V2、盘口剥头皮和网格分别学习，不互相继承历史奖惩")}
+          {number("stage_s0_risk_pct", "S0 单笔风险%", "0-300U，默认 10%")}
+          {number("stage_s0_margin_pct", "S0 保证金上限%", "默认 90%")}
+          {number("stage_s0_max_leverage", "S0 最大杠杆", "默认 5x")}
+          {number("stage_s0_max_open_positions", "S0 最大持仓", "默认 1")}
+          {number("stage_s0_daily_loss_limit_pct", "S0 当日亏损上限%", "默认 30%")}
+          {number("stage_s1_risk_pct", "S1 单笔风险%", "300-10000U，默认 7%")}
+          {number("stage_s1_margin_pct", "S1 保证金上限%", "默认 85%")}
+          {number("stage_s1_max_leverage", "S1 最大杠杆", "默认 5x")}
+          {number("stage_s1_max_open_positions", "S1 最大持仓", "默认 1")}
+          {number("stage_s1_daily_loss_limit_pct", "S1 当日亏损上限%", "默认 25%")}
+          {number("stage_s2_risk_pct", "S2 单笔风险%", "10000-100000U，默认 3%")}
+          {number("stage_s2_margin_pct", "S2 保证金上限%", "默认 60%")}
+          {number("stage_s2_max_leverage", "S2 最大杠杆", "默认 4x")}
+          {number("stage_s2_max_open_positions", "S2 最大持仓", "默认 2")}
+          {number("stage_s2_daily_loss_limit_pct", "S2 当日亏损上限%", "默认 12%")}
+          {number("stage_s3_risk_pct", "S3 单笔风险%", "100000-1000000U，盘口剥头皮默认 0.35%")}
+          {number("stage_s3_margin_pct", "S3 保证金上限%", "默认 25%")}
+          {number("stage_s3_max_leverage", "S3 最大杠杆", "默认 3x")}
+          {number("stage_s3_max_open_positions", "S3 最大持仓", "默认 4")}
+          {number("stage_s3_daily_loss_limit_pct", "S3 当日亏损上限%", "默认 3%")}
+          {number("stage_s4_risk_pct", "S4 单笔风险%", "1000000U 以上，默认 0.2%")}
+          {number("stage_s4_margin_pct", "S4 保证金上限%", "默认 15%")}
+          {number("stage_s4_max_leverage", "S4 最大杠杆", "默认 2x")}
+          {number("stage_s4_max_open_positions", "S4 最大持仓", "默认 8")}
+          {number("stage_s4_daily_loss_limit_pct", "S4 当日亏损上限%", "默认 1.5%")}
+          {toggle("stage_s4_scalp_overlay_enabled", "S4 叠加盘口剥头皮", "网格之外用独立低风险额度捕捉短时机会，并自动避开网格币种")}
+          {number("stage_s4_scalp_risk_pct", "S4 剥头皮单笔风险%", "默认 0.1%")}
+          {number("stage_s4_scalp_margin_pct", "S4 剥头皮保证金上限%", "默认 5%")}
+          {number("stage_s4_scalp_daily_loss_limit_pct", "S4 剥头皮当日亏损上限%", "默认 1%")}
+        </div>
+      </details>
       <details className="panel">
         <summary>进阶参数</summary>
         <div className="form-grid">
@@ -1067,6 +1231,13 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("yolo_scalp_max_open_positions", "极限梭哈最大持仓数", "默认 1；满仓短打阶段不建议同时持有多个币")}
           {toggle("yolo_scalp_orderbook_engine_enabled", "盘口剥头皮引擎", "极限梭哈优先使用 WebSocket 盘口、1m 异动和扣费后空间来触发快进快出")}
           {toggle("yolo_scalp_orderbook_only_enabled", "极限只跑盘口剥头皮", "开启后极限模式不会执行旧火药桶、抢跑或弱质量试探；旧信号只保留观察")}
+          {toggle("orderbook_full_stream_enabled", "剥头皮增量订单簿", "只在 S3 盘口剥头皮阶段启用 100ms 深度更新，S0-S2 不承担这部分开销")}
+          {number("orderbook_full_symbols_limit", "增量订单簿币数", "默认 20；只给精选候选、持仓和热点使用")}
+          {number("orderbook_snapshot_limit", "订单簿快照档位", "默认 100 档；断档时用 REST 快照重建")}
+          {toggle("yolo_scalp_trade_flow_enabled", "主动成交流确认", "使用逐笔聚合成交判断主动买卖方向，只在盘口剥头皮阶段订阅")}
+          {number("yolo_scalp_trade_flow_window_seconds", "主动成交统计窗口秒", "默认 5 秒")}
+          {number("yolo_scalp_trade_flow_weight", "主动成交方向权重", "默认 0.35；与本地 L2 盘口失衡共同评分")}
+          {number("yolo_scalp_trade_flow_trigger_notional_usdt", "主动成交异动门槛U", "默认 100000U；达到后进入实时机会队列")}
           {number("yolo_scalp_orderbook_max_spread_pct", "剥头皮最大点差%", "默认 0.08%；点差太大时手续费和滑点会吃掉毛利")}
           {number("yolo_scalp_orderbook_min_depth_notional_usdt", "剥头皮最低盘口深度U", "默认 1000U；depth5 太薄不做")}
           {number("yolo_scalp_orderbook_probe_min_depth_notional_usdt", "失衡试探最低盘口深度U", "默认 300U；只用于小仓试探，盘口冲击和放量剥头皮仍用更高深度")}

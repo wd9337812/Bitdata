@@ -18,6 +18,7 @@ from app.opportunity_queue import read_opportunities
 from app.protection_audit import audit_account_protection
 from app.risk import direction_cooldown_key, live_trading_allowed
 from app.runtime_protection import manage_runtime_protection
+from app.stage_modes import apply_stage_route
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
@@ -30,6 +31,7 @@ from app.trading_engine import (
 from app.state_store import load_state, save_state
 from app.runtime_snapshot import market_rows_from_scan, update_runtime_snapshot
 from app.telemetry import compact_decision, maintain_telemetry, record_equity_snapshot, record_event, record_event_throttled, record_strategy_run
+from app.user_stream import account_from_user_stream, seed_user_account, start_user_stream_thread
 
 
 _EXECUTION_LOCK = threading.Lock()
@@ -217,6 +219,27 @@ def _position_keys(account: dict) -> set[tuple[str, str, float]]:
 def execute_with_freshness_guard(client: BinanceFuturesClient, decision: dict, config: dict, account: dict) -> dict:
     if decision.get("action") not in {"OPEN_LONG", "OPEN_SHORT"}:
         return execute_stage1_market_order(client, decision, config)
+
+
+def stage4_scalp_overlay_config(config: dict, state: dict) -> dict | None:
+    route = state.get("stage_route") or {}
+    if route.get("stage") != "S4" or not config.get("stage_s4_scalp_overlay_enabled", True):
+        return None
+    overlay_route = {
+        **route,
+        "label": "网格叠加盘口剥头皮",
+        "mode": "yolo_scalp",
+        "recommended_mode": "yolo_scalp",
+        "strategy_family": "orderbook_scalp",
+        "risk_pct": float(config.get("stage_s4_scalp_risk_pct", 0.1)),
+        "base_risk_pct": float(config.get("stage_s4_scalp_risk_pct", 0.1)),
+        "margin_pct": float(config.get("stage_s4_scalp_margin_pct", 5.0)),
+        "daily_loss_limit_pct": float(config.get("stage_s4_scalp_daily_loss_limit_pct", 1.0)),
+    }
+    return apply_stage_route(
+        {**config, "_excluded_scan_symbols": list(config.get("stage2_symbols", ["BTCUSDT", "ETHUSDT"]))},
+        overlay_route,
+    )
     with _EXECUTION_LOCK, request_priority("critical"):
         fresh_account = summarize_account(client.account_live())
         if _position_keys(fresh_account) != _position_keys(account):
@@ -247,7 +270,13 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             record_event("warning", "binance_auth", "模拟交易模式使用 50U 模拟账户，不依赖 Binance 私有接口。")
     elif config.get("api_key") and config.get("api_secret"):
         try:
-            account = summarize_account(client.account())
+            streamed_account = account_from_user_stream(int(config.get("user_stream_account_max_age_seconds", 90)))
+            if streamed_account:
+                account = summarize_account(streamed_account)
+            else:
+                raw_account = client.account()
+                seed_user_account(raw_account)
+                account = summarize_account(raw_account)
         except BinanceRateLimitError:
             raise
         except Exception as exc:
@@ -255,6 +284,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     else:
         raise RuntimeError("实盘模式需要先配置 Binance API Key 和 Secret。")
     state = sync_stage(config, state, account)
+    config = apply_stage_route(config, state.get("stage_route"))
     maybe_sync_live_reaction(client, config, state, account, symbols_override)
     if not fast_lane:
         maybe_sync_live_learning(client, config, state)
@@ -278,26 +308,35 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
                 record_event("info", "runtime_protection", "runtime protection checked", {**protection_status, "actions": noisy_actions})
         maybe_generate_daily_report(config, state)
 
+    grid_results: list[dict] = []
     if state.get("stage") == "grid":
-        results = []
-        for symbol in config.get("stage2_symbols", ["BTCUSDT", "ETHUSDT"]):
-            bars = client.klines(symbol.upper(), config["interval"], int(config["limit"]))
-            plan = build_grid_decisions(config, account, {symbol.upper(): bars})[0]
-            position_amount = 0.0
-            for position in account.get("positions", []):
-                if position.get("symbol") == symbol.upper():
-                    position_amount = float(position.get("positionAmt", 0))
-            result = execute_grid_orders(client, plan, config, position_amount=position_amount)
-            results.append(result)
-            record_strategy_run(
-                state,
-                account,
-                {"symbol": symbol.upper(), "action": plan.get("status"), "reason": plan.get("reason"), "signal": {}, "scan": {}, "candidate": plan},
-                result,
-            )
-        record_equity_snapshot(account, state, mode="grid", action="grid_checked", reason="grid_loop")
-        record_event("info", "grid", "完成网格检查", {"results": results})
-        return {"status": "grid_checked", "results": results, "loop_seconds": int(config.get("grid_loop_seconds", 300))}
+        if not fast_lane:
+            for symbol in config.get("stage2_symbols", ["BTCUSDT", "ETHUSDT"]):
+                bars = client.klines(symbol.upper(), config["interval"], int(config["limit"]))
+                plan = build_grid_decisions(config, account, {symbol.upper(): bars})[0]
+                position_amount = 0.0
+                for position in account.get("positions", []):
+                    if position.get("symbol") == symbol.upper():
+                        position_amount = float(position.get("positionAmt", 0))
+                result = execute_grid_orders(client, plan, config, position_amount=position_amount)
+                grid_results.append(result)
+                record_strategy_run(
+                    state,
+                    account,
+                    {"symbol": symbol.upper(), "action": plan.get("status"), "reason": plan.get("reason"), "signal": {}, "scan": {}, "candidate": plan},
+                    result,
+                )
+            record_equity_snapshot(account, state, mode="grid", action="grid_checked", reason="grid_loop")
+            record_event("info", "grid", "完成网格检查", {"results": grid_results})
+        overlay_config = stage4_scalp_overlay_config(config, state)
+        if overlay_config is None:
+            return {"status": "grid_checked", "results": grid_results, "loop_seconds": int(config.get("grid_loop_seconds", 300))}
+        config = overlay_config
+        excluded = {str(symbol).upper() for symbol in config.get("_excluded_scan_symbols", [])}
+        if symbols_override is not None:
+            symbols_override = [symbol for symbol in symbols_override if symbol.upper() not in excluded]
+            if fast_lane and not symbols_override:
+                return {"status": "grid_event_ignored", "results": grid_results, "loop_seconds": int(config.get("grid_loop_seconds", 300))}
 
     decision = build_best_growth_decision(
         client,
@@ -325,8 +364,8 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             return {
                 "status": "growth_checked",
                 "decision": decision,
-                "results": [result],
-                "loop_seconds": loop_seconds_for(config, ((decision.get("scan") or {}).get("mode") or {}).get("mode")),
+                "results": grid_results + [result],
+                "loop_seconds": int(config.get("grid_loop_seconds", 300)) if state.get("stage") == "grid" else loop_seconds_for(config, ((decision.get("scan") or {}).get("mode") or {}).get("mode")),
             }
         if not is_min_notional_rejection(exc):
             raise
@@ -415,8 +454,8 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     return {
         "status": "growth_checked",
         "decision": decision,
-        "results": [result],
-        "loop_seconds": loop_seconds_for(config, (scan.get("mode") or {}).get("mode")),
+        "results": grid_results + [result],
+        "loop_seconds": int(config.get("grid_loop_seconds", 300)) if grid_results else loop_seconds_for(config, (scan.get("mode") or {}).get("mode")),
     }
 
 
@@ -491,6 +530,7 @@ def _event_signature(events: list[dict]) -> str:
 def coordinator_main() -> None:
     load_dotenv()
     start_market_stream_thread(load_config)
+    start_user_stream_thread(load_config)
     threading.Thread(target=_background_scan_loop, name="background-scan", daemon=True).start()
     last_signature = ""
     last_processed_symbols: dict[str, float] = {}

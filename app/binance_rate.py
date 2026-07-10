@@ -51,6 +51,35 @@ def _rate_path() -> Path:
     return _data_dir() / "binance_rate_state.json"
 
 
+@contextmanager
+def _process_rate_lock():
+    path = _data_dir() / "binance_rate_state.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as file:
+        if os.name == "nt":
+            import msvcrt
+
+            file.seek(0, os.SEEK_END)
+            if file.tell() == 0:
+                file.write(b"0")
+                file.flush()
+            file.seek(0)
+            msvcrt.locking(file.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                file.seek(0)
+                msvcrt.locking(file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(file.fileno(), fcntl.LOCK_UN)
+
+
 def _cache_path() -> Path:
     return _data_dir() / "binance_cache.db"
 
@@ -145,12 +174,28 @@ def estimate_weight(path: str, params: dict[str, Any] | None = None, signed: boo
     return 1
 
 
-def before_request(weight: int, budget_per_minute: int = 600) -> None:
+def _rate_budgets(state: dict[str, Any], budget_per_minute: int | None = None) -> dict[str, int]:
+    advertised = max(1, int(state.get("request_weight_limit") or 2400))
+    normal = max(1, int(budget_per_minute or advertised * 0.25))
+    hard = max(normal, int(advertised * 0.50))
+    critical = max(hard, int(advertised * 0.90))
+    return {
+        "advertised": advertised,
+        "background": max(1, int(normal * 0.55)),
+        "normal": normal,
+        "realtime": hard,
+        "critical": critical,
+    }
+
+
+def before_request(weight: int, budget_per_minute: int | None = None, order_count: int = 0) -> None:
     now = time.time()
-    with _LOCK:
+    with _LOCK, _process_rate_lock():
         state = _read_json(_rate_path(), {})
         cooldown_until = float(state.get("cooldown_until") or 0)
-        if cooldown_until > now:
+        priority = _REQUEST_PRIORITY.get()
+        exchange_cooldown = int(state.get("last_status_code") or 0) in {418, 429}
+        if cooldown_until > now and (priority != "critical" or exchange_cooldown):
             raise BinanceRateLimitError(
                 f"Binance REST 正在限流等待，预计 {int(cooldown_until - now)} 秒后恢复。",
                 retry_after=cooldown_until - now,
@@ -158,49 +203,103 @@ def before_request(weight: int, budget_per_minute: int = 600) -> None:
             )
         bucket = _minute_bucket(now)
         if int(state.get("bucket") or -1) != bucket:
-            state = {
-                **state,
-                "bucket": bucket,
-                "used_estimated": 0,
-                "last_error": "",
-            }
-        used = int(state.get("used_estimated") or 0)
-        priority = _REQUEST_PRIORITY.get()
-        priority_fraction = {"background": 0.70, "normal": 0.85, "realtime": 0.95, "critical": 1.0}.get(priority, 0.85)
-        priority_budget = max(1, int(budget_per_minute * priority_fraction))
-        if used + weight > priority_budget and priority in {"background", "normal"}:
-            raise BinanceRateLimitError(
-                f"REST预算为实时交易预留，{priority}任务延后。",
-                retry_after=5,
-                status_code=429,
-            )
-        if used + weight > budget_per_minute:
-            wait = (bucket + 1) * 60 - now + 1
+            state = {**state, "bucket": bucket, "used_estimated": 0, "last_error": ""}
+        header_used = int(state.get("used_weight_1m") or 0) if int(state.get("header_bucket") or -1) == bucket else 0
+        used = max(int(state.get("used_estimated") or 0), header_used)
+        budgets = _rate_budgets(state, budget_per_minute)
+        priority_budget = budgets.get(priority, budgets["normal"])
+        if used + weight > priority_budget:
+            wait = max(1.0, (bucket + 1) * 60 - now + 0.25)
+            if priority in {"background", "normal"}:
+                raise BinanceRateLimitError(
+                    f"REST 预算为实时交易预留，{priority}任务延后。",
+                    retry_after=min(wait, 5.0),
+                    status_code=429,
+                )
+            if priority == "realtime":
+                raise BinanceRateLimitError(
+                    "实时 REST 预算已达内部上限，等待下一分钟恢复。",
+                    retry_after=wait,
+                    status_code=429,
+                )
             state["cooldown_until"] = now + wait
-            state["last_error"] = f"本地 REST 预算达到 {budget_per_minute}/min，等待下一分钟恢复。"
+            state["last_error"] = "关键 REST 预算已达安全上限，等待下一分钟恢复。"
             _write_json(_rate_path(), state)
             raise BinanceRateLimitError(state["last_error"], retry_after=wait, status_code=429)
+
+        order_10s_bucket = int(now // 10)
+        if int(state.get("order_10s_bucket") or -1) != order_10s_bucket:
+            state["order_10s_bucket"] = order_10s_bucket
+            state["order_used_10s_estimated"] = 0
+        if int(state.get("order_1m_bucket") or -1) != bucket:
+            state["order_1m_bucket"] = bucket
+            state["order_used_1m_estimated"] = 0
+        if order_count:
+            order_limit_10s = max(1, int(state.get("order_limit_10s") or 300))
+            order_limit_1m = max(1, int(state.get("order_limit_1m") or 1200))
+            order_used_10s = max(
+                int(state.get("order_used_10s_estimated") or 0),
+                int(state.get("order_count_10s") or 0) if int(state.get("order_header_10s_bucket") or -1) == order_10s_bucket else 0,
+            )
+            order_used_1m = max(
+                int(state.get("order_used_1m_estimated") or 0),
+                int(state.get("order_count_1m") or 0) if int(state.get("order_header_1m_bucket") or -1) == bucket else 0,
+            )
+            if order_used_10s + order_count > int(order_limit_10s * 0.9) or order_used_1m + order_count > int(order_limit_1m * 0.9):
+                wait = max(1.0, (order_10s_bucket + 1) * 10 - now + 0.25)
+                raise BinanceRateLimitError("订单频率达到内部安全上限。", retry_after=wait, status_code=429)
+            state["order_used_10s_estimated"] = order_used_10s + order_count
+            state["order_used_1m_estimated"] = order_used_1m + order_count
+
         state["used_estimated"] = used + weight
+        state["budgets"] = budgets
         state["updated_at"] = now
         _write_json(_rate_path(), state)
 
 
 def after_response(headers: Any) -> None:
-    with _LOCK:
+    with _LOCK, _process_rate_lock():
         state = _read_json(_rate_path(), {})
+        now = time.time()
         used_header = headers.get("X-MBX-USED-WEIGHT-1M") if headers else None
         order_10s = headers.get("X-MBX-ORDER-COUNT-10S") if headers else None
         order_1m = headers.get("X-MBX-ORDER-COUNT-1M") if headers else None
         if used_header is not None:
             try:
                 state["used_weight_1m"] = int(used_header)
+                state["header_bucket"] = _minute_bucket(now)
             except ValueError:
                 state["used_weight_1m"] = used_header
         if order_10s is not None:
             state["order_count_10s"] = order_10s
+            state["order_header_10s_bucket"] = int(now // 10)
         if order_1m is not None:
             state["order_count_1m"] = order_1m
-        state["updated_at"] = time.time()
+            state["order_header_1m_bucket"] = _minute_bucket(now)
+        state.pop("last_status_code", None)
+        state["updated_at"] = now
+        _write_json(_rate_path(), state)
+
+
+def configure_exchange_limits(exchange_info: dict[str, Any]) -> None:
+    updates: dict[str, int] = {}
+    for item in exchange_info.get("rateLimits") or []:
+        limit_type = str(item.get("rateLimitType") or "")
+        interval = str(item.get("interval") or "")
+        interval_num = int(item.get("intervalNum") or 1)
+        limit = int(item.get("limit") or 0)
+        if limit_type == "REQUEST_WEIGHT" and interval == "MINUTE" and interval_num == 1:
+            updates["request_weight_limit"] = limit
+        elif limit_type == "ORDERS" and interval == "SECOND" and interval_num == 10:
+            updates["order_limit_10s"] = limit
+        elif limit_type == "ORDERS" and interval == "MINUTE" and interval_num == 1:
+            updates["order_limit_1m"] = limit
+    if not updates:
+        return
+    with _LOCK, _process_rate_lock():
+        state = _read_json(_rate_path(), {})
+        state.update(updates)
+        state["limits_updated_at"] = time.time()
         _write_json(_rate_path(), state)
 
 
@@ -211,7 +310,7 @@ def register_rate_error(status_code: int, text: str, retry_after_header: str | N
     if status_code == 418:
         retry_after += 60
     now = time.time()
-    with _LOCK:
+    with _LOCK, _process_rate_lock():
         state = _read_json(_rate_path(), {})
         state.update(
             {
@@ -226,11 +325,22 @@ def register_rate_error(status_code: int, text: str, retry_after_header: str | N
 
 
 def rate_status() -> dict[str, Any]:
-    state = _read_json(_rate_path(), {})
+    with _LOCK, _process_rate_lock():
+        state = _read_json(_rate_path(), {})
     now = time.time()
     cooldown_until = float(state.get("cooldown_until") or 0)
+    budgets = _rate_budgets(state)
+    bucket = _minute_bucket(now)
+    used = max(
+        int(state.get("used_estimated") or 0) if int(state.get("bucket") or -1) == bucket else 0,
+        int(state.get("used_weight_1m") or 0) if int(state.get("header_bucket") or -1) == bucket else 0,
+    )
     return {
         **state,
+        "budgets": budgets,
+        "used_current_minute": used,
+        "normal_budget_used_pct": round(used / max(1, budgets["normal"]) * 100, 2),
+        "exchange_limit_used_pct": round(used / max(1, budgets["advertised"]) * 100, 2),
         "cooldown_active": cooldown_until > now,
         "cooldown_remaining_seconds": max(0, int(cooldown_until - now)),
     }

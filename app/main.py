@@ -15,7 +15,13 @@ from fastapi.staticfiles import StaticFiles
 from app.binance_client import BinanceFuturesClient
 from app.config_store import load_config, save_config
 from app.learning_report import latest_daily_learning_report, save_daily_learning_report
-from app.live_learning import ORDERBOOK_SCALP_FAMILY, list_live_scores, list_strategy_live_scores, sync_live_learning_from_binance
+from app.live_learning import (
+    EXTREME_V2_FAMILY,
+    ORDERBOOK_SCALP_FAMILY,
+    list_live_scores,
+    list_strategy_live_scores,
+    sync_live_learning_from_binance,
+)
 from app.live_reaction import list_live_reactions, list_recent_live_reaction_trades, sync_live_reaction_from_binance
 from app.models import BotControlPayload, ExecutePayload, TradingConfig
 from app.market_stream import stream_status
@@ -24,7 +30,7 @@ from app.product_completion import product_completion_summary
 from app.runtime_protection import manage_runtime_protection
 from app.runtime_snapshot import read_runtime_snapshot
 from app.scanner import mode_config
-from app.stage_modes import stage_profile_for_equity
+from app.stage_modes import all_stage_profiles, stage_profile_for_equity
 from app.stage_simulation import simulate_stage_path
 from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
@@ -39,6 +45,7 @@ from app.telemetry import (
     record_equity_snapshot,
     record_event,
 )
+from app.user_stream import user_stream_status
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
@@ -52,7 +59,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.2.0")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.3.0")
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
 if assets_dir.exists():
@@ -151,11 +158,14 @@ def status() -> dict[str, Any]:
         "state": state,
         "account": account_summary,
         "target_progress": target_progress(config, state, account_summary),
-        "stage_profile": stage_profile_for_equity(account_summary.get("equity"), config),
+        "stage_profile": state.get("stage_route") or stage_profile_for_equity(account_summary.get("equity"), config),
+        "stage_route": state.get("stage_route") or {},
+        "stage_profiles": all_stage_profiles(config),
         "product_completion": product_completion_summary(config),
         "binance_rate": rate_status(),
         "cache": cache_status(),
         "market_stream": stream_status(),
+        "user_stream": user_stream_status(),
         "opportunity_queue": opportunity_status(
             max_age_seconds=int(config.get("opportunity_queue_ttl_seconds", 240)),
             limit=int(config.get("opportunity_queue_scan_limit", 50)),
@@ -233,6 +243,7 @@ def live_learning(limit: int = 100) -> dict[str, Any]:
         "scores": list_live_scores(limit, config),
         "strategy_scores": list_strategy_live_scores(limit, config),
         "scalp_scores": list_strategy_live_scores(limit, config, strategy_family=ORDERBOOK_SCALP_FAMILY),
+        "extreme_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V2_FAMILY),
     }
 
 

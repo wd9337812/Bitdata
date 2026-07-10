@@ -199,6 +199,10 @@ def effective_position_risk(
         max_risk = scalp_cap if scalp_cap > 0 else max_risk
     if yolo_profile.get("enabled"):
         max_risk = float(yolo_profile.get("max_risk_pct") or max_risk)
+    stage_route = config.get("_stage_route") or {}
+    stage_risk_cap = float(stage_route.get("risk_pct") or 0.0)
+    if stage_risk_cap > 0:
+        max_risk = min(max_risk, stage_risk_cap) if max_risk > 0 else stage_risk_cap
     if max_risk > 0:
         final_risk = min(final_risk, max_risk)
     return {
@@ -211,6 +215,7 @@ def effective_position_risk(
         "target_multiplier": round(target_multiplier, 6),
         "risk_floor_pct": round(risk_floor, 6),
         "max_risk_pct": round(max_risk, 6),
+        "stage_risk_cap_pct": round(stage_risk_cap, 6),
         "final_risk_pct": round(final_risk, 8),
         "yolo_scalp_profile": yolo_profile,
     }

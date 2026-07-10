@@ -13,10 +13,11 @@ from app.binance_rate import (
     before_request,
     cache_get,
     cache_set,
+    configure_exchange_limits,
     estimate_weight,
     register_rate_error,
 )
-from app.market_stream import overlay_stream_kline, stream_depth, stream_ticker
+from app.market_stream import overlay_stream_kline, stream_depth, stream_ticker, stream_tickers
 
 INTERVAL_MS = {
     "1m": 60_000,
@@ -63,7 +64,8 @@ class BinanceFuturesClient:
             raise ValueError("Binance API key and secret are required for signed requests.")
         payload = dict(params or {})
         weight = estimate_weight(path, payload, signed=True)
-        before_request(weight)
+        order_count = 1 if method.upper() == "POST" and path.endswith(("/order", "/algoOrder")) else 0
+        before_request(weight, order_count=order_count)
         payload.setdefault("recvWindow", 10_000)
         payload["timestamp"] = int(time.time() * 1000)
         query = urlencode(payload, doseq=True)
@@ -84,12 +86,32 @@ class BinanceFuturesClient:
             raise RuntimeError(f"Binance signed API {response.status_code}: {response.text}")
         return response.json()
 
+    def api_key_request(self, method: str, path: str, params: dict[str, Any] | None = None) -> Any:
+        if not self.api_key:
+            raise ValueError("Binance API key is required for this request.")
+        before_request(1)
+        response = requests.request(
+            method.upper(),
+            self.base_url + path,
+            params=params or {},
+            headers={"X-MBX-APIKEY": self.api_key},
+            timeout=self.timeout,
+        )
+        after_response(response.headers)
+        if response.status_code in {418, 429}:
+            raise register_rate_error(response.status_code, response.text, response.headers.get("Retry-After"))
+        if not response.ok:
+            raise RuntimeError(f"Binance API key request {response.status_code}: {response.text}")
+        return response.json() if response.text else {}
+
     def exchange_info(self) -> Any:
         key = "exchange_info"
         cached = cache_get(key, 3600)
         if cached:
+            configure_exchange_limits(cached.value)
             return cached.value
         data = self.public_get("/fapi/v1/exchangeInfo")
+        configure_exchange_limits(data)
         cache_set(key, data)
         return data
 
@@ -147,8 +169,11 @@ class BinanceFuturesClient:
 
     def ticker_24h(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
         key = "ticker_24h:all"
+        streamed_all = stream_tickers(max_age_seconds=15)
         cached = cache_get(key, 30)
-        if cached:
+        if len(streamed_all) >= 50:
+            data = streamed_all
+        elif cached:
             data = cached.value
         else:
             data = self.public_get("/fapi/v1/ticker/24hr")
@@ -203,7 +228,7 @@ class BinanceFuturesClient:
     def depth(self, symbol: str, limit: int = 5) -> Any:
         item = stream_depth(symbol)
         if item and item.get("bids") and item.get("asks"):
-            return {"bids": item["bids"], "asks": item["asks"]}
+            return dict(item)
         key = f"depth:{symbol.upper()}:{limit}"
         cached = cache_get(key, 10)
         if cached:
@@ -252,6 +277,19 @@ class BinanceFuturesClient:
     def open_algo_orders(self, symbol: str | None = None) -> Any:
         params = {"symbol": symbol.upper()} if symbol else {}
         return self.signed_request("GET", "/fapi/v1/openAlgoOrders", params)
+
+    def start_user_stream(self) -> str:
+        data = self.api_key_request("POST", "/fapi/v1/listenKey")
+        listen_key = str(data.get("listenKey") or "")
+        if not listen_key:
+            raise RuntimeError("Binance did not return a user stream listenKey.")
+        return listen_key
+
+    def keepalive_user_stream(self, listen_key: str) -> Any:
+        return self.api_key_request("PUT", "/fapi/v1/listenKey", {"listenKey": listen_key})
+
+    def close_user_stream(self, listen_key: str) -> Any:
+        return self.api_key_request("DELETE", "/fapi/v1/listenKey", {"listenKey": listen_key})
 
     def position_side_dual(self) -> Any:
         return self.signed_request("GET", "/fapi/v1/positionSide/dual")

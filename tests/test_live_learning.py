@@ -170,6 +170,59 @@ def test_yolo_orderbook_scalp_uses_experiment_credit_with_legacy_soft_discount(m
     assert any("旧策略信用仅展示" in item for item in candidate["live_credit_adjustment"]["reasons"])
 
 
+def test_extreme_v2_uses_its_own_strategy_credit(monkeypatch):
+    monkeypatch.setattr(
+        "app.live_learning.live_score_for",
+        lambda symbol, direction, config: {
+            "enabled": True,
+            "score": 10,
+            "status": "penalty",
+            "status_label": "旧策略惩罚",
+            "closed_trades": 3,
+            "wins": 0,
+            "losses": 3,
+            "consecutive_wins": 0,
+            "consecutive_losses": 3,
+            "penalty_until": None,
+            "commission": 1,
+            "net_pnl": -5,
+            "profit_factor": 0,
+            "notes": [],
+        },
+    )
+    monkeypatch.setattr(
+        "app.live_learning.strategy_live_score_for",
+        lambda symbol, direction, strategy_family, config: {
+            "enabled": True,
+            "score": 50,
+            "status": "new",
+            "status_label": "极限 V2 新策略观察",
+            "strategy_family": strategy_family,
+            "closed_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "consecutive_wins": 0,
+            "consecutive_losses": 0,
+            "penalty_until": None,
+            "commission": 0,
+            "net_pnl": 0,
+            "profit_factor": 0,
+            "notes": [],
+        },
+    )
+
+    candidate = apply_live_credit_to_candidate(
+        {"symbol": "SOLUSDT", "direction": "LONG", "mode": "extreme_sprint", "entry_type": "standard", "score": 100, "passed": True, "risk_pct": 10},
+        {"live_credit_enabled": True, "strategy_family_credit_enabled": True},
+    )
+
+    assert candidate["passed"] is True
+    assert candidate["risk_pct"] == 10
+    assert candidate["live_credit"]["strategy_family"] == "extreme_v2_roll"
+    assert candidate["legacy_live_credit"]["score"] == 10
+    assert any("旧策略信用仅展示" in item for item in candidate["live_credit_adjustment"]["reasons"])
+
+
 def test_live_credit_multiplier_is_score_divided_by_50():
     config = {"live_credit_multiplier_divisor": 50, "live_credit_max_risk_multiplier": 2.0, "live_credit_fuse_score": 2}
 

@@ -165,3 +165,46 @@ def test_kline_trigger_event_is_recorded_for_fast_move():
     assert state["triggers"][0]["direction_hint"] == "LONG"
     assert captured["symbol"] == "FASTUSDT"
     assert captured["direction_hint"] == "LONG"
+
+
+def test_full_orderbook_is_enabled_only_for_scalp_mode_candidates():
+    symbols = ["POSUSDT", "HOTUSDT", "OTHERUSDT"]
+    intent = {
+        "active_mode": "yolo_scalp",
+        "sources": {"positions": ["POSUSDT"], "candidates": ["HOTUSDT"], "hot": ["OTHERUSDT"]},
+    }
+
+    assert market_stream._full_orderbook_symbols(
+        {"orderbook_full_stream_enabled": True, "orderbook_full_symbols_limit": 2}, symbols, intent
+    ) == ["POSUSDT", "HOTUSDT"]
+    assert market_stream._full_orderbook_symbols(
+        {"orderbook_full_stream_enabled": True}, symbols, {**intent, "active_mode": "extreme_sprint"}
+    ) == []
+
+
+def test_full_orderbook_and_trade_flow_use_binance_stream_families():
+    depth_url = market_stream._diff_depth_stream_url(["BTCUSDT", "ETHUSDT"])
+    trade_url = market_stream._trade_stream_url(["BTCUSDT", "ETHUSDT"])
+
+    assert "/public/stream?" in depth_url
+    assert "btcusdt@depth@100ms" in depth_url
+    assert "btcusdt@bookTicker" in depth_url
+    assert "aggTrade" not in depth_url
+    assert "/market/stream?" in trade_url
+    assert "btcusdt@aggTrade" in trade_url
+    assert "ethusdt@aggTrade" in trade_url
+
+
+def test_book_ticker_and_trade_flow_metrics_capture_microstructure():
+    book = market_stream._book_ticker_metrics({"b": "100", "B": "4", "a": "101", "A": "1"})
+    buy = market_stream._trade_flow_metrics(
+        {"s": "FLOWTESTUSDT", "T": 10_000, "p": "100", "q": "2", "m": False}, 5
+    )
+    mixed = market_stream._trade_flow_metrics(
+        {"s": "FLOWTESTUSDT", "T": 11_000, "p": "100", "q": "1", "m": True}, 5
+    )
+
+    assert book["micro_price"] > book["mid_price"]
+    assert buy["trade_flow_imbalance"] == 1
+    assert mixed["trade_flow_notional"] == 300
+    assert round(mixed["trade_flow_imbalance"], 4) == 0.3333

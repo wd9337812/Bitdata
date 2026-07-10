@@ -22,10 +22,26 @@ class TradingConfig(BaseModel):
     depth_check_min_current_score: float = Field(default=38.0, ge=0, le=200)
     market_stream_enabled: bool = True
     market_stream_dynamic_enabled: bool = True
-    market_stream_max_symbols: int = Field(default=50, ge=1, le=200)
+    market_stream_max_symbols: int = Field(default=80, ge=1, le=200)
     market_stream_auto_discover: bool = True
-    market_stream_rebuild_seconds: int = Field(default=60, ge=15, le=1800)
+    market_stream_rebuild_seconds: int = Field(default=300, ge=15, le=1800)
     market_stream_rotation_threshold_pct: float = Field(default=20.0, ge=0, le=100)
+    market_stream_persist_seconds: float = Field(default=5.0, ge=1, le=60)
+    orderbook_full_stream_enabled: bool = True
+    orderbook_full_symbols_limit: int = Field(default=20, ge=0, le=50)
+    orderbook_snapshot_limit: int = Field(default=100, ge=20, le=1000)
+    orderbook_snapshot_concurrency: int = Field(default=4, ge=1, le=8)
+    yolo_scalp_trade_flow_enabled: bool = True
+    yolo_scalp_trade_flow_window_seconds: float = Field(default=5.0, ge=1, le=60)
+    yolo_scalp_trade_flow_min_notional_usdt: float = Field(default=1000.0, ge=0)
+    yolo_scalp_trade_flow_weight: float = Field(default=0.35, ge=0, le=0.8)
+    yolo_scalp_trade_flow_trigger_notional_usdt: float = Field(default=100_000.0, ge=0)
+    yolo_scalp_trade_flow_trigger_imbalance: float = Field(default=0.15, ge=0, le=1)
+    user_stream_enabled: bool = True
+    user_stream_keepalive_seconds: int = Field(default=1800, ge=300, le=3600)
+    user_stream_reconnect_seconds: int = Field(default=5, ge=1, le=300)
+    user_stream_max_session_seconds: int = Field(default=82_800, ge=3600, le=86_400)
+    user_stream_account_max_age_seconds: int = Field(default=90, ge=5, le=3600)
     fast_lane_enabled: bool = True
     fast_lane_poll_seconds: int = Field(default=2, ge=1, le=60)
     fast_lane_symbol_cooldown_seconds: int = Field(default=10, ge=1, le=300)
@@ -34,7 +50,7 @@ class TradingConfig(BaseModel):
     fast_lane_depth_checks: int = Field(default=3, ge=0, le=20)
     fast_lane_budget_seconds: float = Field(default=5.0, ge=1, le=60)
     telemetry_retention_days: int = Field(default=30, ge=7, le=3650)
-    stream_hot_symbols_limit: int = Field(default=25, ge=0, le=200)
+    stream_hot_symbols_limit: int = Field(default=40, ge=0, le=200)
     stream_include_positions: bool = True
     stream_include_live_credit: bool = True
     opportunity_queue_enabled: bool = True
@@ -60,6 +76,7 @@ class TradingConfig(BaseModel):
     live_performance_risk_multiplier: float = Field(default=0.6, ge=0.05, le=1)
     live_performance_check_min_score: float = Field(default=70.0, ge=0, le=200)
     live_credit_enabled: bool = True
+    strategy_family_credit_enabled: bool = True
     live_credit_default_score: float = Field(default=50.0, ge=0, le=100)
     live_credit_history_hours: int = Field(default=96, ge=1, le=720)
     live_credit_sync_seconds: int = Field(default=600, ge=60, le=86400)
@@ -210,6 +227,42 @@ class TradingConfig(BaseModel):
     growth_mode: str = "balanced"
     tournament_stop_equity: float = Field(default=30.0, ge=0)
     auto_risk_by_equity: bool = True
+    stage_routing_enabled: bool = True
+    stage_manual_mode: str = "auto"
+    stage_manual_until: str = ""
+    stage_manual_default_hours: float = Field(default=6.0, ge=0, le=168)
+    stage_switch_up_buffer_pct: float = Field(default=5.0, ge=0, le=100)
+    stage_switch_down_buffer_pct: float = Field(default=10.0, ge=0, le=100)
+    stage_switch_confirmations: int = Field(default=3, ge=1, le=100)
+    stage_s0_risk_pct: float = Field(default=10.0, ge=0.01, le=100)
+    stage_s0_margin_pct: float = Field(default=90.0, ge=1, le=100)
+    stage_s0_max_leverage: float = Field(default=5.0, ge=1, le=50)
+    stage_s0_max_open_positions: int = Field(default=1, ge=1, le=20)
+    stage_s0_daily_loss_limit_pct: float = Field(default=30.0, ge=0.1, le=100)
+    stage_s1_risk_pct: float = Field(default=7.0, ge=0.01, le=100)
+    stage_s1_margin_pct: float = Field(default=85.0, ge=1, le=100)
+    stage_s1_max_leverage: float = Field(default=5.0, ge=1, le=50)
+    stage_s1_max_open_positions: int = Field(default=1, ge=1, le=20)
+    stage_s1_daily_loss_limit_pct: float = Field(default=25.0, ge=0.1, le=100)
+    stage_s2_risk_pct: float = Field(default=3.0, ge=0.01, le=100)
+    stage_s2_margin_pct: float = Field(default=60.0, ge=1, le=100)
+    stage_s2_max_leverage: float = Field(default=4.0, ge=1, le=50)
+    stage_s2_max_open_positions: int = Field(default=2, ge=1, le=20)
+    stage_s2_daily_loss_limit_pct: float = Field(default=12.0, ge=0.1, le=100)
+    stage_s3_risk_pct: float = Field(default=0.35, ge=0.01, le=100)
+    stage_s3_margin_pct: float = Field(default=25.0, ge=1, le=100)
+    stage_s3_max_leverage: float = Field(default=3.0, ge=1, le=50)
+    stage_s3_max_open_positions: int = Field(default=4, ge=1, le=20)
+    stage_s3_daily_loss_limit_pct: float = Field(default=3.0, ge=0.1, le=100)
+    stage_s4_risk_pct: float = Field(default=0.2, ge=0.01, le=100)
+    stage_s4_margin_pct: float = Field(default=15.0, ge=1, le=100)
+    stage_s4_max_leverage: float = Field(default=2.0, ge=1, le=50)
+    stage_s4_max_open_positions: int = Field(default=8, ge=1, le=20)
+    stage_s4_daily_loss_limit_pct: float = Field(default=1.5, ge=0.1, le=100)
+    stage_s4_scalp_overlay_enabled: bool = True
+    stage_s4_scalp_risk_pct: float = Field(default=0.1, ge=0.01, le=10)
+    stage_s4_scalp_margin_pct: float = Field(default=5.0, ge=1, le=50)
+    stage_s4_scalp_daily_loss_limit_pct: float = Field(default=1.0, ge=0.1, le=20)
     risk_per_trade_pct: float = Field(default=1.0, ge=0.1, le=25)
     attack_risk_per_trade_pct: float = Field(default=5.0, ge=0.1, le=25)
     tournament_risk_per_trade_pct: float = Field(default=15.0, ge=0.1, le=50)
@@ -353,6 +406,14 @@ class TradingConfig(BaseModel):
     scalp_credit_penalty_cooldown_hours: float = Field(default=1.0, ge=0, le=24)
     scalp_credit_recovery_interval_hours: float = Field(default=3.0, ge=0.1, le=48)
     scalp_credit_recovery_points: float = Field(default=4.0, ge=0, le=30)
+    extreme_credit_quick_stop_seconds: int = Field(default=300, ge=30, le=3600)
+    extreme_credit_win_reward: float = Field(default=5.0, ge=0, le=30)
+    extreme_credit_loss_penalty: float = Field(default=7.0, ge=0, le=40)
+    extreme_credit_consecutive_loss_penalty: float = Field(default=10.0, ge=0, le=60)
+    extreme_credit_fee_drag_penalty: float = Field(default=3.0, ge=0, le=30)
+    extreme_credit_penalty_cooldown_hours: float = Field(default=2.0, ge=0, le=48)
+    extreme_credit_recovery_interval_hours: float = Field(default=6.0, ge=0.1, le=96)
+    extreme_credit_recovery_points: float = Field(default=3.0, ge=0, le=30)
     taker_fee_pct_round_trip: float = Field(default=0.08, ge=0, le=5)
     yolo_symbol_trade_score: float = Field(default=60.0, ge=0, le=100)
     yolo_symbol_small_trade_score: float = Field(default=48.0, ge=0, le=100)

@@ -15,9 +15,10 @@ from app.position_sizing import (
 )
 from app.protection_audit import audit_position_protection, enrich_positions_with_prices
 from app.protection import apply_initial_protection_to_signal, build_protection_plan
-from app.risk import assess_new_position, current_stage, equity_guard_status, live_trading_allowed, position_size_from_risk
+from app.risk import assess_new_position, equity_guard_status, live_trading_allowed, position_size_from_risk
 from app.scalp_engine import ORDERBOOK_SCALP_ENTRY_TYPES
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates, strategy_params_for_mode
+from app.stage_modes import resolve_stage_route, stage_route_state_updates
 from app.state_store import save_state
 from app.strategy import StrategyParams
 from app.target import target_progress, target_state_updates
@@ -286,10 +287,15 @@ def sync_stage(config: dict[str, Any], state: dict[str, Any], account_summary: d
         updates["equity_high_watermark"] = max(float(state.get("equity_high_watermark") or 0), float(equity))
         if not state.get("daily_start_equity"):
             updates["daily_start_equity"] = float(equity)
-    stage = current_stage(config, state, equity)
-    updates["stage"] = stage
+    positions = [
+        item for item in account_summary.get("positions", [])
+        if abs(float(item.get("positionAmt", item.get("amount", 0)) or 0)) > 0
+    ]
+    route = resolve_stage_route(config, state, equity, has_open_positions=bool(positions))
+    updates.update(stage_route_state_updates(route))
+    updates["stage"] = "grid" if route.get("mode") == "grid" else "growth"
     updates.update(target_state_updates(config, state, account_summary))
-    active_mode = mode_config(config, equity).get("mode")
+    active_mode = route.get("mode")
     if equity is not None and active_mode in {"extreme_sprint", "yolo_scalp"}:
         existing_mode = state.get("equity_guard_mode")
         current_extreme_high = float(state.get("extreme_sprint_equity_high_watermark") or 0)
@@ -413,11 +419,16 @@ def build_stage1_decision(
                 max_open_positions = min(max_open_positions, 1)
         if active_mode["mode"] == "yolo_scalp":
             max_open_positions = int(config.get("yolo_scalp_max_open_positions", 1))
+    if active_mode.get("max_open_positions") is not None:
+        max_open_positions = int(active_mode["max_open_positions"])
+    daily_loss_limit_pct = float(
+        active_mode.get("daily_loss_limit_pct", config.get(daily_loss_key, config.get("daily_loss_limit_pct", 3.0)))
+    )
     overrides = {
         "direction": direction,
         "margin_pct": active_mode["margin_pct"],
         "leverage": active_mode["leverage"],
-        "daily_loss_limit_pct": config.get(daily_loss_key, config.get("daily_loss_limit_pct", 3.0)),
+        "daily_loss_limit_pct": daily_loss_limit_pct,
         "ignore_max_drawdown": active_mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint", "yolo_scalp"},
         "max_open_positions": max_open_positions,
         "max_consecutive_losses": (

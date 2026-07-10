@@ -27,8 +27,9 @@ export const modeLabel: Record<string, string> = {
   attack: "进攻",
   tournament: "锦标赛",
   tournament_sprint: "锦标赛冲刺",
-  extreme_sprint: "极限冲刺",
-  yolo_scalp: "极限梭哈",
+  extreme_sprint: "Extreme V2 滚仓",
+  yolo_scalp: "盘口剥头皮",
+  grid: "稳定网格",
 };
 
 export const statusLabel: Record<string, string> = {

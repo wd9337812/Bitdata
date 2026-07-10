@@ -120,7 +120,7 @@ def build_scalp_signal(
         atr_value = (max(highs) - min(lows)) / max(1, min(len(highs), 14))
 
     one_minute = stream_kline(symbol, "1m", max_age_seconds=int(config.get("yolo_scalp_stream_max_age_seconds", 12)))
-    one_minute_row = one_minute.get("row") if isinstance(one_minute, dict) else None
+    one_minute_row = one_minute if isinstance(one_minute, list) else one_minute.get("row") if isinstance(one_minute, dict) else None
     one_minute_move_pct = _row_move_pct(one_minute_row)
     one_minute_quote_volume = _row_quote_volume(one_minute_row)
     ticker_change_pct = _float(ticker.get("priceChangePercent"))
@@ -133,7 +133,14 @@ def build_scalp_signal(
     bid_notional, ask_notional = _depth_sides(depth)
     side_total = bid_notional + ask_notional
     imbalance = (bid_notional - ask_notional) / side_total if side_total > 0 else 0.0
-    directed_imbalance = imbalance if direction == "LONG" else -imbalance
+    flow_notional = _float(depth.get("trade_flow_notional"))
+    flow_imbalance = _float(depth.get("trade_flow_imbalance"))
+    flow_min_notional = float(config.get("yolo_scalp_trade_flow_min_notional_usdt", 1000.0))
+    flow_available = bool(config.get("yolo_scalp_trade_flow_enabled", True)) and flow_notional >= flow_min_notional
+    flow_weight = min(0.8, max(0.0, float(config.get("yolo_scalp_trade_flow_weight", 0.35)))) if flow_available else 0.0
+    combined_imbalance = imbalance * (1 - flow_weight) + flow_imbalance * flow_weight
+    directed_imbalance = combined_imbalance if direction == "LONG" else -combined_imbalance
+    directed_flow_imbalance = flow_imbalance if direction == "LONG" else -flow_imbalance
     intended_direction = _signal_direction_from_event(event, one_minute_move_pct, ticker_change_pct)
 
     min_spread = float(config.get("yolo_scalp_orderbook_max_spread_pct", 0.08))
@@ -187,6 +194,8 @@ def build_scalp_signal(
         reasons.append("盘口同向失衡")
     else:
         blockers.append(f"盘口失衡不足 {directed_imbalance:.3f}<{min_imbalance:.3f}")
+    if flow_available and directed_flow_imbalance > 0:
+        reasons.append("主动成交方向一致")
     if direction_confirmed:
         reasons.append("实时方向一致")
     elif direction_probe:
@@ -253,7 +262,12 @@ def build_scalp_signal(
         "bid_notional": round(bid_notional, 6),
         "ask_notional": round(ask_notional, 6),
         "imbalance": round(imbalance, 6),
+        "combined_imbalance": round(combined_imbalance, 6),
         "directed_imbalance": round(directed_imbalance, 6),
+        "trade_flow_notional": round(flow_notional, 6),
+        "trade_flow_imbalance": round(flow_imbalance, 6),
+        "directed_trade_flow_imbalance": round(directed_flow_imbalance, 6),
+        "microprice_edge_bps": round(_float(depth.get("microprice_edge_bps")), 6),
         "direction_probe": direction_probe,
         "one_minute_move_pct": round(one_minute_move_pct, 6),
         "one_minute_quote_volume": round(one_minute_quote_volume, 6),

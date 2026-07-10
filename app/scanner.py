@@ -127,6 +127,9 @@ def is_extreme_mode(mode_name: str | None) -> bool:
 
 
 def active_growth_mode(config: dict[str, Any], equity: float | None = None) -> str:
+    routed = str(config.get("_active_growth_mode") or "").lower()
+    if routed in MODE_PRESETS:
+        return routed
     configured = str(config.get("growth_mode", "balanced")).lower()
     if configured == "yolo_scalp":
         return "yolo_scalp" if yolo_scalp_armed(config) else "balanced"
@@ -163,6 +166,17 @@ def mode_config(config: dict[str, Any], equity: float | None = None) -> dict[str
     preset["recent_days"] = int(config.get(preset["recent_days_key"], preset["recent_days"]))
     preset["min_pf"] = float(config.get("min_profit_factor", preset["min_pf"])) if mode in {"conservative", "balanced"} else preset["min_pf"]
     preset["min_trades"] = int(config.get("min_recent_trades", preset["min_trades"])) if mode in {"conservative", "balanced"} else preset["min_trades"]
+    route = config.get("_stage_route") or {}
+    if route.get("mode") == mode:
+        preset["risk_pct"] = float(route.get("risk_pct", preset["risk_pct"]))
+        preset["leverage"] = float(route.get("leverage", preset["leverage"]))
+        preset["margin_pct"] = float(route.get("margin_pct", preset["margin_pct"]))
+        preset["stage"] = route.get("stage")
+        preset["strategy_family"] = route.get("strategy_family")
+        preset["max_open_positions"] = int(route.get("max_open_positions", 1))
+        preset["daily_loss_limit_pct"] = float(
+            route.get("daily_loss_limit_pct", config.get("daily_loss_limit_pct", 3.0))
+        )
     return preset
 
 
@@ -359,7 +373,7 @@ def discover_coin_symbols(client: BinanceFuturesClient, config: dict[str, Any]) 
         and item.get("quoteAsset") == "USDT"
     }
     min_volume = float(config.get("min_24h_volume_usdt", 100_000_000))
-    if is_extreme_mode(str(config.get("growth_mode"))) and config.get("extreme_v2_enabled", True):
+    if is_extreme_mode(active_growth_mode(config)) and config.get("extreme_v2_enabled", True):
         min_volume = min(min_volume, float(config.get("extreme_firecracker_min_quote_volume_usdt", 30_000_000)))
     tickers = client.ticker_24h()
     ranked = [
@@ -818,6 +832,10 @@ def _depth_metrics(client: BinanceFuturesClient, symbol: str) -> dict[str, float
             "available": True,
             "spread_pct": spread_pct,
             "depth_notional": min(bid_notional, ask_notional),
+            "micro_price": float(depth.get("micro_price") or mid),
+            "microprice_edge_bps": float(depth.get("microprice_edge_bps") or 0),
+            "trade_flow_notional": float(depth.get("trade_flow_notional") or 0),
+            "trade_flow_imbalance": float(depth.get("trade_flow_imbalance") or 0),
         }
     except Exception as exc:
         return {"available": False, "spread_pct": 999.0, "depth_notional": 0.0, "reason": str(exc)}
@@ -1628,6 +1646,9 @@ def scan_growth_candidates(
             trigger_symbol = str(event.get("symbol") or "").upper()
             if trigger_symbol and trigger_symbol not in symbols:
                 symbols.append(trigger_symbol)
+    excluded_symbols = {str(symbol).upper() for symbol in config.get("_excluded_scan_symbols", []) or []}
+    if excluded_symbols:
+        symbols = [symbol for symbol in symbols if symbol not in excluded_symbols]
     candidates = []
     recalled_symbols = list(symbols)
     tickers = {item["symbol"]: item for item in client.ticker_24h(recalled_symbols)}
@@ -2281,6 +2302,7 @@ def _publish_stream_intent(
             candidate_symbols=candidate_symbols,
             position_symbols=position_symbols,
             live_credit_symbols=live_credit_symbols,
+            active_mode=active_growth_mode(config),
         )
     except Exception:
         return

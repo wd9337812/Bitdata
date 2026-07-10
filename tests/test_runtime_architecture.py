@@ -22,7 +22,7 @@ def test_sqlite_cache_round_trip_without_monolithic_json(monkeypatch, tmp_path):
 def test_background_rate_priority_preserves_realtime_budget(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     with request_priority("background"):
-        before_request(420, budget_per_minute=600)
+        before_request(330, budget_per_minute=600)
         try:
             before_request(1, budget_per_minute=600)
         except BinanceRateLimitError as exc:

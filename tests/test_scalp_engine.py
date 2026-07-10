@@ -167,3 +167,60 @@ def test_orderbook_scalp_strong_imbalance_can_probe_direction_mismatch(monkeypat
     assert result["passed"] is True
     assert result["entry_type"] == "imbalance_probe"
     assert result["direction_probe"] is True
+
+
+def test_orderbook_scalp_reads_actual_stream_kline_row_without_queue_event(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    _write_1m("ROWUSDT", [1000, "10", "10.2", "9.9", "10.1", "1000", 1999, "80000", 0, "0", "0", "0"])
+
+    result = build_scalp_signal(
+        symbol="ROWUSDT",
+        direction="LONG",
+        bars=[[i, 10, 10.2, 9.9, 10.1, 1000, i + 1, 100000] for i in range(90)],
+        ticker={"lastPrice": "10.1", "priceChangePercent": "1", "quoteVolume": "5000000"},
+        depth={
+            "available": True,
+            "spread_pct": 0.02,
+            "depth_notional": 5000,
+            "bids": [["10.00", "420"]],
+            "asks": [["10.01", "120"]],
+        },
+        event=None,
+        base_signal={"last_price": 10.1, "atr": 0.08, "expected_profit_pct": 0.2},
+        recent={"profit_factor": 1.0},
+        config={},
+    )
+
+    assert result["one_minute_quote_volume"] == 80000
+    assert result["entry_type"] == "volume_scalp"
+    assert result["passed"] is True
+
+
+def test_orderbook_scalp_blends_active_trade_flow_with_l2_imbalance(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    _write_1m("FLOWUSDT", [1000, "10", "10.2", "9.9", "10.1", "1000", 1999, "80000", 0, "0", "0", "0"])
+
+    result = build_scalp_signal(
+        symbol="FLOWUSDT",
+        direction="LONG",
+        bars=[[i, 10, 10.2, 9.9, 10.1, 1000, i + 1, 100000] for i in range(90)],
+        ticker={"lastPrice": "10.1", "priceChangePercent": "1", "quoteVolume": "5000000"},
+        depth={
+            "available": True,
+            "spread_pct": 0.02,
+            "depth_notional": 5000,
+            "bids": [["10.00", "200"]],
+            "asks": [["10.01", "190"]],
+            "trade_flow_notional": 5000,
+            "trade_flow_imbalance": 0.8,
+            "microprice_edge_bps": 0.4,
+        },
+        event={"direction_hint": "LONG", "move_pct": 0.2, "quote_volume": 100000, "updated_at": datetime.now(timezone.utc).isoformat()},
+        base_signal={"last_price": 10.1, "atr": 0.08, "expected_profit_pct": 0.2},
+        recent={"profit_factor": 1.0},
+        config={"yolo_scalp_trade_flow_weight": 0.5},
+    )
+
+    assert result["combined_imbalance"] > result["imbalance"]
+    assert result["directed_trade_flow_imbalance"] == 0.8
+    assert "主动成交方向一致" in result["reasons"]

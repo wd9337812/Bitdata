@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,10 +39,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "depth_check_min_current_score": 38.0,
     "market_stream_enabled": True,
     "market_stream_dynamic_enabled": True,
-    "market_stream_max_symbols": 50,
+    "market_stream_max_symbols": 80,
     "market_stream_auto_discover": True,
-    "market_stream_rebuild_seconds": 60,
+    "market_stream_rebuild_seconds": 300,
     "market_stream_rotation_threshold_pct": 20.0,
+    "market_stream_persist_seconds": 5.0,
+    "orderbook_full_stream_enabled": True,
+    "orderbook_full_symbols_limit": 20,
+    "orderbook_snapshot_limit": 100,
+    "orderbook_snapshot_concurrency": 4,
+    "yolo_scalp_trade_flow_enabled": True,
+    "yolo_scalp_trade_flow_window_seconds": 5.0,
+    "yolo_scalp_trade_flow_min_notional_usdt": 1_000.0,
+    "yolo_scalp_trade_flow_weight": 0.35,
+    "yolo_scalp_trade_flow_trigger_notional_usdt": 100_000.0,
+    "yolo_scalp_trade_flow_trigger_imbalance": 0.15,
+    "user_stream_enabled": True,
+    "user_stream_keepalive_seconds": 1800,
+    "user_stream_reconnect_seconds": 5,
+    "user_stream_max_session_seconds": 82_800,
+    "user_stream_account_max_age_seconds": 90,
     "fast_lane_enabled": True,
     "fast_lane_poll_seconds": 2,
     "fast_lane_symbol_cooldown_seconds": 10,
@@ -50,7 +67,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "fast_lane_depth_checks": 3,
     "fast_lane_budget_seconds": 5.0,
     "telemetry_retention_days": 30,
-    "stream_hot_symbols_limit": 25,
+    "stream_hot_symbols_limit": 40,
     "stream_include_positions": True,
     "stream_include_live_credit": True,
     "opportunity_queue_enabled": True,
@@ -76,6 +93,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "live_performance_risk_multiplier": 0.6,
     "live_performance_check_min_score": 70.0,
     "live_credit_enabled": True,
+    "strategy_family_credit_enabled": True,
     "live_credit_default_score": 50.0,
     "live_credit_history_hours": 96,
     "live_credit_sync_seconds": 600,
@@ -226,6 +244,42 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "growth_mode": "balanced",
     "tournament_stop_equity": 30.0,
     "auto_risk_by_equity": True,
+    "stage_routing_enabled": True,
+    "stage_manual_mode": "auto",
+    "stage_manual_until": "",
+    "stage_manual_default_hours": 6.0,
+    "stage_switch_up_buffer_pct": 5.0,
+    "stage_switch_down_buffer_pct": 10.0,
+    "stage_switch_confirmations": 3,
+    "stage_s0_risk_pct": 10.0,
+    "stage_s0_margin_pct": 90.0,
+    "stage_s0_max_leverage": 5.0,
+    "stage_s0_max_open_positions": 1,
+    "stage_s0_daily_loss_limit_pct": 30.0,
+    "stage_s1_risk_pct": 7.0,
+    "stage_s1_margin_pct": 85.0,
+    "stage_s1_max_leverage": 5.0,
+    "stage_s1_max_open_positions": 1,
+    "stage_s1_daily_loss_limit_pct": 25.0,
+    "stage_s2_risk_pct": 3.0,
+    "stage_s2_margin_pct": 60.0,
+    "stage_s2_max_leverage": 4.0,
+    "stage_s2_max_open_positions": 2,
+    "stage_s2_daily_loss_limit_pct": 12.0,
+    "stage_s3_risk_pct": 0.35,
+    "stage_s3_margin_pct": 25.0,
+    "stage_s3_max_leverage": 3.0,
+    "stage_s3_max_open_positions": 4,
+    "stage_s3_daily_loss_limit_pct": 3.0,
+    "stage_s4_risk_pct": 0.2,
+    "stage_s4_margin_pct": 15.0,
+    "stage_s4_max_leverage": 2.0,
+    "stage_s4_max_open_positions": 8,
+    "stage_s4_daily_loss_limit_pct": 1.5,
+    "stage_s4_scalp_overlay_enabled": True,
+    "stage_s4_scalp_risk_pct": 0.1,
+    "stage_s4_scalp_margin_pct": 5.0,
+    "stage_s4_scalp_daily_loss_limit_pct": 1.0,
     "risk_per_trade_pct": 1.0,
     "attack_risk_per_trade_pct": 5.0,
     "tournament_risk_per_trade_pct": 15.0,
@@ -369,6 +423,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "scalp_credit_penalty_cooldown_hours": 1.0,
     "scalp_credit_recovery_interval_hours": 3.0,
     "scalp_credit_recovery_points": 4.0,
+    "extreme_credit_quick_stop_seconds": 300,
+    "extreme_credit_win_reward": 5.0,
+    "extreme_credit_loss_penalty": 7.0,
+    "extreme_credit_consecutive_loss_penalty": 10.0,
+    "extreme_credit_fee_drag_penalty": 3.0,
+    "extreme_credit_penalty_cooldown_hours": 2.0,
+    "extreme_credit_recovery_interval_hours": 6.0,
+    "extreme_credit_recovery_points": 3.0,
     "taker_fee_pct_round_trip": 0.08,
     "yolo_symbol_trade_score": 60.0,
     "yolo_symbol_small_trade_score": 48.0,
@@ -641,6 +703,12 @@ def save_config(payload: dict[str, Any]) -> dict[str, Any]:
         and current.get("api_key")
     ):
         payload = {key: value for key, value in payload.items() if key != "api_key"}
+    manual_mode = str(payload.get("stage_manual_mode", current.get("stage_manual_mode", "auto")) or "auto")
+    if manual_mode == "auto":
+        payload["stage_manual_until"] = ""
+    elif not payload.get("stage_manual_until"):
+        hours = float(payload.get("stage_manual_default_hours", current.get("stage_manual_default_hours", 6.0)))
+        payload["stage_manual_until"] = (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
     current.update(payload)
     path = config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
