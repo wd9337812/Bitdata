@@ -268,6 +268,15 @@ def _position_keys(account: dict) -> set[tuple[str, str, float]]:
 def execute_with_freshness_guard(client: BinanceFuturesClient, decision: dict, config: dict, account: dict) -> dict:
     if decision.get("action") not in {"OPEN_LONG", "OPEN_SHORT"}:
         return execute_stage1_market_order(client, decision, config)
+    with _EXECUTION_LOCK, request_priority("critical"):
+        fresh_account = summarize_account(client.account_live())
+        if _position_keys(fresh_account) != _position_keys(account):
+            return {
+                "mode": "blocked",
+                "message": "持仓在决策期间发生变化，本次信号作废并等待重新评估。",
+                "reason": "stale_position_snapshot",
+            }
+        return execute_stage1_market_order(client, decision, config)
 
 
 def stage4_scalp_overlay_config(config: dict, state: dict) -> dict | None:
@@ -289,15 +298,6 @@ def stage4_scalp_overlay_config(config: dict, state: dict) -> dict | None:
         {**config, "_excluded_scan_symbols": list(config.get("stage2_symbols", ["BTCUSDT", "ETHUSDT"]))},
         overlay_route,
     )
-    with _EXECUTION_LOCK, request_priority("critical"):
-        fresh_account = summarize_account(client.account_live())
-        if _position_keys(fresh_account) != _position_keys(account):
-            return {
-                "mode": "blocked",
-                "message": "持仓在决策期间发生变化，本次信号作废并等待重新评估。",
-                "reason": "stale_position_snapshot",
-            }
-        return execute_stage1_market_order(client, decision, config)
 
 
 def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False) -> dict:

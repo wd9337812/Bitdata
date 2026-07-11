@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app import runner
 from app.runner import enforce_hard_stop, is_min_notional_rejection
 from app.state_store import load_state
 from app.trading_engine import is_reduce_only_rejection
@@ -31,3 +32,29 @@ def test_hard_stop_persists_terminal_state_without_live_api_calls(monkeypatch, t
     assert result["triggered"] is True
     assert load_state()["bot_status"] == "hard_stopped"
     assert load_state()["hard_stop_triggered"] is True
+
+
+def test_open_signal_executes_through_fresh_account_guard(monkeypatch):
+    class Client:
+        def account_live(self):
+            return {
+                "totalWalletBalance": "30",
+                "totalUnrealizedProfit": "0",
+                "availableBalance": "30",
+                "positions": [],
+            }
+
+    monkeypatch.setattr(
+        runner,
+        "execute_stage1_market_order",
+        lambda client, decision, config: {"mode": "live_test", "symbol": decision["symbol"]},
+    )
+
+    result = runner.execute_with_freshness_guard(
+        Client(),
+        {"action": "OPEN_LONG", "symbol": "SOLUSDT"},
+        {},
+        {"positions": []},
+    )
+
+    assert result == {"mode": "live_test", "symbol": "SOLUSDT"}
