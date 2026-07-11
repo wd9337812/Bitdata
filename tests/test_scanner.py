@@ -65,9 +65,25 @@ def test_extreme_sprint_requires_confirmation_and_uses_fast_protection():
     ) == "extreme_sprint"
 
     standard = strategy_params_for_mode({}, {"mode": "extreme_sprint"}, "standard")
-    assert standard.stop_atr == 0.75
-    assert standard.take_profit_atr == 1.05
-    assert standard.max_hold_bars == 4
+    assert standard.stop_atr == 0.85
+    assert standard.take_profit_atr == 1.8
+    assert standard.max_hold_bars == 10
+
+
+def test_successful_breakout_keeps_market_state_fields():
+    bars = []
+    for index in range(90):
+        close = 100 + index * 0.25
+        if index == 89:
+            close += 2.0
+        bars.append(make_bar(close - 0.1, close + 0.5, close - 0.8, close, index))
+
+    signal = latest_strategy_signal("SOLUSDT", bars, "breakout", direction="LONG")
+
+    assert signal["signal"] == "LONG"
+    assert signal["trend"] is True
+    assert signal["trigger"] is True
+    assert signal["volatility_ok"] is True
 
 
 def test_yolo_scalp_requires_confirmation_and_uses_short_protection():

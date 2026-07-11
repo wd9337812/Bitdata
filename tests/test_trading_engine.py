@@ -154,3 +154,41 @@ def test_yolo_scalp_rejects_non_orderbook_entry_before_live_execution():
 
     assert decision["action"] == "WAIT"
     assert decision["risk"]["reason"] == "yolo_orderbook_only"
+
+
+def test_primary_risk_reason_is_not_overwritten_by_order_viability():
+    decision = build_stage1_decision(
+        "SOLUSDT",
+        [],
+        {
+            "auto_risk_by_equity": False,
+            "growth_mode": "balanced",
+            "hard_stop_equity": 30,
+            "risk_warning_equity": 40,
+            "effective_position_sizing_enabled": True,
+        },
+        {"bot_status": "running"},
+        {"equity": 29.92, "positions": []},
+        scan_candidate={
+            "symbol": "SOLUSDT",
+            "mode": "balanced",
+            "strategy": "default",
+            "direction": "LONG",
+            "risk_pct": 1,
+            "leverage": 2,
+            "margin_pct": 35,
+            "entry_type": "standard",
+            "signal": {
+                "signal": "LONG",
+                "last_price": 100,
+                "stop": 99,
+                "take_profit": 102,
+                "expected_profit_pct": 2,
+            },
+        },
+    )
+
+    assert decision["action"] == "WAIT"
+    assert decision["risk"]["reason"] == "hard_stop_equity"
+    assert decision["primary_block_reason"] == "hard_stop_equity"
+    assert decision["estimated_notional"] == 0

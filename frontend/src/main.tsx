@@ -34,6 +34,7 @@ type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
 type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[] };
 type LiveReactionData = { reactions: any[]; recent_trades: any[] };
+type ShadowData = { stats: Record<string, any>; trades: any[] };
 type SimulationData = Record<string, any>;
 type ReportData = Record<string, any>;
 
@@ -42,6 +43,7 @@ const menu = [
   { id: "stages", label: "阶段路线", icon: Route },
   { id: "scan", label: "多币种扫描", icon: CandlestickChart },
   { id: "learning", label: "实盘学习", icon: Zap },
+  { id: "shadow", label: "影子交易", icon: CandlestickChart },
   { id: "reaction", label: "实时风控", icon: AlertTriangle },
   { id: "pnl", label: "收益曲线", icon: LineChart },
   { id: "risk", label: "风控中心", icon: Shield },
@@ -92,6 +94,7 @@ function useData() {
   const [logs, setLogs] = useState<any[]>([]);
   const [liveLearning, setLiveLearning] = useState<LiveLearningData>({ scores: [], strategy_scores: [], scalp_scores: [], extreme_scores: [] });
   const [liveReaction, setLiveReaction] = useState<LiveReactionData | null>(null);
+  const [shadow, setShadow] = useState<ShadowData>({ stats: {}, trades: [] });
   const [health, setHealth] = useState<any>(null);
   const [simulation, setSimulation] = useState<any>(null);
   const [report, setReport] = useState<any>(null);
@@ -121,6 +124,7 @@ function useData() {
           extreme_scores: learningRes.extreme_scores || [],
         });
         setLiveReaction(await api<LiveReactionData>("/api/live-reaction?limit=100"));
+        setShadow(await api<ShadowData>("/api/shadow-trades?limit=100"));
         setSimulation(await api<SimulationData>("/api/simulation/stage"));
         setReport(await api<ReportData>("/api/reports/latest"));
       }
@@ -142,7 +146,7 @@ function useData() {
     };
   }, []);
 
-  return { status, decisions, market, snapshots, logs, liveLearning, liveReaction, health, simulation, report, error, refresh };
+  return { status, decisions, market, snapshots, logs, liveLearning, liveReaction, shadow, health, simulation, report, error, refresh };
 }
 
 function MetricCard({ title, value, sub, tone }: { title: string; value: string; sub?: string; tone?: string }) {
@@ -346,6 +350,12 @@ function App() {
               />
               <MetricCard title="自动阶段" value={`${stageRoute.stage || "-"} ${stageRoute.label || ""}`} sub={`单笔风险 ${fmt(stageRoute.risk_pct, 2)}% · 最多 ${fmt(stageRoute.max_open_positions, 0)} 仓`} />
               <MetricCard title="私有账户流" value={userStream.connected ? "实时连接" : "REST 兜底"} sub={userStream.last_error || `账户数据年龄 ${fmt(userStream.account_age_seconds, 0)} 秒`} tone={userStream.connected ? "positive" : ""} />
+              <MetricCard
+                title="权益安全线"
+                value={runtime?.risk_status?.warning_active ? "低于预警线" : "正常"}
+                sub={`预警 ${fmt(config.risk_warning_equity, 2)}U · 硬停止 ${fmt(config.hard_stop_equity, 2)}U`}
+                tone={runtime?.risk_status?.warning_active ? "negative" : "positive"}
+              />
             </div>
             <ProtectionAuditPanel audit={runtime?.protection_audit} />
             <TargetProgressPanel target={target} />
@@ -400,6 +410,7 @@ function App() {
         )}
 
       {active === "learning" && <LiveLearningPanel data={data.liveLearning} onSync={syncLiveLearning} />}
+        {active === "shadow" && <ShadowTradingPanel data={data.shadow} />}
         {active === "reaction" && <LiveReactionPanel data={data.liveReaction} />}
 
         {active === "pnl" && (
@@ -615,6 +626,11 @@ function FunnelPanel({ funnel }: { funnel: any }) {
         title="剥头皮信号"
         value={`${fmt(funnel?.extreme_v2?.scalp, 0)} 个`}
         sub="盘口冲击 / 放量剥头皮 / 失衡试探"
+      />
+      <MetricCard
+        title="市场自适应"
+        value={funnel?.adaptive_market?.label || "等待行情"}
+        sub={`中位波动 ${fmt(funnel?.adaptive_market?.median_abs_change_pct, 2)}% · 75分位 ${fmt(funnel?.adaptive_market?.p75_abs_change_pct, 2)}%`}
       />
       <MetricCard title="本轮耗时" value={`${fmt(funnel?.elapsed_seconds, 3)} 秒`} sub="用于判断是否需要自动降级" />
     </div>
@@ -914,6 +930,59 @@ function MarketTable({ rows }: { rows: any[] }) {
   );
 }
 
+function ShadowTradingPanel({ data }: { data: ShadowData }) {
+  const stats = data?.stats || {};
+  const rows = data?.trades || [];
+  const outcomeLabel: Record<string, string> = {
+    STOP: "模拟止损",
+    TAKE_PROFIT: "模拟止盈",
+    TIME_EXIT: "到时退出",
+  };
+  return (
+    <section className="stack">
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>影子交易是什么</h2>
+            <p>机器人只是假装按当时价格开仓，继续跟踪真实行情，再扣掉模拟手续费和滑点。它不会向 Binance 下单，也不会占用你的资金。</p>
+          </div>
+        </div>
+        <div className="metrics">
+          <MetricCard title="记录机会" value={fmt(stats.total, 0)} sub="去掉重复信号后的数量" />
+          <MetricCard title="正在观察" value={fmt(stats.active, 0)} sub="还没有碰到模拟止盈或止损" />
+          <MetricCard title="已经结束" value={fmt(stats.closed, 0)} />
+          <MetricCard title="模拟胜率" value={`${fmt(stats.win_rate, 1)}%`} sub="样本少时只供观察" />
+          <MetricCard title="模拟净收益" value={`${fmt(stats.net_pnl, 4)} U`} sub={`已扣模拟成本 ${fmt(stats.cost, 4)} U`} tone={Number(stats.net_pnl || 0) >= 0 ? "positive" : "negative"} />
+        </div>
+      </div>
+      <div className="panel table-wrap">
+        <h2>最近影子交易</h2>
+        <table>
+          <thead><tr><th>状态</th><th>币种</th><th>方向</th><th>信号</th><th>为什么没实盘</th><th>假设开仓</th><th>模拟止损</th><th>模拟止盈</th><th>结果</th><th>净盈亏</th></tr></thead>
+          <tbody>
+            {rows.map((item: any) => (
+              <tr key={item.id}>
+                <td>{item.status === "OPEN" ? "观察中" : "已结束"}</td>
+                <td className="symbol">{item.symbol}</td>
+                <td>{item.direction === "SHORT" ? "做空" : "做多"}</td>
+                <td>{item.signal_type || "-"}</td>
+                <td>{item.blocked_reason || "未达到实盘条件"}</td>
+                <td>{fmt(item.entry, 8)}</td>
+                <td>{fmt(item.stop, 8)}</td>
+                <td>{fmt(item.take_profit, 8)}</td>
+                <td>{outcomeLabel[item.outcome] || (item.status === "OPEN" ? "等待结果" : "-")}</td>
+                <td className={Number(item.net_pnl || 0) >= 0 ? "positive-text" : "negative-text"}>{fmt(item.net_pnl, 4)} U</td>
+              </tr>
+            ))}
+            {!rows.length && <tr><td colSpan={10}>等待系统记录第一批符合观察条件的机会。</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+
 function LiveReactionPanel({ data }: { data: LiveReactionData | null }) {
   const reactions = data?.reactions || [];
   const trades = data?.recent_trades || [];
@@ -1009,6 +1078,9 @@ function RiskPanel({ config, state, account }: { config: any; state: any; accoun
         <MetricCard title="最大回撤" value={`${fmt(config.max_drawdown_pct)}%`} />
         <MetricCard title="最大持仓" value={`梭哈 ${config.yolo_scalp_max_open_positions || 1} / 极限 ${config.extreme_sprint_max_open_positions || 1} / 普通 ${config.max_open_positions}`} />
         <MetricCard title="同币冷却" value={`${fmt(config.symbol_cooldown_minutes, 0)} 分钟`} />
+        <MetricCard title="风险预警线" value={`${fmt(config.risk_warning_equity, 2)} U`} sub="低于后只提醒，机器人继续运行" tone={Number(account.equity || 0) < Number(config.risk_warning_equity || 0) ? "negative" : ""} />
+        <MetricCard title="硬停止线" value={`${fmt(config.hard_stop_equity, 2)} U`} sub="触发后退出持仓并禁止新仓" tone={state.hard_stop_triggered ? "negative" : ""} />
+        <MetricCard title="影子交易" value={config.shadow_trading_enabled ? "已开启" : "已关闭"} sub="只做纸面记录，不会向 Binance 下单" />
       </div>
       <div className="panel">
         <h2>当前持仓</h2>
@@ -1137,6 +1209,15 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("fast_lane_max_symbols", "快车道单次币数", "默认 3；优先最高分异动，避免挤占交易API预算")}
           {number("fast_lane_budget_seconds", "快车道计算预算", "默认 5 秒；超过预算只完成最高优先级币")}
           {number("telemetry_retention_days", "系统明细保留天数", "默认 30 天；成交与实盘学习记录不受影响")}
+          {toggle("adaptive_thresholds_enabled", "市场自适应阈值", "复用现有行情数据，按市场冷热和币种自身成交量动态调整放量与异动门槛")}
+          {number("adaptive_volume_spike_floor", "自适应放量下限", "默认 1.2 倍，系统不能无限降低门槛")}
+          {number("adaptive_volume_spike_ceiling", "自适应放量上限", "默认 2.4 倍，活跃市场会提高要求")}
+          {number("adaptive_firecracker_move_floor_pct", "火药桶异动下限%", "默认 4%，安静市场也不会低于此值")}
+          {number("adaptive_firecracker_move_ceiling_pct", "火药桶异动上限%", "默认 14%，高波动市场提高要求")}
+          {toggle("shadow_trading_enabled", "影子交易", "只是假装开仓并跟踪结果，不会调用 Binance 下单接口")}
+          {number("shadow_min_candidate_score", "影子交易最低候选分", "默认 70；只记录值得研究的机会")}
+          {number("shadow_dedupe_minutes", "影子信号去重分钟", "同币、同方向、同信号在窗口内只算一笔")}
+          {number("shadow_max_hold_minutes", "影子交易最长观察分钟", "到时仍未止盈止损则按当时价格模拟退出")}
           {toggle("target_controller_enabled", "开启目标进度控制器", "按 30 天到 1万、再 30 天到 10万、再 30 天到 100万计算进度")}
           {toggle("target_risk_adjustment_enabled", "目标进度参与仓位", "默认关闭；开启后系统会根据领先或落后目标曲线调整风险倍率")}
           {number("target_phase_a_equity", "阶段A目标权益", "默认 10000U")}
@@ -1452,7 +1533,9 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           <div className="field-wide credential-field">{text("binance_base_url", "Binance 合约接口地址", "默认 https://fapi.binance.com")}</div>
           {text("live_trading_confirmation", "实盘确认短语", "必须填写 ENABLE_LIVE_TRADING")}
           {number("max_drawdown_pct", "最大回撤%")}
-          {number("tournament_stop_equity", "锦标赛停止权益")}
+          {number("risk_warning_equity", "权益风险预警线U", "默认 30U；低于后只显示提醒，不阻止交易")}
+          {number("hard_stop_equity", "权益硬停止线U", "默认 5U；触发后退出持仓、取消挂单并停止机器人")}
+          {number("hard_stop_recovery_equity", "硬停止恢复权益U", "默认 5.5U；补充资金后仍需手动启动")}
           {number("tournament_max_leverage", "锦标赛最大杠杆")}
           {number("tournament_max_symbol_margin_pct", "锦标赛保证金上限%")}
         </div>

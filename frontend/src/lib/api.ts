@@ -36,6 +36,7 @@ export const statusLabel: Record<string, string> = {
   running: "运行中",
   rate_limited: "限流等待中",
   paused: "已暂停",
+  hard_stopped: "权益硬停止",
 };
 
 export const stageLabel: Record<string, string> = {

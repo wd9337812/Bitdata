@@ -30,6 +30,7 @@ from app.product_completion import product_completion_summary
 from app.runtime_protection import manage_runtime_protection
 from app.runtime_snapshot import read_runtime_snapshot
 from app.scanner import mode_config
+from app.shadow_trading import shadow_summary
 from app.stage_modes import all_stage_profiles, stage_profile_for_equity
 from app.stage_simulation import simulate_stage_path
 from app.state_store import load_state, save_state
@@ -59,7 +60,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.3.2")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.3.3")
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
 if assets_dir.exists():
@@ -151,7 +152,7 @@ def status() -> dict[str, Any]:
     runtime = read_runtime_snapshot()
     runtime_status = {
         key: runtime.get(key)
-        for key in ["updated_at", "age_seconds", "channel", "last_cycle", "fast_lane", "background_scan", "protection_audit"]
+        for key in ["updated_at", "age_seconds", "channel", "last_cycle", "fast_lane", "background_scan", "protection_audit", "risk_status", "shadow_trading"]
     }
     return {
         "config": load_config(include_secret=False),
@@ -234,6 +235,11 @@ def runtime_protection_check() -> dict[str, Any]:
 @app.get("/api/strategy-runs", dependencies=[Depends(require_auth)])
 def strategy_runs(limit: int = 200) -> dict[str, Any]:
     return {"runs": list_strategy_runs(limit)}
+
+
+@app.get("/api/shadow-trades", dependencies=[Depends(require_auth)])
+def shadow_trades(limit: int = 100) -> dict[str, Any]:
+    return shadow_summary(limit)
 
 
 @app.get("/api/live-learning", dependencies=[Depends(require_auth)])
@@ -332,6 +338,20 @@ def control(payload: BotControlPayload) -> dict[str, Any]:
                     raise HTTPException(status_code=400, detail=f"VPS 时间偏差过大：{offset_ms}ms，请先同步时间。")
                 account_summary = summarize_account(client.account())
                 equity = account_summary.get("equity")
+                if state.get("hard_stop_triggered"):
+                    recovery = float(config.get("hard_stop_recovery_equity", 5.5))
+                    if equity is None or float(equity) < recovery:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"账户曾触发硬停止，请先将合约权益补充到 {recovery:.2f}U 以上再手动启动。",
+                        )
+                    start_updates.update(
+                        {
+                            "hard_stop_triggered": False,
+                            "hard_stop_reason": "",
+                            "risk_warning_active": float(equity) < float(config.get("risk_warning_equity", 30.0)),
+                        }
+                    )
                 if equity is not None and mode_config(config, equity).get("mode") == "extreme_sprint":
                     if state.get("equity_guard_mode") != "extreme_sprint" or float(state.get("extreme_sprint_equity_high_watermark") or 0) <= 0:
                         start_updates["extreme_sprint_start_equity"] = float(equity)

@@ -18,10 +18,12 @@ from app.opportunity_queue import read_opportunities
 from app.protection_audit import audit_account_protection
 from app.risk import direction_cooldown_key, live_trading_allowed
 from app.runtime_protection import manage_runtime_protection
+from app.shadow_trading import update_shadow_trades
 from app.stage_modes import apply_stage_route
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
+    close_rotation_position,
     execute_grid_orders,
     execute_stage1_market_order,
     is_reduce_only_rejection,
@@ -35,6 +37,47 @@ from app.user_stream import account_from_user_stream, seed_user_account, start_u
 
 
 _EXECUTION_LOCK = threading.Lock()
+
+
+def enforce_hard_stop(
+    client: BinanceFuturesClient,
+    config: dict,
+    account: dict,
+) -> dict:
+    """Flatten live exposure once at the absolute account floor."""
+    equity = float(account.get("equity") or 0)
+    floor = float(config.get("hard_stop_equity", config.get("tournament_stop_equity", 5.0)))
+    if floor <= 0 or equity > floor:
+        return {"triggered": False, "equity": equity, "floor": floor}
+    actions = []
+    if live_trading_allowed(config):
+        for position in account.get("positions", []) or []:
+            if abs(float(position.get("positionAmt") or position.get("amount") or 0)) <= 0:
+                continue
+            actions.append(close_rotation_position(client, position))
+        symbols = {
+            str(order.get("symbol") or "").upper()
+            for order in (client.open_orders() or []) + (client.open_algo_orders() or [])
+            if order.get("symbol")
+        }
+        for symbol in symbols:
+            client.cancel_all_open_orders(symbol)
+            client.cancel_all_open_algo_orders(symbol)
+    save_state(
+        {
+            "bot_status": "hard_stopped",
+            "hard_stop_triggered": True,
+            "hard_stop_reason": f"equity {equity:.4f}U <= hard stop {floor:.2f}U",
+            "last_error": "账户权益触发 5U 硬停止线，已禁止新仓。",
+        }
+    )
+    record_event(
+        "error",
+        "hard_stop",
+        "账户权益触发硬停止线，系统已退出持仓并停止新交易。",
+        {"equity": equity, "floor": floor, "actions": actions},
+    )
+    return {"triggered": True, "equity": equity, "floor": floor, "actions": actions}
 
 
 def is_min_notional_rejection(exc: Exception) -> bool:
@@ -289,6 +332,13 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             raise RuntimeError(private_api_error(exc)) from exc
     else:
         raise RuntimeError("实盘模式需要先配置 Binance API Key 和 Secret。")
+    warning_floor = float(config.get("risk_warning_equity", 30.0))
+    warning_active = warning_floor > 0 and float(account.get("equity") or 0) < warning_floor
+    if bool(state.get("risk_warning_active")) != warning_active:
+        save_state({"risk_warning_active": warning_active})
+    hard_stop = enforce_hard_stop(client, config, account)
+    if hard_stop.get("triggered"):
+        return {"status": "hard_stopped", "hard_stop": hard_stop, "loop_seconds": loop_seconds_for(config, config.get("growth_mode"))}
     state = sync_stage(config, state, account)
     config = apply_stage_route(config, state.get("stage_route"))
     maybe_sync_live_reaction(client, config, state, account, symbols_override)
@@ -352,6 +402,17 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         symbols_override=symbols_override,
         fast_lane=fast_lane,
     )
+    scan = decision.get("scan") or {}
+    shadow_candidates = [item for item in scan.get("candidates", []) if not item.get("passed")]
+    if decision.get("action") == "WAIT" and (decision.get("candidate") or {}).get("passed"):
+        shadow_candidates.append(
+            {
+                **decision["candidate"],
+                "passed": False,
+                "decision_reason": decision.get("decision_reason") or (decision.get("risk") or {}).get("reason"),
+            }
+        )
+    shadow_status = update_shadow_trades(shadow_candidates, config)
     try:
         result = execute_with_freshness_guard(client, decision, config, account)
     except RuntimeError as exc:
@@ -406,7 +467,6 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         if decision.get("symbol"):
             set_rotation_cooldown(state, decision["symbol"], rotation_minutes)
     record_strategy_run(state, account, decision, result)
-    scan = decision.get("scan") or {}
     best = decision.get("candidate") or scan.get("best") or {}
     record_equity_snapshot(
         account,
@@ -440,6 +500,13 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             "reason": decision.get("reason") or (decision.get("risk") or {}).get("reason"),
         },
         "account": {key: account.get(key) for key in ["equity", "available_balance", "unrealized_pnl"]},
+        "risk_status": {
+            "warning_active": warning_active,
+            "warning_equity": warning_floor,
+            "hard_stop_equity": float(config.get("hard_stop_equity", 5.0)),
+            "current_equity": float(account.get("equity") or 0),
+        },
+        "shadow_trading": shadow_status,
     }
     if not fast_lane and "audit_status" in locals():
         snapshot_updates["protection_audit"] = audit_status

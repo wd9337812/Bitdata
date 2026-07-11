@@ -20,6 +20,9 @@ DEFAULT_STATE: dict[str, Any] = {
     "consecutive_losses": 0,
     "cooldown_until": None,
     "last_error": "",
+    "risk_warning_active": False,
+    "hard_stop_triggered": False,
+    "hard_stop_reason": "",
     "updated_at": None,
 }
 

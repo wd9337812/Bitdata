@@ -5,6 +5,7 @@ import math
 import time
 from typing import Any
 
+from app.adaptive_thresholds import adaptive_thresholds, build_market_profile
 from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.live_learning import apply_live_credit_to_candidate, list_live_scores
@@ -208,9 +209,9 @@ def strategy_params_for_mode(
         }
     elif mode_name == "extreme_sprint":
         defaults = {
-            "standard": (0.75, 1.05, 4),
-            "preemptive": (0.65, 0.9, 3),
-            "momentum": (0.7, 1.0, 3),
+            "standard": (0.85, 1.80, 10),
+            "preemptive": (0.70, 1.15, 5),
+            "momentum": (0.75, 1.35, 6),
         }
     else:
         defaults = {
@@ -272,6 +273,7 @@ def classify_market_state(
     candle_move_pct = abs(close - open_price) / close * 100 if close else 0.0
     atr_pct = float(signal.get("atr") or 0) / close * 100 if close else 0.0
     volume_spike = _volume_spike_ratio(bars)
+    adaptive = adaptive_thresholds(bars, config)
     spread_pct = float(depth.get("spread_pct") or 999)
     depth_notional = float(depth.get("depth_notional") or 0)
     max_spread = float(config.get("max_spread_pct", 0.08))
@@ -297,7 +299,11 @@ def classify_market_state(
             "volume_spike": round(volume_spike, 4),
             "atr_pct": round(atr_pct, 4),
         }
-    if signal.get("trend") and signal.get("volatility_ok") and volume_spike >= float(config.get("market_state_min_volume_spike", 1.2)):
+    trend_volume_min = max(
+        float(config.get("market_state_min_volume_spike", 1.2)),
+        float(adaptive.get("volume_spike_min", 1.2)) * 0.80,
+    )
+    if signal.get("trend") and signal.get("volatility_ok") and volume_spike >= trend_volume_min:
         return {
             "state": "trend_breakout",
             "label": "趋势放量",
@@ -306,6 +312,7 @@ def classify_market_state(
             "wick_ratio": round(wick_ratio, 4),
             "volume_spike": round(volume_spike, 4),
             "atr_pct": round(atr_pct, 4),
+            "adaptive_thresholds": adaptive,
         }
     if signal.get("trend") and signal.get("volatility_ok"):
         return {
@@ -316,6 +323,7 @@ def classify_market_state(
             "wick_ratio": round(wick_ratio, 4),
             "volume_spike": round(volume_spike, 4),
             "atr_pct": round(atr_pct, 4),
+            "adaptive_thresholds": adaptive,
         }
     return {
         "state": "chop",
@@ -325,6 +333,7 @@ def classify_market_state(
         "wick_ratio": round(wick_ratio, 4),
         "volume_spike": round(volume_spike, 4),
         "atr_pct": round(atr_pct, 4),
+        "adaptive_thresholds": adaptive,
     }
 
 
@@ -477,6 +486,9 @@ def latest_strategy_signal(
             "trigger_price": trigger_price,
             "distance_to_trigger_pct": 0.0,
             "candle_move_pct": candle_move_pct,
+            "trend": trend,
+            "trigger": trigger,
+            "volatility_ok": volatility_ok,
         }
 
     return {
@@ -497,6 +509,68 @@ def latest_strategy_signal(
         "candle_move_pct": candle_move_pct,
         "entry_type": "watch",
         "entry_type_label": "观察",
+    }
+
+
+def trend_pullback_signal(
+    symbol: str,
+    bars: list[list[Any]],
+    direction: str,
+    params: StrategyParams | None = None,
+) -> dict[str, Any] | None:
+    """Confirm a trend continuation after a controlled EMA pullback."""
+    if len(bars) < 80:
+        return None
+    params = params or StrategyParams(stop_atr=0.85, take_profit_atr=1.80, max_hold_bars=10)
+    closes = [float(row[4]) for row in bars]
+    highs = [float(row[2]) for row in bars]
+    lows = [float(row[3]) for row in bars]
+    e10 = ema(closes, 10)
+    e20 = ema(closes, 20)
+    e50 = ema(closes, 50)
+    atr_value = float(atr(bars, params.atr_period)[-1] or 0)
+    i = len(bars) - 1
+    close = closes[i]
+    is_short = direction.upper() == "SHORT"
+    aligned = close < e10[i] < e20[i] < e50[i] if is_short else close > e10[i] > e20[i] > e50[i]
+    slope_ok = e20[i] < e20[i - 3] and e50[i] <= e50[i - 3] if is_short else e20[i] > e20[i - 3] and e50[i] >= e50[i - 3]
+    touched = highs[i] >= e10[i] * 0.998 if is_short else lows[i] <= e10[i] * 1.002
+    recovered = close < e10[i] and close < closes[i - 1] if is_short else close > e10[i] and close > closes[i - 1]
+    volatility_ok = close > 0 and atr_value / close >= params.min_atr_pct
+    if not (aligned and slope_ok and touched and recovered and volatility_ok):
+        return None
+    stop = close + atr_value * params.stop_atr if is_short else close - atr_value * params.stop_atr
+    take = close - atr_value * params.take_profit_atr if is_short else close + atr_value * params.take_profit_atr
+    return {
+        "symbol": symbol,
+        "signal": "SHORT" if is_short else "LONG",
+        "reason": "trend_pullback_continuation",
+        "strategy": "trend_pullback",
+        "last_price": close,
+        "ema_fast": e20[i],
+        "ema_slow": e50[i],
+        "atr": atr_value,
+        "stop": stop,
+        "take_profit": take,
+        "risk_pct": abs(close - stop) / close,
+        "expected_profit_pct": abs(take - close) / close * 100,
+        "entry_type": "trend_pullback",
+        "entry_type_label": "趋势回踩",
+        "protection_profile": {
+            "stop_atr": params.stop_atr,
+            "take_profit_atr": params.take_profit_atr,
+            "max_hold_bars": params.max_hold_bars,
+            "break_even_atr": 0.75,
+            "trailing_trigger_atr": 1.05,
+            "trailing_distance_atr": 0.65,
+        },
+        "trigger_price": e10[i],
+        "distance_to_trigger_pct": 0.0,
+        "candle_move_pct": abs(close - closes[i - 1]) / close * 100,
+        "trend": True,
+        "trigger": True,
+        "volatility_ok": True,
+        "multi_horizon_alignment": True,
     }
 
 
@@ -660,7 +734,8 @@ def firecracker_opportunity_score(
     change_pct = float(ticker.get("priceChangePercent", 0) or 0)
     trade_count = float(ticker.get("count", 0) or 0)
     min_volume = float(config.get("extreme_firecracker_min_quote_volume_usdt", 30_000_000))
-    min_move = float(config.get("extreme_firecracker_min_abs_change_pct", 8.0))
+    adaptive = adaptive_thresholds([], config)
+    min_move = float(adaptive.get("firecracker_move_min_pct", config.get("extreme_firecracker_min_abs_change_pct", 8.0)))
     volume_score = min(max(math.log10(max(quote_volume, 1)) - 6.5, 0.0) * 12.0, 35.0)
     move_score = min(abs(change_pct) * 2.4, 42.0)
     activity_score = min(math.log10(max(trade_count, 1)) * 4.0, 18.0)
@@ -686,6 +761,7 @@ def firecracker_opportunity_score(
         "change_pct": change_pct,
         "trade_count": trade_count,
         "reasons": reasons,
+        "adaptive_thresholds": adaptive,
     }
 
 
@@ -1652,6 +1728,8 @@ def scan_growth_candidates(
     candidates = []
     recalled_symbols = list(symbols)
     tickers = {item["symbol"]: item for item in client.ticker_24h(recalled_symbols)}
+    market_profile = build_market_profile(tickers)
+    config = {**config, "_adaptive_market_profile": market_profile}
     try:
         funding_by_symbol = {item["symbol"]: item for item in client.premium_index(recalled_symbols)}
     except Exception:
@@ -1714,6 +1792,10 @@ def scan_growth_candidates(
                 fast_prefix = "yolo_scalp" if mode["mode"] == "yolo_scalp" else "extreme_sprint" if mode["mode"] == "extreme_sprint" else "tournament_sprint"
                 signal_params = strategy_params_for_mode(config, mode, "standard")
                 signal = latest_strategy_signal(symbol, bars, mode["strategy"], params=signal_params, direction=direction)
+                if signal.get("signal") == "WAIT" and mode["mode"] == "extreme_sprint":
+                    pullback = trend_pullback_signal(symbol, bars, direction, signal_params)
+                    if pullback is not None:
+                        signal = pullback
                 backtests = {
                     day: _backtest_strategy_with_params(symbol, bars, mode["strategy"], day, direction, signal_params)
                     for day in quality_days
@@ -1837,7 +1919,7 @@ def scan_growth_candidates(
                 score += 3 if standard_passed else 0
                 score -= 1.5 if direction == "SHORT" else 0
 
-                entry_type = "standard" if standard_passed else "watch"
+                entry_type = str(signal.get("entry_type") or "standard") if standard_passed else "watch"
                 standard_min_score = float(config.get(f"{fast_prefix}_standard_min_score", 72.0) if is_sprint else config.get("standard_min_score", 85.0))
                 passed = standard_passed and score >= standard_min_score
                 risk_adjustment: dict[str, Any] | None = None
@@ -2096,6 +2178,7 @@ def scan_growth_candidates(
                         "symbol_pool": quality["pool"],
                         "live_performance": live_perf,
                         "market_state": market_state,
+                        "adaptive_thresholds": market_state.get("adaptive_thresholds") or adaptive_thresholds(bars, config),
                         "scalp_signal": scalp_signal,
                         "firecracker": firecracker,
                         "derivatives": derivatives,
@@ -2243,6 +2326,7 @@ def scan_growth_candidates(
             "symbols": opportunity_symbols[:20],
             "label": "事件队列",
         },
+        "adaptive_market": market_profile,
         "elapsed_seconds": round(time.perf_counter() - started_at, 3),
         "channel": "fast_lane" if fast_lane else "background_scan",
         "degrade_seconds": degrade_seconds,

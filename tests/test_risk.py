@@ -33,6 +33,18 @@ def test_risk_blocks_paused_bot():
     assert decision.reason == "bot_paused"
 
 
+def test_warning_equity_does_not_block_but_hard_stop_does():
+    config = {**base_config(), "risk_warning_equity": 30, "hard_stop_equity": 5}
+    state = {"bot_status": "running"}
+
+    warning_only = assess_new_position(config, state, 29.92, "SOLUSDT", [])
+    hard_stopped = assess_new_position(config, state, 5.0, "SOLUSDT", [])
+
+    assert warning_only.allowed is True
+    assert hard_stopped.allowed is False
+    assert hard_stopped.reason == "hard_stop_equity"
+
+
 def test_position_size_from_fixed_risk():
     assert position_size_from_risk(100, 1, 10, 9) == 1
 

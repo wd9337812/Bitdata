@@ -108,8 +108,9 @@ def assess_new_position(
     direction = str(overrides.get("direction") or "").upper()
     if state.get("bot_status") != "running":
         return RiskDecision(False, "bot_paused")
-    if equity <= float(config.get("tournament_stop_equity", 0)):
-        return RiskDecision(False, "tournament_stop_equity")
+    hard_stop = float(config.get("hard_stop_equity", config.get("tournament_stop_equity", 5.0)))
+    if hard_stop > 0 and equity <= hard_stop:
+        return RiskDecision(False, "hard_stop_equity")
 
     cooldown_until = state.get("cooldown_until")
     active, error = _cooldown_active(cooldown_until)

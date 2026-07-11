@@ -449,6 +449,44 @@ def build_stage1_decision(
         account_summary.get("positions", []),
         overrides=overrides,
     )
+    if not risk.allowed:
+        warning_equity = float(config.get("risk_warning_equity", 30.0))
+        hard_stop_equity = float(config.get("hard_stop_equity", config.get("tournament_stop_equity", 5.0)))
+        reason_labels = {
+            "hard_stop_equity": f"账户权益触发硬停止线：当前 {equity:.4f}U，停止线 {hard_stop_equity:.2f}U",
+            "bot_paused": "机器人未处于运行状态",
+            "cooldown_active": "全局风控冷却中",
+            "symbol_direction_cooldown_active": "该币种方向仍在冷却中",
+            "consecutive_loss_limit": "连续亏损次数达到模式上限",
+            "daily_loss_limit": "当日亏损达到模式上限",
+            "max_drawdown_limit": "权益最大回撤达到上限",
+            "max_open_positions": "当前持仓数量达到上限",
+        }
+        return {
+            "symbol": symbol,
+            "action": "WAIT",
+            "direction": direction,
+            "signal": signal,
+            "risk": risk.__dict__,
+            "quantity": 0.0,
+            "estimated_notional": 0.0,
+            "effective_risk": effective_risk,
+            "mode": active_mode["mode"],
+            "strategy": active_mode["strategy"],
+            "entry_type": entry_type,
+            "decision_reason": reason_labels.get(risk.reason, f"风控拒绝：{risk.reason}"),
+            "primary_block_reason": risk.reason,
+            "risk_warning": {
+                "active": warning_equity > 0 and equity < warning_equity,
+                "warning_equity": warning_equity,
+                "hard_stop_equity": hard_stop_equity,
+                "current_equity": equity,
+            },
+            "equity_guard": guard,
+            "target_progress": target,
+            "protection_plan": protection_plan,
+            "equity": equity,
+        }
     quantity = position_size_from_risk(
         equity=equity,
         risk_pct=float(active_mode["risk_pct"]),

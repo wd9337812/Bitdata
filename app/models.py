@@ -167,6 +167,11 @@ class TradingConfig(BaseModel):
     max_spread_pct: float = Field(default=0.08, ge=0, le=5)
     min_depth_notional_usdt: float = Field(default=20_000, ge=0)
     volume_spike_ratio: float = Field(default=1.8, ge=0, le=20)
+    adaptive_thresholds_enabled: bool = True
+    adaptive_volume_spike_floor: float = Field(default=1.2, ge=0, le=20)
+    adaptive_volume_spike_ceiling: float = Field(default=2.4, ge=0, le=20)
+    adaptive_firecracker_move_floor_pct: float = Field(default=4.0, ge=0, le=200)
+    adaptive_firecracker_move_ceiling_pct: float = Field(default=14.0, ge=0, le=200)
     quality_backtest_days: list[int] = Field(default_factory=lambda: [3, 5])
     interval: str = "4h"
     conservative_interval: str = "4h"
@@ -226,7 +231,16 @@ class TradingConfig(BaseModel):
     protection_trailing_distance_atr: float = Field(default=0.55, ge=0, le=20)
     protection_min_profit_after_cost_pct: float = Field(default=0.08, ge=0, le=10)
     growth_mode: str = "balanced"
-    tournament_stop_equity: float = Field(default=30.0, ge=0)
+    risk_warning_equity: float = Field(default=30.0, ge=0)
+    hard_stop_equity: float = Field(default=5.0, ge=0)
+    hard_stop_recovery_equity: float = Field(default=5.5, ge=0)
+    tournament_stop_equity: float = Field(default=5.0, ge=0)
+    shadow_trading_enabled: bool = True
+    shadow_min_candidate_score: float = Field(default=70.0, ge=0, le=300)
+    shadow_dedupe_minutes: int = Field(default=10, ge=1, le=1440)
+    shadow_max_hold_minutes: int = Field(default=120, ge=1, le=10080)
+    shadow_reference_notional_usdt: float = Field(default=20.0, ge=1, le=1_000_000)
+    shadow_round_trip_cost_pct: float = Field(default=0.12, ge=0, le=10)
     auto_risk_by_equity: bool = True
     stage_routing_enabled: bool = True
     stage_manual_mode: str = "auto"
@@ -281,15 +295,15 @@ class TradingConfig(BaseModel):
     extreme_sprint_momentum_min_score: float = Field(default=68.0, ge=0, le=200)
     extreme_sprint_min_expected_profit_cost_ratio: float = Field(default=1.1, ge=0, le=50)
     extreme_sprint_min_expected_profit_pct: float = Field(default=0.18, ge=0, le=20)
-    extreme_sprint_standard_stop_atr: float = Field(default=0.75, ge=0.1, le=10)
-    extreme_sprint_standard_take_profit_atr: float = Field(default=1.05, ge=0.1, le=20)
-    extreme_sprint_standard_max_hold_bars: int = Field(default=4, ge=1, le=100)
-    extreme_sprint_preemptive_stop_atr: float = Field(default=0.65, ge=0.1, le=10)
-    extreme_sprint_preemptive_take_profit_atr: float = Field(default=0.9, ge=0.1, le=20)
-    extreme_sprint_preemptive_max_hold_bars: int = Field(default=3, ge=1, le=100)
-    extreme_sprint_momentum_stop_atr: float = Field(default=0.7, ge=0.1, le=10)
-    extreme_sprint_momentum_take_profit_atr: float = Field(default=1.0, ge=0.1, le=20)
-    extreme_sprint_momentum_max_hold_bars: int = Field(default=3, ge=1, le=100)
+    extreme_sprint_standard_stop_atr: float = Field(default=0.85, ge=0.1, le=10)
+    extreme_sprint_standard_take_profit_atr: float = Field(default=1.8, ge=0.1, le=20)
+    extreme_sprint_standard_max_hold_bars: int = Field(default=10, ge=1, le=100)
+    extreme_sprint_preemptive_stop_atr: float = Field(default=0.7, ge=0.1, le=10)
+    extreme_sprint_preemptive_take_profit_atr: float = Field(default=1.15, ge=0.1, le=20)
+    extreme_sprint_preemptive_max_hold_bars: int = Field(default=5, ge=1, le=100)
+    extreme_sprint_momentum_stop_atr: float = Field(default=0.75, ge=0.1, le=10)
+    extreme_sprint_momentum_take_profit_atr: float = Field(default=1.35, ge=0.1, le=20)
+    extreme_sprint_momentum_max_hold_bars: int = Field(default=6, ge=1, le=100)
     extreme_sprint_high_score: float = Field(default=110.0, ge=0, le=300)
     extreme_sprint_super_score: float = Field(default=135.0, ge=0, le=300)
     extreme_sprint_high_risk_multiplier: float = Field(default=1.35, ge=0.1, le=5)
