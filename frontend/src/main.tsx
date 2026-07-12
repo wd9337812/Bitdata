@@ -201,6 +201,7 @@ function App() {
   const binanceRate = status?.binance_rate || {};
   const opportunityQueue = status?.opportunity_queue || {};
   const runtime = status?.runtime || {};
+  const performanceGuard = runtime?.risk_status?.performance_guard || {};
   const target = status?.target_progress || {};
   const stageProfile = status?.stage_profile || {};
   const rawStageRoute = status?.stage_route || {};
@@ -355,6 +356,18 @@ function App() {
                 value={runtime?.risk_status?.warning_active ? "低于预警线" : "正常"}
                 sub={`预警 ${fmt(config.risk_warning_equity, 2)}U · 硬停止 ${fmt(config.hard_stop_equity, 2)}U`}
                 tone={runtime?.risk_status?.warning_active ? "negative" : "positive"}
+              />
+              <MetricCard
+                title="全局交易保护"
+                value={performanceGuard.status_label || "等待统计"}
+                sub={`实盘 PF ${fmt(performanceGuard.live?.profit_factor, 2)} · 最近亏损 ${fmt(performanceGuard.rolling_losses, 0)} 笔`}
+                tone={performanceGuard.status === "normal" ? "positive" : "negative"}
+              />
+              <MetricCard
+                title="影子/实盘验证"
+                value={`影子 PF ${fmt(performanceGuard.shadow?.profit_factor, 2)}`}
+                sub={performanceGuard.reason || "用于决定是否允许信用加仓"}
+                tone={performanceGuard.shadow_bad ? "negative" : ""}
               />
             </div>
             <ProtectionAuditPanel audit={runtime?.protection_audit} />
@@ -1209,6 +1222,13 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("fast_lane_max_symbols", "快车道单次币数", "默认 3；优先最高分异动，避免挤占交易API预算")}
           {number("fast_lane_budget_seconds", "快车道计算预算", "默认 5 秒；超过预算只完成最高优先级币")}
           {number("telemetry_retention_days", "系统明细保留天数", "默认 30 天；成交与实盘学习记录不受影响")}
+          {number("strategy_run_retention_days", "扫描决策明细保留天数", "默认 7 天；更早数据只保留聚合与真实成交，控制数据库体积")}
+          {number("shadow_trade_retention_days", "影子交易明细保留天数", "默认 14 天；过期已平仓明细自动清理")}
+          {toggle("performance_guard_enabled", "全局负期望保护", "推荐开启：实盘和影子交易同时变差时，暂停开仓后只允许低风险恢复探路")}
+          {number("performance_guard_pause_minutes", "全局保护暂停分钟", "默认 60 分钟；保护期间仍管理已有持仓和止盈止损")}
+          {number("performance_guard_recovery_risk_multiplier", "恢复探路倍率", "默认 0.20x；滚动表现恢复前不允许大仓位")}
+          {toggle("strategy_evidence_enabled", "影子/实盘双确认", "推荐开启：只有两边都盈利并满足样本量，信用分才允许提高仓位")}
+          {number("strategy_evidence_loss_reentry_minutes", "亏损后同向等待分钟", "默认 30 分钟；避免同一币种同方向连续追假突破")}
           {toggle("adaptive_thresholds_enabled", "市场自适应阈值", "复用现有行情数据，按市场冷热和币种自身成交量动态调整放量与异动门槛")}
           {number("adaptive_volume_spike_floor", "自适应放量下限", "默认 1.2 倍，系统不能无限降低门槛")}
           {number("adaptive_volume_spike_ceiling", "自适应放量上限", "默认 2.4 倍，活跃市场会提高要求")}

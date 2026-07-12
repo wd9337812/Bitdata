@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.performance_guard import observed_round_trip_cost_pct
+
 
 PROBE_ENTRY_TYPES = {
     "extreme_probe",
@@ -205,6 +207,9 @@ def effective_position_risk(
         max_risk = min(max_risk, stage_risk_cap) if max_risk > 0 else stage_risk_cap
     if max_risk > 0:
         final_risk = min(final_risk, max_risk)
+    performance = candidate.get("global_performance_guard") or {}
+    performance_multiplier = max(0.0, min(1.0, float(performance.get("risk_multiplier", 1.0))))
+    final_risk *= performance_multiplier
     return {
         "tier": tier,
         "scalp_tier": scalp_tier,
@@ -216,6 +221,7 @@ def effective_position_risk(
         "risk_floor_pct": round(risk_floor, 6),
         "max_risk_pct": round(max_risk, 6),
         "stage_risk_cap_pct": round(stage_risk_cap, 6),
+        "performance_multiplier": round(performance_multiplier, 6),
         "final_risk_pct": round(final_risk, 8),
         "yolo_scalp_profile": yolo_profile,
     }
@@ -229,8 +235,10 @@ def effective_order_viability(
 ) -> dict[str, Any]:
     candidate = candidate or {}
     expected_profit_pct = max(0.0, float(candidate.get("expected_profit_pct") or 0.0))
-    estimated_cost_pct = max(0.0, float(candidate.get("estimated_cost_pct") or 0.0))
-    cost_ratio = float(candidate.get("cost_ratio") or (expected_profit_pct / estimated_cost_pct if estimated_cost_pct else 999.0))
+    candidate_cost_pct = max(0.0, float(candidate.get("estimated_cost_pct") or 0.0))
+    observed_cost_pct = observed_round_trip_cost_pct(config)
+    estimated_cost_pct = max(candidate_cost_pct, observed_cost_pct)
+    cost_ratio = expected_profit_pct / estimated_cost_pct if estimated_cost_pct else 999.0
     expected_net_profit = float(notional) * max(0.0, expected_profit_pct - estimated_cost_pct) / 100
     is_yolo = str(candidate.get("mode") or "") == "yolo_scalp"
     min_notional = float(
@@ -271,6 +279,8 @@ def effective_order_viability(
         "notional": round(float(notional), 8),
         "minimum_notional": min_notional,
         "cost_ratio": round(cost_ratio, 6),
+        "candidate_cost_pct": round(candidate_cost_pct, 6),
+        "observed_cost_floor_pct": round(observed_cost_pct, 6),
         "minimum_cost_ratio": min_cost_ratio,
         "expected_net_profit": round(expected_net_profit, 8),
         "minimum_net_profit": min_net_profit,

@@ -52,3 +52,17 @@ This file tracks local verification for the two-stage futures system.
 - Binance Futures live stream probe passed: `public` delivered depth/book ticker data, `market` delivered aggregate trades, and the in-process trade-flow snapshot contained positive notional plus imbalance.
 - VPS rollout feedback raised the default REST priority budgets to 40% background, 55% normal, 75% realtime, and 90% critical after the old 13.75% background ceiling deferred most deep checks at only 22% exchange usage. Explicit caller budgets keep the legacy 55% background split.
 - Separated the background full-funnel cadence from the strategy execution cadence: full scans now have a configurable 30-second minimum while the WebSocket fast lane remains at two seconds.
+
+## 2026-07-12 Rolling Performance Guard
+
+- Added a cached account-level performance guard using the latest live and shadow trades. When both windows are negative, new entries pause for 60 minutes and then recover at a default `0.20x` risk multiplier.
+- Added symbol/direction and market-direction evidence. Live-credit boosts now require positive live and shadow confirmation; negative agreement caps risk and a recent loss blocks same-direction re-entry for 30 minutes.
+- Effective-order cost checks now use the higher of the candidate estimate and the observed 75th-percentile live round-trip cost with a safety multiplier.
+- Shadow trades use the same observed cost floor, prevent overlapping symbol/direction/signal samples, and retain observed high/low prices with conservative ambiguous-bar settlement.
+- Live-credit evidence now decays with a configurable 12-hour half-life instead of retaining old wins at a fixed weight.
+- Fast-lane repeated WAIT records are throttled, compact payloads retain fewer candidates, strategy-run details default to seven-day retention, and closed shadow details default to fourteen-day retention.
+- React Dashboard now shows the global trading-protection state, rolling live PF/loss count, and shadow PF in Chinese.
+- `python -m compileall app`: passed.
+- `python -m pytest -q`: `174 passed` (one existing local `requests` dependency compatibility warning).
+- `npm run build`: passed; Vite reported only the existing large-chunk advisory.
+- `git diff --check`: passed; Git reported only Windows LF/CRLF conversion notices.

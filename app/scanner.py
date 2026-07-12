@@ -10,6 +10,7 @@ from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.live_learning import apply_live_credit_to_candidate, list_live_scores
 from app.live_reaction import apply_live_reaction_to_candidate
+from app.performance_guard import apply_strategy_evidence_to_candidate
 from app.market_stream import stream_triggers, write_stream_intent
 from app.opportunity_queue import read_opportunities
 from app.position_sizing import effective_position_risk
@@ -2214,6 +2215,7 @@ def scan_growth_candidates(
                     }
                 candidate = apply_live_credit_to_candidate(candidate, config)
                 candidate = apply_live_reaction_to_candidate(candidate, config)
+                candidate = apply_strategy_evidence_to_candidate(candidate, config)
                 viability_risk_pct = float(candidate.get("risk_pct") or 0)
                 if config.get("effective_position_sizing_enabled", True):
                     viability_risk_pct = float(effective_position_risk(

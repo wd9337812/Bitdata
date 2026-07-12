@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 _EVENT_THROTTLE: dict[str, float] = {}
+_STRATEGY_RUN_THROTTLE: dict[str, float] = {}
 
 
 def db_path() -> Path:
@@ -158,13 +159,25 @@ def record_strategy_run(
     account: dict[str, Any],
     decision: dict[str, Any],
     result: dict[str, Any] | None = None,
-) -> None:
+    *,
+    throttle_seconds: int = 0,
+) -> bool:
     result = result or {}
     scan = decision.get("scan") or {}
     mode = decision.get("mode") or (scan.get("mode") or {}).get("mode")
     candidate = decision.get("candidate") or scan.get("best") or {}
     signal = decision.get("signal") or candidate.get("signal") or {}
     symbol = decision.get("symbol") or candidate.get("symbol")
+    if throttle_seconds > 0:
+        throttle_key = f"{db_path()}:" + ":".join(
+            str(value or "-")
+            for value in [mode, decision.get("action"), decision.get("reason") or (decision.get("risk") or {}).get("reason"), symbol]
+        )
+        current = datetime.now(timezone.utc).timestamp()
+        last = _STRATEGY_RUN_THROTTLE.get(throttle_key, 0.0)
+        if current - last < throttle_seconds:
+            return False
+        _STRATEGY_RUN_THROTTLE[throttle_key] = current
     with connect() as conn:
         conn.execute(
             """
@@ -192,6 +205,7 @@ def record_strategy_run(
             ),
         )
         conn.commit()
+    return True
 
 
 def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
@@ -218,7 +232,7 @@ def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
         scan.pop("recalled_symbols", None)
         scan["symbols"] = list(scan.get("symbols") or [])[:30]
         scan["opportunity_events"] = list(scan.get("opportunity_events") or [])[:10]
-        scan["candidates"] = [compact_candidate(candidate) for candidate in list(scan.get("candidates") or [])[:24]]
+        scan["candidates"] = [compact_candidate(candidate) for candidate in list(scan.get("candidates") or [])[:12]]
         if isinstance(scan.get("best"), dict):
             scan["best"] = compact_candidate(scan["best"])
         for pool_name in ["trade_pool", "observe_pool"]:
@@ -233,15 +247,47 @@ def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
-def maintain_telemetry(retention_days: int = 30) -> dict[str, int]:
+def _delete_batch(conn: sqlite3.Connection, table: str, column: str, cutoff: str, batch_size: int) -> int:
+    before = conn.total_changes
+    conn.execute(
+        f"DELETE FROM {table} WHERE id IN (SELECT id FROM {table} WHERE {column} < ? ORDER BY id LIMIT ?)",
+        (cutoff, batch_size),
+    )
+    return max(0, conn.total_changes - before)
+
+
+def maintain_telemetry(
+    retention_days: int = 30,
+    *,
+    strategy_run_retention_days: int = 7,
+    shadow_trade_retention_days: int = 14,
+    batch_size: int = 50_000,
+) -> dict[str, int]:
     cutoff = datetime.now(timezone.utc).timestamp() - max(1, retention_days) * 86400
     cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
+    strategy_cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, strategy_run_retention_days))
+    shadow_cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, shadow_trade_retention_days))
     try:
         with connect() as conn:
             events = conn.execute("DELETE FROM event_logs WHERE ts < ?", (cutoff_iso,)).rowcount
             snapshots = conn.execute("DELETE FROM equity_snapshots WHERE ts < ?", (cutoff_iso,)).rowcount
-            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            strategy_runs = _delete_batch(conn, "strategy_runs", "ts", strategy_cutoff.isoformat(), max(100, batch_size))
+            try:
+                before_shadow = conn.total_changes
+                conn.execute(
+                    "DELETE FROM shadow_trades WHERE id IN (SELECT id FROM shadow_trades WHERE status = 'CLOSED' AND closed_at < ? ORDER BY id LIMIT ?)",
+                    (shadow_cutoff.isoformat(), max(100, batch_size)),
+                )
+                shadow_trades = max(0, conn.total_changes - before_shadow)
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
+                shadow_trades = 0
             conn.commit()
+            try:
+                conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            except sqlite3.OperationalError:
+                pass
     except sqlite3.OperationalError as exc:
         if "locked" not in str(exc).lower():
             raise
@@ -252,8 +298,13 @@ def maintain_telemetry(retention_days: int = 30) -> dict[str, int]:
             {},
             throttle_seconds=300,
         )
-        return {"events_deleted": 0, "snapshots_deleted": 0}
-    return {"events_deleted": max(0, events), "snapshots_deleted": max(0, snapshots)}
+        return {"events_deleted": 0, "snapshots_deleted": 0, "strategy_runs_deleted": 0, "shadow_trades_deleted": 0}
+    return {
+        "events_deleted": max(0, events),
+        "snapshots_deleted": max(0, snapshots),
+        "strategy_runs_deleted": max(0, strategy_runs),
+        "shadow_trades_deleted": max(0, shadow_trades),
+    }
 
 
 def list_equity_snapshots(limit: int = 500) -> list[dict[str, Any]]:

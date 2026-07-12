@@ -13,6 +13,7 @@ from app.position_sizing import (
     extreme_scalp_tier,
     unified_position_sizing,
 )
+from app.performance_guard import global_performance_guard
 from app.protection_audit import audit_position_protection, enrich_positions_with_prices
 from app.protection import apply_initial_protection_to_signal, build_protection_plan
 from app.risk import assess_new_position, equity_guard_status, live_trading_allowed, position_size_from_risk
@@ -373,6 +374,25 @@ def build_stage1_decision(
         entry_type = "extreme_scalp"
     protection_plan = build_protection_plan(signal, config, entry_type=entry_type, direction=direction)
     signal = apply_initial_protection_to_signal(signal, protection_plan)
+    performance_guard = global_performance_guard(config, equity)
+    if not performance_guard.get("allowed", True):
+        return {
+            "symbol": symbol,
+            "action": "WAIT",
+            "direction": direction,
+            "signal": signal,
+            "risk": {"allowed": False, "reason": "global_performance_cooldown"},
+            "mode": active_mode["mode"],
+            "strategy": active_mode["strategy"],
+            "entry_type": entry_type,
+            "decision_reason": f"全局风险关闭：{performance_guard.get('reason')}，暂停新开仓至 {performance_guard.get('pause_until')}",
+            "primary_block_reason": "global_performance_cooldown",
+            "performance_guard": performance_guard,
+            "protection_plan": protection_plan,
+            "equity": equity,
+        }
+    if scan_candidate is not None:
+        scan_candidate = {**scan_candidate, "global_performance_guard": performance_guard}
     guard = equity_guard_status(config, state, equity, active_mode["mode"])
     target = target_progress(config, state, account_summary)
     if not guard.get("allowed", True):

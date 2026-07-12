@@ -101,6 +101,10 @@ def init_live_learning_schema() -> None:
             )
             """
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_live_trade_close_time ON live_trade_records(close_time)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_live_trade_symbol_direction_close ON live_trade_records(symbol, direction, close_time)"
+        )
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS symbol_live_scores (
@@ -243,11 +247,12 @@ def _time_decay_multiplier(record: dict[str, Any], config: dict[str, Any]) -> fl
     if close_time <= 0:
         return 1.0
     age_hours = max(0.0, (datetime.now(timezone.utc).timestamp() - close_time / 1000) / 3600)
+    half_life = max(1.0, float(config.get("live_credit_decay_half_life_hours", 12.0)))
+    floor = max(0.0, min(1.0, float(config.get("live_credit_decay_floor", 0.15))))
+    decay = max(floor, 0.5 ** (age_hours / half_life))
     if age_hours <= 3:
-        return float(config.get("live_credit_recent_3h_multiplier", 1.5))
-    if age_hours <= 24:
-        return float(config.get("live_credit_recent_24h_multiplier", 1.0))
-    return float(config.get("live_credit_old_multiplier", 0.6))
+        decay *= float(config.get("live_credit_recent_3h_multiplier", 1.5))
+    return decay
 
 
 def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, Any]:
@@ -828,6 +833,7 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
     weight = float(config.get(weight_key, config.get("live_credit_score_weight", 0.35)))
     score_delta = (score - float(config.get("live_credit_default_score", DEFAULT_SCORE))) * weight
     candidate = dict(candidate)
+    input_risk_pct = float(candidate.get("risk_pct") or 0)
     candidate["live_credit"] = credit
     candidate["score"] = round(float(candidate.get("score") or 0) + score_delta, 4)
 
@@ -946,6 +952,7 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
         else:
             candidate["decision_reason"] = f"{candidate['decision_reason']}；{'；'.join(reasons)}"
     candidate["live_credit_adjustment"] = {
+        "input_risk_pct": round(input_risk_pct, 8),
         "score_delta": round(score_delta, 4),
         "risk_multiplier": round(multiplier, 4),
         "boost_qualified": boost_ok,

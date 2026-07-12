@@ -4,7 +4,8 @@ from app.binance_rate import BinanceRateLimitError, before_request, cache_get, c
 from app.runtime_snapshot import read_runtime_snapshot, update_runtime_snapshot
 from app.runner import background_loop_seconds
 from app.scanner import scan_growth_candidates
-from app.telemetry import compact_decision, connect
+from app.shadow_trading import ensure_shadow_tables
+from app.telemetry import compact_decision, connect, maintain_telemetry, record_strategy_run
 
 
 def test_sqlite_cache_round_trip_without_monolithic_json(monkeypatch, tmp_path):
@@ -83,6 +84,55 @@ def test_telemetry_database_uses_wal_and_indexes(monkeypatch, tmp_path):
 
     assert mode.lower() == "wal"
     assert "idx_strategy_runs_symbol_ts" in indexes
+
+
+def test_telemetry_maintenance_prunes_only_old_scan_and_closed_shadow_rows(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    with connect() as conn:
+        ensure_shadow_tables(conn)
+        conn.execute(
+            "INSERT INTO strategy_runs (ts, action, payload) VALUES ('2020-01-01T00:00:00+00:00', 'WAIT', '{}')"
+        )
+        conn.execute(
+            """
+            INSERT INTO shadow_trades (
+                dedupe_key, opened_at, closed_at, symbol, direction, status, entry, stop,
+                take_profit, last_price, notional, estimated_cost, expires_at
+            ) VALUES ('old', '2020-01-01T00:00:00+00:00', '2020-01-01T01:00:00+00:00',
+                      'OLDUSDT', 'LONG', 'CLOSED', 1, 0.9, 1.1, 1, 20, 0.02,
+                      '2020-01-01T02:00:00+00:00')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO shadow_trades (
+                dedupe_key, opened_at, symbol, direction, status, entry, stop,
+                take_profit, last_price, notional, estimated_cost, expires_at
+            ) VALUES ('open', '2020-01-01T00:00:00+00:00', 'OPENUSDT', 'LONG', 'OPEN',
+                      1, 0.9, 1.1, 1, 20, 0.02, '2099-01-01T00:00:00+00:00')
+            """
+        )
+        conn.commit()
+
+    result = maintain_telemetry(30, strategy_run_retention_days=7, shadow_trade_retention_days=14)
+
+    assert result["strategy_runs_deleted"] == 1
+    assert result["shadow_trades_deleted"] == 1
+    with connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM shadow_trades WHERE status = 'OPEN'").fetchone()[0] == 1
+
+
+def test_wait_strategy_run_throttle_keeps_first_row_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    decision = {"action": "WAIT", "reason": "no_candidate_passed", "scan": {"mode": {"mode": "extreme_sprint"}}}
+
+    first = record_strategy_run({"stage": "growth"}, {"equity": 20}, decision, throttle_seconds=30)
+    second = record_strategy_run({"stage": "growth"}, {"equity": 20}, decision, throttle_seconds=30)
+
+    assert first is True
+    assert second is False
+    with connect() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM strategy_runs").fetchone()[0] == 1
 
 
 def test_fast_lane_scans_only_explicit_symbols(monkeypatch, tmp_path):

@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.performance_guard import observed_round_trip_cost_pct
 from app.telemetry import connect, now_iso
 
 
@@ -26,6 +27,8 @@ def ensure_shadow_tables(conn: sqlite3.Connection) -> None:
             stop REAL NOT NULL,
             take_profit REAL NOT NULL,
             last_price REAL NOT NULL,
+            high_price REAL,
+            low_price REAL,
             notional REAL NOT NULL,
             gross_pnl REAL DEFAULT 0,
             estimated_cost REAL DEFAULT 0,
@@ -38,6 +41,13 @@ def ensure_shadow_tables(conn: sqlite3.Connection) -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_status ON shadow_trades(status, opened_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_symbol ON shadow_trades(symbol, opened_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_closed_at ON shadow_trades(status, closed_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_shadow_symbol_direction_closed ON shadow_trades(symbol, direction, closed_at)")
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(shadow_trades)").fetchall()}
+    if "high_price" not in columns:
+        conn.execute("ALTER TABLE shadow_trades ADD COLUMN high_price REAL")
+    if "low_price" not in columns:
+        conn.execute("ALTER TABLE shadow_trades ADD COLUMN low_price REAL")
 
 
 def _candidate_price(candidate: dict[str, Any]) -> float:
@@ -70,23 +80,37 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
         for item in candidates
         if _candidate_price(item) > 0
     }
+    cost_pct = max(
+        float(config.get("shadow_round_trip_cost_pct", 0.12)),
+        observed_round_trip_cost_pct(config),
+    ) / 100
     opened = 0
     closed = 0
     with connect() as conn:
         ensure_shadow_tables(conn)
         active_rows = conn.execute("SELECT * FROM shadow_trades WHERE status = 'OPEN'").fetchall()
+        active_keys = {
+            (str(row["symbol"]).upper(), str(row["direction"]).upper(), str(row["signal_type"] or "watch"))
+            for row in active_rows
+        }
         for row in active_rows:
             item = dict(row)
             price = prices.get(str(item["symbol"]).upper())
             if not price:
                 continue
             direction = str(item["direction"]).upper()
-            stop_hit = price <= float(item["stop"]) if direction == "LONG" else price >= float(item["stop"])
-            take_hit = price >= float(item["take_profit"]) if direction == "LONG" else price <= float(item["take_profit"])
+            high = max(float(item.get("high_price") or item["entry"]), price)
+            low = min(float(item.get("low_price") or item["entry"]), price)
+            stop_hit = low <= float(item["stop"]) if direction == "LONG" else high >= float(item["stop"])
+            take_hit = high >= float(item["take_profit"]) if direction == "LONG" else low <= float(item["take_profit"])
             expired = now >= datetime.fromisoformat(str(item["expires_at"]))
             if not (stop_hit or take_hit or expired):
-                conn.execute("UPDATE shadow_trades SET last_price = ? WHERE id = ?", (price, item["id"]))
+                conn.execute(
+                    "UPDATE shadow_trades SET last_price = ?, high_price = ?, low_price = ? WHERE id = ?",
+                    (price, high, low, item["id"]),
+                )
                 continue
+            # When both levels were crossed between observations, assume the stop happened first.
             exit_price = float(item["stop"]) if stop_hit else float(item["take_profit"]) if take_hit else price
             move = (exit_price - float(item["entry"])) / float(item["entry"])
             if direction == "SHORT":
@@ -97,18 +121,18 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
             conn.execute(
                 """
                 UPDATE shadow_trades
-                SET status = 'CLOSED', closed_at = ?, last_price = ?, gross_pnl = ?, net_pnl = ?, outcome = ?
+                SET status = 'CLOSED', closed_at = ?, last_price = ?, high_price = ?, low_price = ?, gross_pnl = ?, net_pnl = ?, outcome = ?
                 WHERE id = ?
                 """,
-                (now_iso(), exit_price, gross, gross - cost, outcome, item["id"]),
+                (now_iso(), exit_price, high, low, gross, gross - cost, outcome, item["id"]),
             )
+            active_keys.discard((str(item["symbol"]).upper(), direction, str(item.get("signal_type") or "watch")))
             closed += 1
 
         min_score = float(config.get("shadow_min_candidate_score", 70.0))
         bucket_minutes = int(config.get("shadow_dedupe_minutes", 10))
         hold_minutes = int(config.get("shadow_max_hold_minutes", 120))
         notional = float(config.get("shadow_reference_notional_usdt", 20.0))
-        cost_pct = float(config.get("shadow_round_trip_cost_pct", 0.12)) / 100
         for candidate in candidates:
             signal = candidate.get("signal") or {}
             entry = _candidate_price(candidate)
@@ -123,14 +147,21 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
             ):
                 continue
             key = _dedupe_key(candidate, bucket_minutes)
+            active_key = (
+                str(candidate.get("symbol") or "").upper(),
+                str(candidate.get("direction") or "LONG").upper(),
+                str(candidate.get("entry_type") or "watch"),
+            )
+            if active_key in active_keys:
+                continue
             try:
                 conn.execute(
                     """
                     INSERT INTO shadow_trades (
                         dedupe_key, opened_at, symbol, direction, signal_type, mode, status,
-                        blocked_reason, entry, stop, take_profit, last_price, notional,
+                        blocked_reason, entry, stop, take_profit, last_price, high_price, low_price, notional,
                         estimated_cost, expires_at, payload
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         key,
@@ -143,6 +174,8 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         entry,
                         stop,
                         take,
+                        entry,
+                        entry,
                         entry,
                         notional,
                         notional * cost_pct,
@@ -160,6 +193,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         ),
                     ),
                 )
+                active_keys.add(active_key)
                 opened += 1
             except sqlite3.IntegrityError:
                 pass

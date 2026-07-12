@@ -15,6 +15,7 @@ from app.live_learning import sync_live_learning_from_binance
 from app.live_reaction import sync_live_reaction_from_binance
 from app.market_stream import start_market_stream_thread
 from app.opportunity_queue import read_opportunities
+from app.performance_guard import global_performance_guard
 from app.protection_audit import audit_account_protection
 from app.risk import direction_cooldown_key, live_trading_allowed
 from app.runtime_protection import manage_runtime_protection
@@ -341,6 +342,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         return {"status": "hard_stopped", "hard_stop": hard_stop, "loop_seconds": loop_seconds_for(config, config.get("growth_mode"))}
     state = sync_stage(config, state, account)
     config = apply_stage_route(config, state.get("stage_route"))
+    performance_status = global_performance_guard(config, account.get("equity"))
     maybe_sync_live_reaction(client, config, state, account, symbols_override)
     if not fast_lane:
         maybe_sync_live_learning(client, config, state)
@@ -466,7 +468,13 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             set_rotation_cooldown(state, rotation_from, rotation_minutes)
         if decision.get("symbol"):
             set_rotation_cooldown(state, decision["symbol"], rotation_minutes)
-    record_strategy_run(state, account, decision, result)
+    record_strategy_run(
+        state,
+        account,
+        decision,
+        result,
+        throttle_seconds=30 if fast_lane and decision.get("action") == "WAIT" else 0,
+    )
     best = decision.get("candidate") or scan.get("best") or {}
     record_equity_snapshot(
         account,
@@ -505,6 +513,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             "warning_equity": warning_floor,
             "hard_stop_equity": float(config.get("hard_stop_equity", 5.0)),
             "current_equity": float(account.get("equity") or 0),
+            "performance_guard": performance_status,
         },
         "shadow_trading": shadow_status,
     }
@@ -615,7 +624,12 @@ def coordinator_main() -> None:
         today = datetime.now(timezone.utc).date().isoformat()
         if today != last_maintenance_day:
             try:
-                maintain_telemetry(int(config.get("telemetry_retention_days", 30)))
+                maintain_telemetry(
+                    int(config.get("telemetry_retention_days", 30)),
+                    strategy_run_retention_days=int(config.get("strategy_run_retention_days", 7)),
+                    shadow_trade_retention_days=int(config.get("shadow_trade_retention_days", 14)),
+                    batch_size=int(config.get("telemetry_maintenance_batch_size", 50_000)),
+                )
                 last_maintenance_day = today
             except Exception as exc:
                 record_event("warning", "telemetry_maintenance", str(exc))
