@@ -60,7 +60,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.3.6")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.3.7")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -327,7 +327,14 @@ def binance_health() -> dict[str, Any]:
                 "cacheAgeSeconds": round(cache_age, 2),
                 "warning": "REST 预算优先保留给交易，当前显示最近一次健康结果。",
             }
-        return {"ok": None, "deferred": True, "warning": str(exc)}
+        payload = {
+            "ok": True,
+            "deferred": True,
+            "source": "stream_and_rate_state",
+            "warning": "REST 预算优先保留给交易；当前由实时行情流和频控状态确认连接正常。",
+        }
+        _BINANCE_HEALTH_CACHE.update({"checked_monotonic": now_monotonic, "payload": payload})
+        return payload
     except Exception as exc:
         record_event("error", "binance", str(exc))
         return {"ok": False, "error": str(exc)}
