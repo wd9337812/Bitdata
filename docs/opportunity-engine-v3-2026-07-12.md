@@ -1,7 +1,7 @@
 # Bitdata 机会引擎 V3
 
 日期：2026-07-12  
-版本：`v0.4.0`  
+版本：`v0.4.1`
 策略族：`extreme_v3_roll`
 
 ## 目标
@@ -51,6 +51,8 @@ S0-S2 不再依赖“24h 涨跌幅热点 + 每轮短窗回测 + 旧策略信用�
 
 ## 性能和 API 开销
 
+- `v0.4.1` 起，A+/A 实盘机会必须有新鲜盘口快照，并同时通过最大点差与最小深度检查；盘口未知只允许继续观察，不能实盘。
+- 深度检查优先读取 WebSocket 快照，只有快照缺失或过期时才在既有竞价预算内请求 REST，避免扩大 API 开销。
 - V3 实时扫描不再对每个币、每个方向重复运行 2/3/5 天窗口回测；回测转为离线验证。
 - 全市场行情横截面优先读取本地 `!ticker@arr` WebSocket；流数据不足时才使用 30 秒缓存或一次 REST ticker。Binance 当前文档标明无 `symbol` 的 24h ticker 权重为 40，因此不能按币逐个重复请求（[官方文档](https://developers.binance.com/en/docs/catalog/core-trading-derivatives-trading-usd-s-m-futures/api/rest-api/market-data#ticker24hr-price-change-statistics)）。
 - 影子交易读取本地 WebSocket 快照，不增加 Binance REST 请求。
@@ -75,6 +77,6 @@ S0-S2 不再依赖“24h 涨跌幅热点 + 每轮短窗回测 + 旧策略信用�
 ## 验证
 
 - `python -m compileall -q app`
-- `python -m pytest -q`：182 项通过
+- `python -m pytest -q`：184 项通过
 - `npm run build`：通过；仅保留现有前端大包体提示
-- V3 专项测试覆盖市场分类、突破信号、A+ 成本准入、B 级影子限定、逆势做空惩罚和扫描路由。
+- V3 专项测试覆盖市场分类、突破信号、A+ 成本准入、盘口未知拦截、WebSocket 深度复用、B 级影子限定、逆势做空惩罚和扫描路由。

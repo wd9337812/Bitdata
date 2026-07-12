@@ -373,7 +373,7 @@ def score_v3_opportunity(
         liquidity = _clamp(1.0 - spread / (max_spread * 1.5), 0.0, 1.0) * 4.0
         liquidity += _clamp(depth_notional / min_depth, 0.0, 1.0) * 3.0
     else:
-        liquidity = 3.5
+        liquidity = 0.0
 
     components = {
         "relative_strength": relative,
@@ -404,7 +404,7 @@ def score_v3_opportunity(
         penalties["countertrend_long"] = 15.0
 
     score = _clamp(sum(components.values()) - sum(penalties.values()), 0.0, 100.0)
-    liquidity_safe = not depth_known or (
+    liquidity_safe = depth_known and (
         spread <= float(config.get("opportunity_v3_max_spread_pct", 0.10))
         and depth_notional >= float(config.get("opportunity_v3_min_depth_notional_usdt", 5_000.0))
     )

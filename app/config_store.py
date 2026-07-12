@@ -494,6 +494,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v3_quiet_median_abs_pct": 1.8,
     "opportunity_v3_max_spread_pct": 0.10,
     "opportunity_v3_min_depth_notional_usdt": 5_000.0,
+    "opportunity_v3_stream_depth_max_age_seconds": 8,
     "opportunity_v3_long_strength_floor": 0.58,
     "opportunity_v3_short_strength_floor": 0.68,
     "opportunity_v3_event_fresh_seconds": 90,

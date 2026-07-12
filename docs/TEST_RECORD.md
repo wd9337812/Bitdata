@@ -2,6 +2,13 @@
 
 This file tracks local verification for the two-stage futures system.
 
+## 2026-07-12 v0.4.1 V3 Liquidity Admission Hotfix
+
+- Unknown order-book liquidity blocks V3 A+/A live admission.
+- A fresh WebSocket depth snapshot completes spread/depth checks without a REST depth request.
+- `python -m pytest -q`: `184 passed` (one existing dependency compatibility warning).
+- `python -m compileall -q app`: passed.
+
 ## Manual Checks
 
 - Python syntax: `python -m compileall app`

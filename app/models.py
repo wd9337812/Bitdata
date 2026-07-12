@@ -477,6 +477,7 @@ class TradingConfig(BaseModel):
     opportunity_v3_quiet_median_abs_pct: float = Field(default=1.8, ge=0, le=100)
     opportunity_v3_max_spread_pct: float = Field(default=0.10, ge=0, le=5)
     opportunity_v3_min_depth_notional_usdt: float = Field(default=5_000.0, ge=0)
+    opportunity_v3_stream_depth_max_age_seconds: int = Field(default=8, ge=1, le=60)
     opportunity_v3_long_strength_floor: float = Field(default=0.58, ge=0, le=1)
     opportunity_v3_short_strength_floor: float = Field(default=0.68, ge=0, le=1)
     opportunity_v3_event_fresh_seconds: int = Field(default=90, ge=1, le=3600)

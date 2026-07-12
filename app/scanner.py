@@ -11,7 +11,7 @@ from app.exchange_filters import ExchangeFilters
 from app.live_learning import apply_live_credit_to_candidate, list_live_scores
 from app.live_reaction import apply_live_reaction_to_candidate
 from app.performance_guard import apply_strategy_evidence_to_candidate, observed_round_trip_cost_pct
-from app.market_stream import stream_triggers, write_stream_intent
+from app.market_stream import stream_depth, stream_triggers, write_stream_intent
 from app.opportunity_engine import (
     V3_STRATEGY_FAMILY,
     build_market_context,
@@ -937,9 +937,8 @@ def spot_proxy_confirmation(
     }
 
 
-def _depth_metrics(client: BinanceFuturesClient, symbol: str) -> dict[str, float | bool | str]:
+def _depth_metrics_from_book(depth: dict[str, Any]) -> dict[str, float | bool | str]:
     try:
-        depth = client.depth(symbol, limit=5)
         bids = depth.get("bids", [])
         asks = depth.get("asks", [])
         if not bids or not asks:
@@ -959,6 +958,13 @@ def _depth_metrics(client: BinanceFuturesClient, symbol: str) -> dict[str, float
             "trade_flow_notional": float(depth.get("trade_flow_notional") or 0),
             "trade_flow_imbalance": float(depth.get("trade_flow_imbalance") or 0),
         }
+    except Exception as exc:
+        return {"available": False, "spread_pct": 999.0, "depth_notional": 0.0, "reason": str(exc)}
+
+
+def _depth_metrics(client: BinanceFuturesClient, symbol: str) -> dict[str, float | bool | str]:
+    try:
+        return _depth_metrics_from_book(client.depth(symbol, limit=5))
     except Exception as exc:
         return {"available": False, "spread_pct": 999.0, "depth_notional": 0.0, "reason": str(exc)}
 
@@ -1957,6 +1963,10 @@ def scan_growth_candidates(
                         )
                     )
                 )
+                if v3_enabled and signal.get("signal") == direction and symbol not in depth_by_symbol:
+                    streamed_depth = stream_depth(symbol, max_age_seconds=int(config.get("opportunity_v3_stream_depth_max_age_seconds", 8)))
+                    if streamed_depth:
+                        depth_by_symbol[symbol] = _depth_metrics_from_book(streamed_depth)
                 if should_check_depth and symbol not in depth_by_symbol:
                     depth_by_symbol[symbol] = _depth_metrics(client, symbol)
                     depth_checks += 1
