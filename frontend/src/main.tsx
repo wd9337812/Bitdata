@@ -32,7 +32,7 @@ type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: an
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
-type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[] };
+type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[]; v3_scores?: any[] };
 type LiveReactionData = { reactions: any[]; recent_trades: any[] };
 type ShadowData = { stats: Record<string, any>; trades: any[] };
 type SimulationData = Record<string, any>;
@@ -60,7 +60,7 @@ const intervalOptions = [
 
 const stageManualOptions = [
   ["auto", "自动（推荐）：按账户权益选择阶段"],
-  ["extreme_sprint", "手动 Extreme V2 滚仓"],
+  ["extreme_sprint", "手动机会引擎 V3 滚仓"],
   ["yolo_scalp", "手动盘口剥头皮"],
   ["grid", "手动网格"],
   ["attack", "手动进攻模式（兼容旧配置）"],
@@ -92,7 +92,7 @@ function useData() {
   const [market, setMarket] = useState<MarketData | null>(null);
   const [snapshots, setSnapshots] = useState<any[]>([]);
   const [logs, setLogs] = useState<any[]>([]);
-  const [liveLearning, setLiveLearning] = useState<LiveLearningData>({ scores: [], strategy_scores: [], scalp_scores: [], extreme_scores: [] });
+  const [liveLearning, setLiveLearning] = useState<LiveLearningData>({ scores: [], strategy_scores: [], scalp_scores: [], extreme_scores: [], v3_scores: [] });
   const [liveReaction, setLiveReaction] = useState<LiveReactionData | null>(null);
   const [shadow, setShadow] = useState<ShadowData>({ stats: {}, trades: [] });
   const [health, setHealth] = useState<any>(null);
@@ -122,6 +122,7 @@ function useData() {
           strategy_scores: learningRes.strategy_scores || [],
           scalp_scores: learningRes.scalp_scores || [],
           extreme_scores: learningRes.extreme_scores || [],
+          v3_scores: learningRes.v3_scores || [],
         });
         setLiveReaction(await api<LiveReactionData>("/api/live-reaction?limit=100"));
         setShadow(await api<ShadowData>("/api/shadow-trades?limit=100"));
@@ -405,16 +406,17 @@ function App() {
               <div className="panel-head">
                 <div>
                   <h2>机会漏斗</h2>
-                  <p>系统先大范围召回，再逐层粗排、精排和竞价，只有最值得的币才消耗 K 线回测和盘口深度。</p>
+                  <p>系统先大范围召回，再逐层粗排、精排和竞价；V3 实时路径不重复跑窗口回测，只对精选币检查盘口和衍生品。</p>
                 </div>
               </div>
               <FunnelPanel funnel={funnel} />
             </div>
+            <OpportunityV3Panel funnel={funnel} />
             <div className="panel">
               <div className="panel-head">
                 <div>
                   <h2>候选币排名</h2>
-                  <p>系统会优先执行最高分且通过过滤的信号。当前回测窗口：{mode.recent_days || "-"} 天。</p>
+                  <p>V3 按市场状态与横截面强弱寻找山寨币趋势：A+/A 可实盘，B 只做影子验证，观察级继续等待。</p>
                 </div>
               </div>
               <CandidateTable rows={candidates} />
@@ -584,6 +586,7 @@ function SignalExplain({ best }: { best?: any }) {
   const protectionStopAtr = protection.stop_atr ?? profile.stop_atr;
   const protectionTakeAtr = protection.take_profit_atr ?? profile.take_profit_atr;
   const scalp = best.scalp_signal || {};
+  const opportunity = best.opportunity_v3 || {};
   return (
     <div className="panel signal-explain">
       <h2>当前策略解释</h2>
@@ -594,6 +597,9 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>综合评分</span><strong>{fmt(best.score, 2)}</strong></div>
         <div><span>离触发价</span><strong>{fmt(signal.distance_to_trigger_pct, 3)}%</strong></div>
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
+        <div><span>V3 机会档位</span><strong>{best.v3_tier || "-"}</strong></div>
+        <div><span>市场状态</span><strong>{opportunity.market_regime_label || best.market_state?.label || "-"}</strong></div>
+        <div><span>真实收益/成本</span><strong>{opportunity.enabled ? `${fmt(opportunity.cost_ratio, 2)}x` : fmt(best.cost_ratio, 2)}</strong></div>
         <div><span>{"\u4fdd\u62a4\u6863\u6848"}</span><strong>{protectionLabel}</strong></div>
         <div><span>{"\u6b62\u635f / \u6b62\u76c8 ATR"}</span><strong>{fmt(protectionStopAtr, 2)} / {fmt(protectionTakeAtr, 2)}</strong></div>
         <div><span>盘口点差</span><strong>{scalp.enabled ? `${fmt(scalp.spread_pct, 3)}%` : "-"}</strong></div>
@@ -636,9 +642,11 @@ function FunnelPanel({ funnel }: { funnel: any }) {
         return <MetricCard key={key} title={label} value={value} sub={sub} />;
       })}
       <MetricCard
-        title="剥头皮信号"
-        value={`${fmt(funnel?.extreme_v2?.scalp, 0)} 个`}
-        sub="盘口冲击 / 放量剥头皮 / 失衡试探"
+        title={funnel?.opportunity_v3?.enabled ? "V3 实盘机会" : "剥头皮信号"}
+        value={funnel?.opportunity_v3?.enabled
+          ? `${fmt(Number(funnel?.opportunity_v3?.tiers?.["A+"] || 0) + Number(funnel?.opportunity_v3?.tiers?.A || 0), 0)} 个`
+          : `${fmt(funnel?.extreme_v2?.scalp, 0)} 个`}
+        sub={funnel?.opportunity_v3?.enabled ? "A+ 顶级机会 + A 优质机会" : "盘口冲击 / 放量剥头皮 / 失衡试探"}
       />
       <MetricCard
         title="市场自适应"
@@ -648,6 +656,43 @@ function FunnelPanel({ funnel }: { funnel: any }) {
       <MetricCard title="本轮耗时" value={`${fmt(funnel?.elapsed_seconds, 3)} 秒`} sub="用于判断是否需要自动降级" />
     </div>
   );
+}
+
+function OpportunityV3Panel({ funnel }: { funnel: any }) {
+  const v3 = funnel?.opportunity_v3 || {};
+  if (!v3.enabled) return null;
+  const tiers = v3.tiers || {};
+  return (
+    <div className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>机会引擎 V3</h2>
+          <p>A+ 是顶级趋势机会，A 是优质机会，B 只记影子交易；旧 V2 信用不会影响这里的仓位。</p>
+        </div>
+      </div>
+      <div className="metrics">
+        <MetricCard title="市场状态" value={v3.market_label || "等待行情"} sub={`上涨广度 ${fmt(Number(v3.breadth_positive || 0) * 100, 1)}% · 离散 ${fmt(v3.dispersion_pct, 2)}%`} />
+        <MetricCard title="A+ 顶级机会" value={`${fmt(tiers["A+"], 0)} 个`} sub="结构、成本、流动性全部达标" tone={Number(tiers["A+"] || 0) > 0 ? "positive" : ""} />
+        <MetricCard title="A 优质机会" value={`${fmt(tiers.A, 0)} 个`} sub="允许折扣仓位实盘" />
+        <MetricCard title="B 影子机会" value={`${fmt(tiers.B, 0)} 个`} sub="不下实单，先累计真实行情结果" />
+        <MetricCard title="继续观察" value={`${fmt(tiers.WATCH, 0)} 个`} sub="结构或成本尚未达到准入" />
+        <MetricCard title="真实成本线" value={`${fmt(v3.observed_cost_floor_pct, 3)}%`} sub="手续费、资金费和历史滑点的保守估计" />
+      </div>
+    </div>
+  );
+}
+
+function v3ScoreSummary(row: any) {
+  const components = row?.opportunity_v3?.components || {};
+  if (!row?.opportunity_v3?.enabled) return "-";
+  return [
+    `强弱 ${fmt(components.relative_strength, 1)}`,
+    `趋势 ${fmt(components.trend_structure, 1)}`,
+    `量价 ${fmt(components.volume_flow, 1)}`,
+    `突破 ${fmt(components.breakout_quality, 1)}`,
+    `行情 ${fmt(components.regime_fit, 1)}`,
+    `流动性 ${fmt(components.liquidity, 1)}`,
+  ].join(" / ");
 }
 
 function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: boolean }) {
@@ -660,6 +705,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
             <th>币种</th>
             <th>方向</th>
             <th>信号类型</th>
+            {!compact && <th>机会档位</th>}
             <th>评分</th>
             <th>实盘信用</th>
             <th>实时风控</th>
@@ -671,6 +717,8 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
             {!compact && <th>质量分</th>}
             {!compact && <th>质量倍率</th>}
             {!compact && <th>质量拆分</th>}
+            {!compact && <th>V3 评分拆分</th>}
+            {!compact && <th>市场状态</th>}
             {!compact && <th>盘口</th>}
             {!compact && <th>扣费后</th>}
             <th>PF</th>
@@ -685,6 +733,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               <td className="symbol">{row.symbol}</td>
               <td>{signalLabel(row.direction || row.signal?.signal)}</td>
               <td>{entryTypeLabel(row, "-")}</td>
+              {!compact && <td>{row.v3_tier || "-"}</td>}
               <td>{fmt(row.score, 2)}</td>
               <td>
                 {row.live_credit ? `${fmt(row.live_credit.score, 1)} · ${row.live_credit.status_label || "-"}` : "-"}
@@ -693,15 +742,17 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               <td>{row.live_reaction ? `${row.live_reaction.status_label || "-"} · ${fmt(row.live_reaction.risk_multiplier, 2)}x` : "-"}</td>
               {!compact && <td className="reason-cell">{row.decision_reason || row.reason}</td>}
               {!compact && <td>{fmt(row.signal?.distance_to_trigger_pct, 3)}%</td>}
-              {!compact && <td>{fmt(row.recent?.win_rate, 1)}%</td>}
-              {!compact && <td>{fmt(row.recent?.net_pct, 2)}%</td>}
+              {!compact && <td>{row.strategy_generation === "v3" ? "离线验证" : `${fmt(row.recent?.win_rate, 1)}%`}</td>}
+              {!compact && <td>{row.strategy_generation === "v3" ? "离线验证" : `${fmt(row.recent?.net_pct, 2)}%`}</td>}
               {!compact && <td>{qualityPoolLabel(row.symbol_quality?.pool)}</td>}
               {!compact && <td>{fmt(row.symbol_quality?.score, 2)}</td>}
               {!compact && <td>{fmt(row.quality_risk_multiplier ?? row.symbol_quality?.quality_risk_multiplier, 2)}x</td>}
               {!compact && <td className="reason-cell">{qualitySummary(row.symbol_quality)}</td>}
+              {!compact && <td className="reason-cell">{v3ScoreSummary(row)}</td>}
+              {!compact && <td>{row.opportunity_v3?.market_regime_label || row.market_state?.label || "-"}</td>}
               {!compact && <td>{row.scalp_signal?.enabled ? `点差 ${fmt(row.scalp_signal.spread_pct, 3)}% / 失衡 ${fmt(row.scalp_signal.directed_imbalance, 2)}` : "-"}</td>}
               {!compact && <td>{row.scalp_signal?.enabled ? `${fmt(row.scalp_signal.net_profit_pct, 3)}%` : "-"}</td>}
-              <td>{fmt(row.recent?.profit_factor, 2)}</td>
+              <td>{row.strategy_generation === "v3" ? "离线" : fmt(row.recent?.profit_factor, 2)}</td>
               <td>{fmt(row.cost_ratio, 2)}</td>
               <td>{fmt(row.risk_pct, 2)}%</td>
             </tr>
@@ -716,10 +767,12 @@ function LiveLearningPanel({ data, onSync }: { data: LiveLearningData; onSync: (
   const rows = data.scores || [];
   const scalpRows = data.scalp_scores || [];
   const extremeRows = data.extreme_scores || [];
+  const v3Rows = data.v3_scores || [];
+  const v3Net = v3Rows.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
   const extremeNet = extremeRows.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
   const scalpNet = scalpRows.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
-  const activePower = extremeRows.filter((row) => Number(row.risk_multiplier || 0) >= 1).length;
-  const activeFuse = extremeRows.filter((row) => Number(row.risk_multiplier || 0) <= 0).length;
+  const activePower = v3Rows.filter((row) => Number(row.risk_multiplier || 0) >= 1).length;
+  const activeFuse = v3Rows.filter((row) => Number(row.risk_multiplier || 0) < 1).length;
   const renderRows = (items: any[], empty: string) => (
     <div className="table-wrap">
       <table>
@@ -771,20 +824,29 @@ function LiveLearningPanel({ data, onSync }: { data: LiveLearningData; onSync: (
   return (
     <section className="stack">
       <div className="metrics">
-        <MetricCard title="Extreme V2 学习方向" value={String(extremeRows.length)} sub="当前滚仓策略自己的交易结果" />
-        <MetricCard title="正常以上倍率" value={String(activePower)} sub="Extreme V2 信用倍率 >= 1" />
-        <MetricCard title="熔断方向" value={String(activeFuse)} sub="Extreme V2 专用信用降到 0" tone={activeFuse ? "negative" : ""} />
-        <MetricCard title="Extreme V2 净盈亏" value={`${fmt(extremeNet, 4)} U`} tone={extremeNet >= 0 ? "positive" : "negative"} />
+        <MetricCard title="V3 学习方向" value={String(v3Rows.length)} sub="当前滚仓策略自己的交易结果" />
+        <MetricCard title="正常以上倍率" value={String(activePower)} sub="V3 独立信用倍率 >= 1" />
+        <MetricCard title="受限方向" value={String(activeFuse)} sub="V3 近期亏损方向" tone={activeFuse ? "negative" : ""} />
+        <MetricCard title="V3 净盈亏" value={`${fmt(v3Net, 4)} U`} tone={v3Net >= 0 ? "positive" : "negative"} />
       </div>
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h2>Extreme V2 滚仓专用信用分</h2>
-            <p>S0-S2 只使用这里的实盘结果调整同币种同方向仓位；剥头皮和旧策略记录不会混入。</p>
+            <h2>机会引擎 V3 专用信用分</h2>
+            <p>S0-S2 只使用 V3 自己的成交结果轻量调整仓位，默认限制在 0.8-1.2 倍；旧 V2 输赢不会混入。</p>
           </div>
           <button className="secondary" onClick={onSync}>同步历史信用分</button>
         </div>
-        {renderRows(extremeRows, "还没有归因到 Extreme V2 滚仓的实盘成交。")}
+        {renderRows(v3Rows, "V3 还没有产生已平仓实盘样本；当前以 50 分中性信用启动。")}
+      </div>
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>Extreme V2 历史信用分</h2>
+            <p>仅用于复盘旧滚仓策略，不参与 V3 候选排序和仓位。历史累计净盈亏 {fmt(extremeNet, 4)} U。</p>
+          </div>
+        </div>
+        {renderRows(extremeRows, "没有 Extreme V2 历史成交。")}
       </div>
       <div className="panel">
         <div className="panel-head">
@@ -880,6 +942,7 @@ function StageRoutePanel({ route, profiles, stream, userStream, rate, equity }: 
 
 function strategyFamilyLabel(value?: string) {
   const labels: Record<string, string> = {
+    extreme_v3_roll: "机会引擎 V3 滚仓",
     extreme_v2_roll: "Extreme V2 滚仓",
     orderbook_scalp: "盘口剥头皮",
     grid_stable: "稳定网格",
@@ -1197,7 +1260,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
       <div className="panel">
         <h2>基础配置</h2>
         <div className="form-grid">
-          {toggle("stage_routing_enabled", "按权益自动选择阶段", "推荐开启：S0-S2 运行 Extreme V2，S3 运行盘口剥头皮，S4 进入网格阶段")}
+          {toggle("stage_routing_enabled", "按权益自动选择阶段", "推荐开启：S0-S2 运行机会引擎 V3，S3 运行盘口剥头皮，S4 进入网格阶段")}
           {select("stage_manual_mode", "阶段控制", stageManualOptions, "选择自动时忽略人工到期时间；手动模式只建议用于临时诊断")}
           {form.stage_manual_mode && form.stage_manual_mode !== "auto" && datetime("stage_manual_until", "手动模式到期时间", "到期后自动恢复权益路由；留空表示持续手动，风险较高")}
           <SymbolMultiPicker value={form.stage1_symbols} onChange={(symbols) => update("stage1_symbols", symbols)} />
@@ -1385,8 +1448,24 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("yolo_scalp_min_order_lift_max_loss_pct", "补齐订单最大止损风险%", "默认 8%；补齐后如果止损风险过大，仍然跳过")}
           {number("yolo_scalp_min_order_lift_min_cost_ratio", "补齐订单最低成本比", "默认 3；预期波动至少覆盖手续费和滑点")}
           {number("yolo_scalp_min_order_lift_min_net_profit_usdt", "补齐订单最低净利润U", "默认 0.03U；太小的毛利不强行成交")}
-          {toggle("extreme_sprint_enabled", "开启极限冲刺", "必须配合确认短语 ENABLE_EXTREME_SPRINT 才会生效")}
-          {text("extreme_sprint_confirmation", "极限冲刺确认短语", "填写 ENABLE_EXTREME_SPRINT 后，增长模式选择极限冲刺才会启用")}
+          {toggle("opportunity_v3_enabled", "启用机会引擎 V3", "S0-S2 推荐开启：按全市场相对强弱、趋势、量价、成本和流动性筛选山寨币")}
+          {number("opportunity_v3_a_plus_score", "V3 A+ 顶级机会分", "默认 82；达到后可使用阶段风险上限，仍受全部硬风控约束")}
+          {number("opportunity_v3_a_score", "V3 A 级机会分", "默认 70；使用约 0.65 倍折扣仓位")}
+          {number("opportunity_v3_b_score", "V3 B 级影子分", "默认 58；只做影子交易，不下实单")}
+          {number("opportunity_v3_long_strength_floor", "V3 做多强度分位", "默认 0.58；只做全市场相对较强的币")}
+          {number("opportunity_v3_short_strength_floor", "V3 做空强度分位", "默认 0.68；做空门槛更严格，避免急跌后追空")}
+          {number("opportunity_v3_max_spread_pct", "V3 最大盘口点差%", "默认 0.10%；超过后不实盘")}
+          {number("opportunity_v3_min_depth_notional_usdt", "V3 最低盘口深度U", "默认 5000U；只检查进入竞价层的精选币")}
+          {number("opportunity_v3_a_plus_min_cost_ratio", "V3 A+ 最低收益成本比", "默认 3；按真实手续费、资金费与历史滑点计算")}
+          {number("opportunity_v3_a_min_cost_ratio", "V3 A 级最低收益成本比", "默认 2")}
+          {number("opportunity_v3_b_min_cost_ratio", "V3 B 级最低收益成本比", "默认 1.35；只用于影子验证")}
+          {toggle("opportunity_v3_b_live_enabled", "允许 V3 B 级实盘", "默认关闭；B 级样本不足，只建议留在影子交易")}
+          {number("opportunity_v3_credit_min_multiplier", "V3 中性信用最低倍率", "默认 0.8；旧策略亏损不会把 V3 压到小仓")}
+          {number("opportunity_v3_credit_max_multiplier", "V3 信用最高倍率", "默认 1.2；只有 V3 自己盈利后才逐步提高")}
+          {toggle("opportunity_v3_canary_bypass_enabled", "V3 A+ 冷却期受限验证", "旧滚动窗口仍在冷却时，仅 A+ 可用 0.35 倍验证；5U 硬停止、日损与持仓保护不会绕过")}
+          {number("opportunity_v3_canary_risk_multiplier", "V3 A+ 受限验证倍率", "默认 0.35")}
+          {toggle("extreme_sprint_enabled", "开启 V3 极限滚仓", "必须配合确认短语 ENABLE_EXTREME_SPRINT 才会生效")}
+          {text("extreme_sprint_confirmation", "V3 滚仓确认短语", "填写 ENABLE_EXTREME_SPRINT 后，增长模式选择机会引擎 V3 才会启用")}
           {select("extreme_sprint_interval", "极限冲刺周期", intervalOptions)}
           {number("extreme_sprint_loop_seconds", "极限扫描秒数", "默认 15 秒；更快寻找机会")}
           {number("extreme_sprint_risk_per_trade_pct", "极限基础风险%", "默认 28%，高风险冲刺参数")}

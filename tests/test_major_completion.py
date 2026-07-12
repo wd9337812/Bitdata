@@ -10,12 +10,12 @@ from app.stage_modes import stage_profile_for_equity
 from app.stage_simulation import simulate_stage_path
 
 
-def test_stage_profile_maps_small_equity_to_extreme_v2_stage():
+def test_stage_profile_maps_small_equity_to_opportunity_v3_stage():
     profile = stage_profile_for_equity(50, {"stage_s0_risk_pct": 10})
 
     assert profile["stage"] == "S0"
     assert profile["recommended_mode"] == "extreme_sprint"
-    assert profile["strategy_family"] == "extreme_v2_roll"
+    assert profile["strategy_family"] == "extreme_v3_roll"
     assert profile["base_risk_pct"] == 10
 
 

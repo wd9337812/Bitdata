@@ -138,6 +138,7 @@ def write_stream_intent(
     candidate_symbols: list[str] | None = None,
     position_symbols: list[str] | None = None,
     live_credit_symbols: list[str] | None = None,
+    shadow_symbols: list[str] | None = None,
     active_mode: str | None = None,
 ) -> None:
     sources = {
@@ -145,9 +146,11 @@ def write_stream_intent(
         "candidates": _dedupe_symbols(candidate_symbols or []),
         "positions": _dedupe_symbols(position_symbols or []),
         "live_credit": _dedupe_symbols(live_credit_symbols or []),
+        "shadow": _dedupe_symbols(shadow_symbols or []),
     }
     symbols = _dedupe_symbols(
         sources["positions"]
+        + sources["shadow"]
         + sources["candidates"]
         + sources["hot"]
         + sources["live_credit"]

@@ -119,17 +119,61 @@ def global_performance_guard(
             break
         tail_losses += 1
     rolling_losses = sum(1 for row in live_rows if float(row.get("net_pnl") or 0) <= 0)
+    live_tail = _stats(live_rows[: max(3, min_live // 2)])
+    shadow_tail = _stats(shadow_rows[: max(10, min_shadow // 3)])
+    recovery_level = 0
     recovery_multiplier = float(config.get("performance_guard_recovery_risk_multiplier", 0.2))
-    status = "cooldown" if cooldown_active else "risk_off" if risk_off else "normal"
+    if risk_off and not cooldown_active:
+        one_side_recovering = (
+            (live_tail["trades"] >= 3 and live_tail["net_pnl"] > 0 and live_tail["profit_factor"] >= 0.9)
+            or (shadow_tail["trades"] >= 10 and shadow_tail["net_pnl"] > 0 and shadow_tail["profit_factor"] >= 0.9)
+        )
+        both_recovering = (
+            live_tail["trades"] >= 3
+            and shadow_tail["trades"] >= 10
+            and live_tail["net_pnl"] > 0
+            and shadow_tail["net_pnl"] > 0
+            and live_tail["profit_factor"] >= 1.0
+            and shadow_tail["profit_factor"] >= 1.0
+        )
+        if both_recovering:
+            recovery_level = 3
+            recovery_multiplier = float(config.get("performance_guard_recovery_level_3_multiplier", 0.70))
+        elif one_side_recovering:
+            recovery_level = 2
+            recovery_multiplier = float(config.get("performance_guard_recovery_level_2_multiplier", 0.40))
+        else:
+            recovery_level = 1
+            recovery_multiplier = float(config.get("performance_guard_recovery_level_1_multiplier", recovery_multiplier))
+    status = (
+        "cooldown"
+        if cooldown_active
+        else "risk_off"
+        if risk_off and recovery_level <= 1
+        else f"recovery_{recovery_level}"
+        if risk_off
+        else "normal"
+    )
+    labels = {
+        "normal": "正常",
+        "cooldown": "暂停新开仓",
+        "risk_off": "一级低风险探路",
+        "recovery_1": "一级低风险探路",
+        "recovery_2": "二级恢复",
+        "recovery_3": "三级恢复",
+    }
     return {
         "enabled": True,
         "allowed": not cooldown_active,
         "status": status,
-        "status_label": {"normal": "正常", "risk_off": "低风险探路", "cooldown": "暂停新开仓"}[status],
+        "status_label": labels[status],
         "risk_multiplier": 0.0 if cooldown_active else recovery_multiplier if risk_off else 1.0,
         "pause_until": pause_until.isoformat() if pause_until else None,
         "live": live,
         "shadow": shadow,
+        "live_tail": live_tail,
+        "shadow_tail": shadow_tail,
+        "recovery_level": recovery_level,
         "live_bad": live_bad,
         "shadow_bad": shadow_bad,
         "rolling_losses": rolling_losses,
@@ -271,6 +315,18 @@ def apply_strategy_evidence_to_candidate(candidate: dict[str, Any], config: dict
     symbol = str(candidate.get("symbol") or "").upper()
     direction = str(candidate.get("direction") or "").upper()
     if not symbol or direction not in {"LONG", "SHORT"}:
+        return candidate
+    if str(candidate.get("strategy_family") or "") == "extreme_v3_roll":
+        candidate = dict(candidate)
+        candidate["strategy_evidence"] = {
+            "enabled": True,
+            "agreement": "isolated_warmup",
+            "agreement_label": "V3 独立样本积累中",
+            "risk_cap": 1.0,
+            "boost_allowed": False,
+        }
+        message = "证据校验：V3 与旧策略样本隔离，当前只积累本策略实盘与影子结果"
+        candidate["decision_reason"] = f"{candidate.get('decision_reason')}；{message}" if candidate.get("decision_reason") else message
         return candidate
     evidence = strategy_evidence_for(symbol, direction, config)
     if not evidence.get("enabled"):

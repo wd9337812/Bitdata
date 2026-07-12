@@ -7,11 +7,11 @@ from typing import Any
 STAGE_PROFILES = [
     {
         "stage": "S0",
-        "label": "极限 V2 单仓滚仓",
+        "label": "机会引擎 V3 单仓滚仓",
         "min_equity": 0.0,
         "max_equity": 300.0,
         "recommended_mode": "extreme_sprint",
-        "strategy_family": "extreme_v2_roll",
+        "strategy_family": "extreme_v3_roll",
         "risk_posture": "极高风险",
         "max_open_positions": 1,
         "risk_key": "stage_s0_risk_pct",
@@ -25,11 +25,11 @@ STAGE_PROFILES = [
     },
     {
         "stage": "S1",
-        "label": "极限 V2 增强滚仓",
+        "label": "机会引擎 V3 增强滚仓",
         "min_equity": 300.0,
         "max_equity": 10_000.0,
         "recommended_mode": "extreme_sprint",
-        "strategy_family": "extreme_v2_roll",
+        "strategy_family": "extreme_v3_roll",
         "risk_posture": "很高风险",
         "max_open_positions": 1,
         "risk_key": "stage_s1_risk_pct",
@@ -43,11 +43,11 @@ STAGE_PROFILES = [
     },
     {
         "stage": "S2",
-        "label": "极限 V2 组合滚仓",
+        "label": "机会引擎 V3 组合滚仓",
         "min_equity": 10_000.0,
         "max_equity": 100_000.0,
         "recommended_mode": "extreme_sprint",
-        "strategy_family": "extreme_v2_roll",
+        "strategy_family": "extreme_v3_roll",
         "risk_posture": "高风险",
         "max_open_positions": 2,
         "risk_key": "stage_s2_risk_pct",
@@ -166,7 +166,7 @@ def _manual_route(config: dict[str, Any], equity: float, now: datetime) -> dict[
         return None
     profile = stage_profile_for_equity(equity, config)
     family = {
-        "extreme_sprint": "extreme_v2_roll",
+        "extreme_sprint": "extreme_v3_roll",
         "yolo_scalp": "orderbook_scalp",
         "grid": "grid_stable",
     }.get(mode, "legacy_mixed")

@@ -15,6 +15,7 @@ PROBE_ENTRY_TYPES = {
     "orderbook_impact",
     "volume_scalp",
     "imbalance_probe",
+    "v3_prebreakout",
 }
 YOLO_SCALP_ENTRY_TYPES = {
     "standard",
@@ -40,6 +41,8 @@ ORDER_VIABILITY_LABELS = {
 
 def signal_strength_tier(candidate: dict[str, Any] | None) -> str:
     candidate = candidate or {}
+    if str(candidate.get("strategy_family") or "") == "extreme_v3_roll":
+        return {"A+": "top", "A": "high", "B": "probe"}.get(str(candidate.get("v3_tier") or ""), "probe")
     entry_type = str(candidate.get("entry_type") or "standard")
     score = float(candidate.get("score") or 0.0)
     quality_score = float((candidate.get("symbol_quality") or {}).get("score") or 0.0)

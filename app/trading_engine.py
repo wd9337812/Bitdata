@@ -376,21 +376,36 @@ def build_stage1_decision(
     signal = apply_initial_protection_to_signal(signal, protection_plan)
     performance_guard = global_performance_guard(config, equity)
     if not performance_guard.get("allowed", True):
-        return {
-            "symbol": symbol,
-            "action": "WAIT",
-            "direction": direction,
-            "signal": signal,
-            "risk": {"allowed": False, "reason": "global_performance_cooldown"},
-            "mode": active_mode["mode"],
-            "strategy": active_mode["strategy"],
-            "entry_type": entry_type,
-            "decision_reason": f"全局风险关闭：{performance_guard.get('reason')}，暂停新开仓至 {performance_guard.get('pause_until')}",
-            "primary_block_reason": "global_performance_cooldown",
-            "performance_guard": performance_guard,
-            "protection_plan": protection_plan,
-            "equity": equity,
-        }
+        v3_canary = bool(
+            config.get("opportunity_v3_canary_bypass_enabled", True)
+            and str((scan_candidate or {}).get("strategy_family") or "") == "extreme_v3_roll"
+            and bool(((scan_candidate or {}).get("opportunity_v3") or {}).get("canary_eligible"))
+        )
+        if v3_canary:
+            performance_guard = {
+                **performance_guard,
+                "allowed": True,
+                "status": "v3_canary",
+                "status_label": "V3 顶级机会小仓验证",
+                "risk_multiplier": float(config.get("opportunity_v3_canary_risk_multiplier", 0.35)),
+                "reason": "旧窗口仍在冷却，但 V3 A+ 机会允许受限验证；其余硬风控不变",
+            }
+        else:
+            return {
+                "symbol": symbol,
+                "action": "WAIT",
+                "direction": direction,
+                "signal": signal,
+                "risk": {"allowed": False, "reason": "global_performance_cooldown"},
+                "mode": active_mode["mode"],
+                "strategy": active_mode["strategy"],
+                "entry_type": entry_type,
+                "decision_reason": f"全局风险关闭：{performance_guard.get('reason')}，暂停新开仓至 {performance_guard.get('pause_until')}",
+                "primary_block_reason": "global_performance_cooldown",
+                "performance_guard": performance_guard,
+                "protection_plan": protection_plan,
+                "equity": equity,
+            }
     if scan_candidate is not None:
         scan_candidate = {**scan_candidate, "global_performance_guard": performance_guard}
     guard = equity_guard_status(config, state, equity, active_mode["mode"])

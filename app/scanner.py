@@ -10,11 +10,18 @@ from app.binance_client import BinanceFuturesClient
 from app.exchange_filters import ExchangeFilters
 from app.live_learning import apply_live_credit_to_candidate, list_live_scores
 from app.live_reaction import apply_live_reaction_to_candidate
-from app.performance_guard import apply_strategy_evidence_to_candidate
+from app.performance_guard import apply_strategy_evidence_to_candidate, observed_round_trip_cost_pct
 from app.market_stream import stream_triggers, write_stream_intent
+from app.opportunity_engine import (
+    V3_STRATEGY_FAMILY,
+    build_market_context,
+    build_v3_signal,
+    score_v3_opportunity,
+)
 from app.opportunity_queue import read_opportunities
 from app.position_sizing import effective_position_risk
 from app.scalp_engine import build_scalp_signal
+from app.shadow_trading import active_shadow_symbols
 from app.strategy import StrategyParams, atr, ema
 
 
@@ -126,6 +133,10 @@ def yolo_scalp_armed(config: dict[str, Any]) -> bool:
 
 def is_extreme_mode(mode_name: str | None) -> bool:
     return str(mode_name or "").lower() in {"extreme_sprint", "yolo_scalp"}
+
+
+def opportunity_v3_active(config: dict[str, Any], mode_name: str | None) -> bool:
+    return bool(config.get("opportunity_v3_enabled", False) and str(mode_name or "").lower() == "extreme_sprint")
 
 
 def active_growth_mode(config: dict[str, Any], equity: float | None = None) -> str:
@@ -656,22 +667,39 @@ def _coarse_rank_symbols(
     manual = {symbol.upper() for symbol in config.get("stage1_symbols", [])}
     opportunity_by_symbol = opportunity_by_symbol or {}
     min_volume = float(config.get("min_24h_volume_usdt", 0))
+    v3_enabled = opportunity_v3_active(config, mode.get("mode"))
+    v3_market = config.get("_opportunity_v3_market_context") or {}
+    v3_symbols = v3_market.get("symbols") or {}
     rows: list[dict[str, Any]] = []
     for index, symbol in enumerate(symbols):
         ticker = tickers.get(symbol, {})
         quote_volume = float(ticker.get("quoteVolume", 0) or 0)
         change_pct = float(ticker.get("priceChangePercent", 0) or 0)
         last_price = float(ticker.get("lastPrice", 0) or 0)
-        volume_score = min(max(math.log10(max(quote_volume, 1)) - 6.5, 0.0) * 12.0, 35.0)
-        move_score = min(abs(change_pct) * 1.8, 28.0)
-        if is_extreme_mode(mode.get("mode")) and config.get("extreme_v2_enabled", True):
+        v3_symbol = v3_symbols.get(symbol, {})
+        if v3_enabled:
+            volume_score = float(v3_symbol.get("volume_percentile") or 0) * 32.0
+            directional_extreme = max(
+                float(v3_symbol.get("long_strength_percentile") or 0.5),
+                float(v3_symbol.get("short_strength_percentile") or 0.5),
+            )
+            move_score = max(0.0, (directional_extreme - 0.5) * 44.0)
+        else:
+            volume_score = min(max(math.log10(max(quote_volume, 1)) - 6.5, 0.0) * 12.0, 35.0)
+            move_score = min(abs(change_pct) * 1.8, 28.0)
+        if is_extreme_mode(mode.get("mode")) and config.get("extreme_v2_enabled", True) and not v3_enabled:
             move_score = min(abs(change_pct) * float(config.get("extreme_firecracker_move_score_weight", 2.4)), 40.0)
             volume_score = min(max(math.log10(max(quote_volume, 1)) - 6.5, 0.0) * float(config.get("extreme_firecracker_volume_score_weight", 12.0)), 38.0)
-        direction_bias = 4.0 if change_pct > 0 else 2.0 if change_pct < 0 else 0.0
-        manual_score = 30.0 if symbol in manual else 0.0
+        direction_bias = min(abs(float(v3_symbol.get("residual_change_pct") or 0)) * 0.6, 8.0) if v3_enabled else 4.0 if change_pct > 0 else 2.0 if change_pct < 0 else 0.0
+        manual_score = (4.0 if v3_enabled else 30.0) if symbol in manual else 0.0
         liquidity_penalty = 18.0 if quote_volume < min_volume else 0.0
-        new_tail_boost = max(0.0, 10.0 - index * 0.03)
-        score = volume_score + move_score + direction_bias + manual_score + new_tail_boost - liquidity_penalty
+        new_tail_boost = 0.0 if v3_enabled else max(0.0, 10.0 - index * 0.03)
+        exhaustion_penalty = (
+            8.0
+            if v3_enabled and float(v3_symbol.get("absolute_move_percentile") or 0) >= 0.995
+            else 0.0
+        )
+        score = volume_score + move_score + direction_bias + manual_score + new_tail_boost - liquidity_penalty - exhaustion_penalty
         reasons = []
         if symbol in manual:
             reasons.append("manual")
@@ -681,6 +709,8 @@ def _coarse_rank_symbols(
             reasons.append("large_move")
         if quote_volume < min_volume:
             reasons.append("low_volume")
+        if exhaustion_penalty:
+            reasons.append("possible_exhaustion")
         firecracker_score = firecracker_opportunity_score(ticker, config, mode)
         if firecracker_score.get("is_firecracker"):
             reasons.append("firecracker")
@@ -699,6 +729,7 @@ def _coarse_rank_symbols(
                 "reasons": reasons,
                 "firecracker": firecracker_score,
                 "opportunity_event": opportunity or {},
+                "v3_cross_section": v3_symbol,
             }
         )
     if is_extreme_mode(mode.get("mode")) and config.get("extreme_v2_enabled", True):
@@ -823,6 +854,9 @@ def derivative_confirmation(
         reasons.append(f"oi_failed:{exc}")
     change_pct = float(ticker.get("priceChangePercent", 0) or 0)
     funding_rate_pct = float((funding or {}).get("lastFundingRate", 0) or 0) * 100
+    mark_price = float((funding or {}).get("markPrice", 0) or 0)
+    index_price = float((funding or {}).get("indexPrice", 0) or 0)
+    basis_pct = (mark_price - index_price) / index_price * 100 if index_price > 0 else 0.0
     min_growth = float(config.get("extreme_oi_min_growth_pct", 1.5))
     strong_growth = float(config.get("extreme_oi_strong_growth_pct", 4.0))
     crowded = abs(funding_rate_pct) >= float(config.get("extreme_funding_abs_crowded_pct", 0.05))
@@ -849,6 +883,15 @@ def derivative_confirmation(
             risk_multiplier *= 0.75
         else:
             score_delta += 3.0
+    basis_aligned = (direction == "LONG" and basis_pct >= 0) or (direction == "SHORT" and basis_pct <= 0)
+    if abs(basis_pct) >= float(config.get("opportunity_v3_basis_confirm_pct", 0.02)):
+        if basis_aligned:
+            score_delta += float(config.get("opportunity_v3_basis_confirm_bonus", 2.0))
+            reasons.append("basis_aligned")
+        elif abs(basis_pct) >= float(config.get("opportunity_v3_basis_divergence_pct", 0.08)):
+            score_delta -= float(config.get("opportunity_v3_basis_divergence_penalty", 3.0))
+            risk_multiplier *= 0.9
+            reasons.append("basis_divergence")
     return {
         "enabled": True,
         "confirmed": confirmed,
@@ -856,6 +899,8 @@ def derivative_confirmation(
         "risk_multiplier": round(max(0.0, min(risk_multiplier, 1.25)), 4),
         "oi_growth_pct": round(oi_growth_pct, 4),
         "funding_rate_pct": round(funding_rate_pct, 5),
+        "basis_pct": round(basis_pct, 5),
+        "basis_aligned": basis_aligned,
         "reasons": reasons,
     }
 
@@ -1690,6 +1735,51 @@ def backtest_strategy(
     }
 
 
+def _finalize_candidate(
+    candidate: dict[str, Any],
+    *,
+    config: dict[str, Any],
+    mode: dict[str, Any],
+    exchange_filters: ExchangeFilters | None,
+    equity: float | None,
+) -> dict[str, Any]:
+    candidate = apply_live_credit_to_candidate(candidate, config)
+    candidate = apply_live_reaction_to_candidate(candidate, config)
+    candidate = apply_strategy_evidence_to_candidate(candidate, config)
+    viability_risk_pct = float(candidate.get("risk_pct") or 0)
+    if config.get("effective_position_sizing_enabled", True):
+        viability_risk_pct = float(
+            effective_position_risk(
+                candidate_risk_pct=viability_risk_pct,
+                candidate=candidate,
+                guard={"risk_multiplier": 1.0},
+                target={"effective_risk_multiplier": 1.0},
+                config=config,
+                mode=str(mode["mode"]),
+            )["final_risk_pct"]
+        )
+    signal = candidate.get("signal") or {}
+    viability = execution_viability(
+        exchange_filters,
+        str(candidate.get("symbol") or ""),
+        equity,
+        viability_risk_pct,
+        float(signal.get("last_price") or 0),
+        float(signal.get("stop") or 0),
+        float(mode["margin_pct"]) / 100 * float(equity or 0) * float(mode["leverage"]),
+    )
+    viability["effective_risk_pct"] = viability_risk_pct
+    candidate["execution_filter"] = viability
+    if candidate.get("passed") and viability.get("enabled") and not viability.get("executable"):
+        candidate["passed"] = False
+        candidate["reason"] = "min_order_not_executable"
+        candidate["decision_reason"] = (
+            f"低于币安最小下单量，当前约 {viability.get('notional')}U，"
+            f"最低 {viability.get('min_notional')}U，跳过避免启动后失败"
+        )
+    return candidate
+
+
 def scan_growth_candidates(
     client: BinanceFuturesClient,
     config: dict[str, Any],
@@ -1728,9 +1818,20 @@ def scan_growth_candidates(
         symbols = [symbol for symbol in symbols if symbol not in excluded_symbols]
     candidates = []
     recalled_symbols = list(symbols)
-    tickers = {item["symbol"]: item for item in client.ticker_24h(recalled_symbols)}
+    try:
+        all_ticker_rows = client.ticker_24h()
+    except TypeError:
+        # Compatibility fallback for clients that require an explicit symbol list.
+        all_ticker_rows = client.ticker_24h(recalled_symbols)
+    recalled_set = set(recalled_symbols)
+    tickers = {item["symbol"]: item for item in all_ticker_rows if item.get("symbol") in recalled_set}
     market_profile = build_market_profile(tickers)
-    config = {**config, "_adaptive_market_profile": market_profile}
+    v3_market_context = build_market_context(all_ticker_rows, config)
+    config = {
+        **config,
+        "_adaptive_market_profile": market_profile,
+        "_opportunity_v3_market_context": v3_market_context,
+    }
     try:
         funding_by_symbol = {item["symbol"]: item for item in client.premium_index(recalled_symbols)}
     except Exception:
@@ -1753,6 +1854,7 @@ def scan_growth_candidates(
     fee_pct = StrategyParams().taker_fee * 2 * 100
     slippage_pct = float(config.get("estimated_slippage_pct", 0.04))
     cost_pct = fee_pct + slippage_pct
+    observed_cost_pct = max(cost_pct, observed_round_trip_cost_pct(config))
     quality_days = sorted({
         int(day)
         for day in config.get("quality_backtest_days", [3, 5])
@@ -1774,6 +1876,7 @@ def scan_growth_candidates(
     live_losses_by_direction: dict[str, dict[str, Any]] = {}
     processed_symbols: list[str] = []
     derivative_checks = 0
+    v3_enabled = opportunity_v3_active(config, mode.get("mode"))
     exchange_filters = None
     if config.get("min_order_filter_enabled", False):
         try:
@@ -1792,15 +1895,35 @@ def scan_growth_candidates(
                 is_sprint = mode["mode"] in {"tournament_sprint", "extreme_sprint", "yolo_scalp"}
                 fast_prefix = "yolo_scalp" if mode["mode"] == "yolo_scalp" else "extreme_sprint" if mode["mode"] == "extreme_sprint" else "tournament_sprint"
                 signal_params = strategy_params_for_mode(config, mode, "standard")
-                signal = latest_strategy_signal(symbol, bars, mode["strategy"], params=signal_params, direction=direction)
-                if signal.get("signal") == "WAIT" and mode["mode"] == "extreme_sprint":
+                signal = (
+                    build_v3_signal(symbol, bars, direction, config)
+                    if v3_enabled
+                    else latest_strategy_signal(symbol, bars, mode["strategy"], params=signal_params, direction=direction)
+                )
+                if signal.get("signal") == "WAIT" and mode["mode"] == "extreme_sprint" and not v3_enabled:
                     pullback = trend_pullback_signal(symbol, bars, direction, signal_params)
                     if pullback is not None:
                         signal = pullback
-                backtests = {
-                    day: _backtest_strategy_with_params(symbol, bars, mode["strategy"], day, direction, signal_params)
-                    for day in quality_days
-                }
+                if v3_enabled and not config.get("opportunity_v3_realtime_backtest_enabled", False):
+                    backtests = {
+                        day: {
+                            "symbol": symbol,
+                            "direction": direction,
+                            "days": day,
+                            "trades": 0,
+                            "wins": 0,
+                            "win_rate": 0.0,
+                            "net_pct": 0.0,
+                            "profit_factor": 0.0,
+                            "diagnostic": "offline_v3_validation",
+                        }
+                        for day in quality_days
+                    }
+                else:
+                    backtests = {
+                        day: _backtest_strategy_with_params(symbol, bars, mode["strategy"], day, direction, signal_params)
+                        for day in quality_days
+                    }
                 recent = backtests[int(mode["recent_days"])]
                 ticker = tickers.get(symbol, {})
                 last_price = float(signal.get("last_price") or ticker.get("lastPrice", 0))
@@ -1817,7 +1940,7 @@ def scan_growth_candidates(
                     min_pf = float(config.get(f"{fast_prefix}_long_min_profit_factor", config.get("tournament_sprint_long_min_profit_factor", mode["min_pf"])) if is_sprint else mode["min_pf"])
                     min_net_pct = float(config.get(f"{fast_prefix}_long_min_net_pct", config.get("tournament_sprint_long_min_net_pct", -3.0)) if is_sprint else 0.0)
                     risk_pct = float(mode["risk_pct"])
-                if direction not in live_losses_by_direction:
+                if direction not in live_losses_by_direction and not v3_enabled:
                     live_losses_by_direction[direction] = consecutive_live_losses(client, processed_symbols or ranked_symbols, direction, config)
 
                 current_score = _current_signal_score(signal, direction, cost_ratio, recent)
@@ -1838,7 +1961,7 @@ def scan_growth_candidates(
                     depth_by_symbol[symbol] = _depth_metrics(client, symbol)
                     depth_checks += 1
                 depth = depth_by_symbol.get(symbol, _unchecked_depth_metrics())
-                should_check_live = (
+                should_check_live = not v3_enabled and (
                     signal.get("signal") == direction
                     or current_score >= float(config.get("live_performance_check_min_score", 70.0))
                 )
@@ -1847,14 +1970,11 @@ def scan_growth_candidates(
                     if should_check_live
                     else {"enabled": False, "reason": "candidate_score_low"}
                 )
-                quality = score_symbol_quality(symbol, bars, ticker, signal, backtests, depth, config, mode)
-                quality = _apply_live_performance_quality(quality, live_perf, config)
-                market_state = classify_market_state(symbol, bars, signal, depth, config)
                 firecracker = firecracker_opportunity_score(ticker, config, mode)
                 squeeze = squeeze_signal(bars, config) if is_extreme_mode(mode["mode"]) else {"enabled": False, "score": 0.0}
                 check_derivatives = (
                     is_extreme_mode(mode["mode"])
-                    and config.get("extreme_v2_enabled", True)
+                    and (v3_enabled or config.get("extreme_v2_enabled", True))
                     and derivative_checks < int(config.get("extreme_oi_check_top_symbols", 12))
                     and (
                         firecracker.get("is_firecracker")
@@ -1873,6 +1993,125 @@ def scan_growth_candidates(
                 )
                 if check_derivatives:
                     derivative_checks += 1
+                if v3_enabled:
+                    event = opportunity_by_symbol.get(symbol) or trigger_by_symbol.get(symbol)
+                    opportunity = score_v3_opportunity(
+                        symbol=symbol,
+                        direction=direction,
+                        signal=signal,
+                        ticker=ticker,
+                        market_context=v3_market_context,
+                        depth=depth,
+                        derivatives=derivatives,
+                        event=event,
+                        cost_pct=observed_cost_pct,
+                        config=config,
+                    )
+                    tier = str(opportunity.get("tier") or "WATCH")
+                    tier_multiplier = float(opportunity.get("risk_multiplier") or 0)
+                    direction_multiplier = float(opportunity.get("direction_multiplier") or 0)
+                    derivative_multiplier = float(derivatives.get("risk_multiplier", 1.0))
+                    risk_pct = min(
+                        float(mode["risk_pct"]),
+                        float(mode["risk_pct"]) * tier_multiplier * direction_multiplier * derivative_multiplier,
+                    )
+                    expected_profit_pct = float(opportunity.get("expected_profit_pct") or 0)
+                    cost_ratio = float(opportunity.get("cost_ratio") or 0)
+                    passed = bool(opportunity.get("passed"))
+                    entry_type = str(signal.get("entry_type") or "watch")
+                    market_state = {
+                        "enabled": True,
+                        "engine": "opportunity_v3",
+                        "state": opportunity.get("market_regime"),
+                        "label": opportunity.get("market_regime_label"),
+                        "allows_entry": bool(opportunity.get("eligible")),
+                        "risk_multiplier": round(direction_multiplier, 4),
+                    }
+                    quality = {
+                        "engine": "opportunity_v3",
+                        "score": float(opportunity.get("score") or 0),
+                        "allowed": tier in {"A+", "A"} and bool(opportunity.get("eligible")),
+                        "pool": "trade" if tier in {"A+", "A"} else "observe",
+                        "tier": tier,
+                        "quality_risk_multiplier": tier_multiplier,
+                        "quality_risk_reasons": [f"V3 {opportunity.get('tier_label') or tier}"],
+                        "simulation": {
+                            "passed": None,
+                            "diagnostic": "V3 实时路径不重复运行窗口回测，统一由离线回放验证",
+                        },
+                    }
+                    candidate = {
+                        "symbol": symbol,
+                        "direction": direction,
+                        "mode": mode["mode"],
+                        "strategy": "opportunity_v3_trend",
+                        "strategy_family": V3_STRATEGY_FAMILY,
+                        "strategy_generation": "v3",
+                        "score": round(float(opportunity.get("score") or 0), 4),
+                        "passed": passed,
+                        "reason": "passed" if passed else "opportunity_v3_not_ready",
+                        "decision_reason": opportunity.get("reason"),
+                        "entry_type": entry_type,
+                        "entry_type_label": signal.get("entry_type_label", "V3 观察"),
+                        "opportunity_v3": opportunity,
+                        "v3_tier": tier,
+                        "symbol_quality": quality,
+                        "symbol_pool": quality["pool"],
+                        "live_performance": {"enabled": False, "reason": "v3_strategy_credit_isolated"},
+                        "market_state": market_state,
+                        "adaptive_thresholds": {"engine": "opportunity_v3", "market": v3_market_context.get("regime")},
+                        "firecracker": firecracker,
+                        "derivatives": derivatives,
+                        "squeeze": squeeze,
+                        "depth": depth,
+                        "depth_checked": depth.get("reason") != "depth_not_checked",
+                        "simulation_passed": None,
+                        "current_score": round(current_score, 2),
+                        "signal": signal,
+                        "recent": recent,
+                        "backtests": backtests,
+                        "ticker": {
+                            "last": last_price,
+                            "change_pct": float(ticker.get("priceChangePercent", 0)),
+                            "volume_usdt_b": round(float(ticker.get("quoteVolume", 0)) / 1_000_000_000, 3),
+                        },
+                        "cost_ratio": cost_ratio,
+                        "fee_pct": fee_pct,
+                        "estimated_slippage_pct": slippage_pct,
+                        "estimated_cost_pct": observed_cost_pct,
+                        "observed_cost_floor_pct": observed_cost_pct,
+                        "expected_profit_pct": expected_profit_pct,
+                        "risk_pct": risk_pct,
+                        "risk_adjustment": {
+                            "type": "opportunity_v3_tier",
+                            "multiplier": round(tier_multiplier * direction_multiplier * derivative_multiplier, 6),
+                            "tier": tier,
+                        },
+                        "quality_risk_multiplier": tier_multiplier,
+                        "quality_risk_reasons": quality["quality_risk_reasons"],
+                        "base_risk_pct": mode["risk_pct"],
+                        "leverage": mode["leverage"],
+                        "margin_pct": mode["margin_pct"],
+                        "thresholds": {
+                            "a_plus": config.get("opportunity_v3_a_plus_score", 82.0),
+                            "a": config.get("opportunity_v3_a_score", 70.0),
+                            "b": config.get("opportunity_v3_b_score", 58.0),
+                        },
+                        "coarse": next((row for row in coarse_rows if row["symbol"] == symbol), {}),
+                    }
+                    candidate = _finalize_candidate(
+                        candidate,
+                        config=config,
+                        mode=mode,
+                        exchange_filters=exchange_filters,
+                        equity=equity,
+                    )
+                    candidates.append(candidate)
+                    continue
+
+                quality = score_symbol_quality(symbol, bars, ticker, signal, backtests, depth, config, mode)
+                quality = _apply_live_performance_quality(quality, live_perf, config)
+                market_state = classify_market_state(symbol, bars, signal, depth, config)
                 spot_proxy = spot_proxy_confirmation(bars, direction, signal, config) if is_extreme_mode(mode["mode"]) else {"enabled": False, "score_delta": 0.0, "risk_multiplier": 1.0}
                 quality_multiplier = float(quality.get("quality_risk_multiplier", 1.0))
                 risk_pct *= quality_multiplier
@@ -2213,37 +2452,13 @@ def scan_growth_candidates(
                         "thresholds": {"min_trades": min_trades, "min_pf": min_pf, "min_net_pct": min_net_pct},
                         "coarse": next((row for row in coarse_rows if row["symbol"] == symbol), {}),
                     }
-                candidate = apply_live_credit_to_candidate(candidate, config)
-                candidate = apply_live_reaction_to_candidate(candidate, config)
-                candidate = apply_strategy_evidence_to_candidate(candidate, config)
-                viability_risk_pct = float(candidate.get("risk_pct") or 0)
-                if config.get("effective_position_sizing_enabled", True):
-                    viability_risk_pct = float(effective_position_risk(
-                        candidate_risk_pct=viability_risk_pct,
-                        candidate=candidate,
-                        guard={"risk_multiplier": 1.0},
-                        target={"effective_risk_multiplier": 1.0},
-                        config=config,
-                        mode=str(mode["mode"]),
-                    )["final_risk_pct"])
-                viability = execution_viability(
-                    exchange_filters,
-                    symbol,
-                    equity,
-                    viability_risk_pct,
-                    float(signal.get("last_price") or 0),
-                    float(signal.get("stop") or 0),
-                    float(mode["margin_pct"]) / 100 * float(equity or 0) * float(mode["leverage"]),
+                candidate = _finalize_candidate(
+                    candidate,
+                    config=config,
+                    mode=mode,
+                    exchange_filters=exchange_filters,
+                    equity=equity,
                 )
-                viability["effective_risk_pct"] = viability_risk_pct
-                candidate["execution_filter"] = viability
-                if candidate.get("passed") and viability.get("enabled") and not viability.get("executable"):
-                    candidate["passed"] = False
-                    candidate["reason"] = "min_order_not_executable"
-                    candidate["decision_reason"] = (
-                        f"低于币安最小下单量，当前约 {viability.get('notional')}U，"
-                        f"最低 {viability.get('min_notional')}U，跳过避免启动后失败"
-                    )
                 candidates.append(candidate)
         except Exception as exc:
             candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})
@@ -2274,6 +2489,10 @@ def scan_growth_candidates(
     probe_count = sum(1 for candidate in candidates if candidate.get("entry_type") in {"extreme_probe", "weak_quality_probe"})
     scalp_count = sum(1 for candidate in candidates if candidate.get("entry_type") in {"orderbook_impact", "volume_scalp", "imbalance_probe"})
     sprint_count = sum(1 for candidate in candidates if candidate.get("passed") and candidate.get("entry_type") not in {"extreme_probe", "weak_quality_probe"})
+    v3_tiers = {
+        tier: sum(1 for candidate in candidates if candidate.get("v3_tier") == tier)
+        for tier in ("A+", "A", "B", "WATCH")
+    }
     blocked_reasons: dict[str, int] = {}
     for candidate in candidates:
         if candidate.get("passed"):
@@ -2314,13 +2533,24 @@ def scan_growth_candidates(
             "label": "候选",
         },
         "extreme_v2": {
-            "enabled": bool(is_extreme_mode(mode.get("mode")) and config.get("extreme_v2_enabled", True)),
+            "enabled": bool(is_extreme_mode(mode.get("mode")) and config.get("extreme_v2_enabled", True) and not v3_enabled),
             "firecracker": firecracker_count,
             "probe": probe_count,
             "scalp": scalp_count,
             "sprint": sprint_count,
             "blocked_reasons": blocked_reasons,
             "label": "极限V2",
+        },
+        "opportunity_v3": {
+            "enabled": v3_enabled,
+            "strategy_family": V3_STRATEGY_FAMILY,
+            "market_regime": v3_market_context.get("regime"),
+            "market_label": v3_market_context.get("label"),
+            "breadth_positive": v3_market_context.get("breadth_positive"),
+            "dispersion_pct": v3_market_context.get("dispersion_pct"),
+            "tiers": v3_tiers,
+            "observed_cost_floor_pct": round(observed_cost_pct, 6),
+            "label": "机会引擎 V3",
         },
         "opportunity_queue": {
             "enabled": bool(config.get("opportunity_queue_enabled", True)),
@@ -2388,6 +2618,7 @@ def _publish_stream_intent(
             candidate_symbols=candidate_symbols,
             position_symbols=position_symbols,
             live_credit_symbols=live_credit_symbols,
+            shadow_symbols=active_shadow_symbols(int(config.get("shadow_stream_symbols_limit", 100))),
             active_mode=active_growth_mode(config),
         )
     except Exception:

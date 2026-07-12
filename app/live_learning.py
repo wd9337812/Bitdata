@@ -15,6 +15,7 @@ DEFAULT_SCORE = 50.0
 ORDERBOOK_SCALP_ENTRY_TYPES = {"orderbook_impact", "volume_scalp", "imbalance_probe"}
 ORDERBOOK_SCALP_FAMILY = "orderbook_scalp"
 EXTREME_V2_FAMILY = "extreme_v2_roll"
+EXTREME_V3_FAMILY = "extreme_v3_roll"
 GRID_STRATEGY_FAMILY = "grid_stable"
 LEGACY_STRATEGY_FAMILY = "legacy_mixed"
 
@@ -30,6 +31,11 @@ def _is_yolo_orderbook_scalp_candidate(candidate: dict[str, Any], config: dict[s
 def _strategy_family_for_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> str | None:
     if not config.get("strategy_family_credit_enabled", True):
         return None
+    explicit = str(candidate.get("strategy_family") or "")
+    if explicit in {ORDERBOOK_SCALP_FAMILY, EXTREME_V2_FAMILY, EXTREME_V3_FAMILY, GRID_STRATEGY_FAMILY}:
+        return explicit
+    if str(candidate.get("strategy_generation") or "").lower() == "v3":
+        return EXTREME_V3_FAMILY
     mode = str(candidate.get("mode") or "")
     if _is_yolo_orderbook_scalp_candidate(candidate, config):
         return ORDERBOOK_SCALP_FAMILY
@@ -50,6 +56,7 @@ def _experiment_credit(
     labels = {
         ORDERBOOK_SCALP_FAMILY: "剥头皮新策略观察",
         EXTREME_V2_FAMILY: "极限 V2 新策略观察",
+        EXTREME_V3_FAMILY: "机会引擎 V3 新策略观察",
         GRID_STRATEGY_FAMILY: "网格新策略观察",
     }
     return {
@@ -520,13 +527,14 @@ def _parse_iso_ms(value: Any) -> int | None:
 
 
 def _strategy_score_config(config: dict[str, Any], family: str) -> dict[str, Any]:
-    if family not in {ORDERBOOK_SCALP_FAMILY, EXTREME_V2_FAMILY}:
+    if family not in {ORDERBOOK_SCALP_FAMILY, EXTREME_V2_FAMILY, EXTREME_V3_FAMILY}:
         return config
     scoped = dict(config)
-    prefix = "scalp" if family == ORDERBOOK_SCALP_FAMILY else "extreme"
+    prefix = "scalp" if family == ORDERBOOK_SCALP_FAMILY else "v3" if family == EXTREME_V3_FAMILY else "extreme"
     defaults = {
         "scalp": (35, 5.0, 7.5, 12.0, 4.5, 1.0, 3.0, 4.0),
         "extreme": (300, 5.0, 7.0, 10.0, 3.0, 2.0, 6.0, 3.0),
+        "v3": (300, 4.0, 6.0, 9.0, 3.0, 2.0, 6.0, 3.0),
     }[prefix]
     scoped["live_credit_quick_stop_seconds"] = int(config.get(f"{prefix}_credit_quick_stop_seconds", defaults[0]))
     scoped["live_credit_win_reward"] = float(config.get(f"{prefix}_credit_win_reward", defaults[1]))
@@ -549,7 +557,13 @@ def _strategy_family_from_payload(payload: dict[str, Any]) -> str:
     decision = payload.get("decision") if isinstance(payload, dict) else {}
     if not isinstance(decision, dict):
         return LEGACY_STRATEGY_FAMILY
-    entry_type = str(decision.get("entry_type") or ((decision.get("candidate") or {}).get("entry_type")) or "")
+    candidate = decision.get("candidate") or {}
+    explicit = str(decision.get("strategy_family") or candidate.get("strategy_family") or "")
+    if explicit in {ORDERBOOK_SCALP_FAMILY, EXTREME_V2_FAMILY, EXTREME_V3_FAMILY, GRID_STRATEGY_FAMILY}:
+        return explicit
+    if str(decision.get("strategy_generation") or candidate.get("strategy_generation") or "").lower() == "v3":
+        return EXTREME_V3_FAMILY
+    entry_type = str(decision.get("entry_type") or candidate.get("entry_type") or "")
     mode = str(decision.get("mode") or ((decision.get("scan") or {}).get("mode") or {}).get("mode") or "")
     if mode == "yolo_scalp" and entry_type in ORDERBOOK_SCALP_ENTRY_TYPES:
         return ORDERBOOK_SCALP_FAMILY
@@ -829,7 +843,15 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
         legacy_credit = credit
         credit = strategy_live_score_for(symbol, direction, strategy_family, config)
     score = float(credit.get("score", DEFAULT_SCORE))
-    weight_key = "scalp_credit_score_weight" if strategy_family == ORDERBOOK_SCALP_FAMILY else "extreme_credit_score_weight" if strategy_family == EXTREME_V2_FAMILY else "live_credit_score_weight"
+    weight_key = (
+        "scalp_credit_score_weight"
+        if strategy_family == ORDERBOOK_SCALP_FAMILY
+        else "v3_credit_score_weight"
+        if strategy_family == EXTREME_V3_FAMILY
+        else "extreme_credit_score_weight"
+        if strategy_family == EXTREME_V2_FAMILY
+        else "live_credit_score_weight"
+    )
     weight = float(config.get(weight_key, config.get("live_credit_score_weight", 0.35)))
     score_delta = (score - float(config.get("live_credit_default_score", DEFAULT_SCORE))) * weight
     candidate = dict(candidate)
@@ -840,6 +862,15 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
     reasons = [f"实盘信用 {score:.1f} 分（{credit.get('status_label', '-')}）"]
     multiplier = live_credit_multiplier(credit, config)
     cooldown = live_credit_cooldown_summary(credit, config)
+    if strategy_family == EXTREME_V3_FAMILY:
+        v3_floor = float(
+            config.get("opportunity_v3_credit_cooldown_min_multiplier", 0.35)
+            if cooldown.get("active") or int(credit.get("consecutive_losses") or 0) > 0
+            else config.get("opportunity_v3_credit_min_multiplier", 0.80)
+        )
+        v3_ceiling = float(config.get("opportunity_v3_credit_max_multiplier", 1.20))
+        multiplier = max(v3_floor, min(multiplier, v3_ceiling))
+        reasons.append(f"V3 独立信用倍率限制 {v3_floor:.2f}-{v3_ceiling:.2f}x")
     boost_ok, boost_failures = live_credit_boost_qualified(credit, config)
     if multiplier > 1.0 and not boost_ok:
         cap = float(config.get("live_credit_unqualified_boost_cap", 1.0))
@@ -894,7 +925,7 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
             reasons.append("剥头皮试验期：旧信用不硬拦截")
         candidate["legacy_live_credit"] = legacy_credit
     elif legacy_credit is not None:
-        label = "剥头皮" if strategy_family == ORDERBOOK_SCALP_FAMILY else "极限 V2" if strategy_family == EXTREME_V2_FAMILY else "当前策略"
+        label = "剥头皮" if strategy_family == ORDERBOOK_SCALP_FAMILY else "机会引擎 V3" if strategy_family == EXTREME_V3_FAMILY else "极限 V2" if strategy_family == EXTREME_V2_FAMILY else "当前策略"
         reasons.append(f"{label}独立信用：旧策略信用仅展示，不参与仓位")
         candidate["legacy_live_credit"] = legacy_credit
 

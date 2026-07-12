@@ -17,6 +17,7 @@ from app.config_store import load_config, save_config
 from app.learning_report import latest_daily_learning_report, save_daily_learning_report
 from app.live_learning import (
     EXTREME_V2_FAMILY,
+    EXTREME_V3_FAMILY,
     ORDERBOOK_SCALP_FAMILY,
     list_live_scores,
     list_strategy_live_scores,
@@ -60,7 +61,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.3.7")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.4.0")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -251,6 +252,7 @@ def live_learning(limit: int = 100) -> dict[str, Any]:
         "strategy_scores": list_strategy_live_scores(limit, config),
         "scalp_scores": list_strategy_live_scores(limit, config, strategy_family=ORDERBOOK_SCALP_FAMILY),
         "extreme_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V2_FAMILY),
+        "v3_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V3_FAMILY),
     }
 
 

@@ -67,3 +67,16 @@ This file tracks local verification for the two-stage futures system.
 - `python -m pytest -q`: `176 passed` (one existing local `requests` dependency compatibility warning).
 - `npm run build`: passed; Vite reported only the existing large-chunk advisory.
 - `git diff --check`: passed; Git reported only Windows LF/CRLF conversion notices.
+
+## 2026-07-12 Opportunity Engine V3
+
+- S0-S2 route to the isolated `extreme_v3_roll` strategy family; legacy V2 credit remains read-only for review.
+- Added cross-sectional market regimes, relative strength, Donchian/EMA trend structure, normalized volume flow, OI/funding/basis confirmation, liquidity checks, observed cost admission, and A+/A/B opportunity tiers.
+- Removed repeated rolling backtests from the live V3 path; validation remains available through deterministic tests and offline replay.
+- Added graduated account recovery and a constrained A+ canary path that does not bypass hard equity, daily-loss, order viability, or protection controls.
+- Shadow trades now use local WebSocket prices and 1m high/low data, retain V3 strategy/regime/score fields, and subscribe active shadow symbols without additional REST polling.
+- React Dashboard shows V3 market state, tier counts, component scores, observed cost, and isolated V3 live credit in Chinese.
+- `python -m compileall -q app`: passed.
+- `python -m pytest -q`: `182 passed` (one existing local `requests` dependency compatibility warning).
+- `npm run build`: passed; Vite reported only the existing large-chunk advisory.
+- Local HTTP smoke on `127.0.0.1:8091`: `/` returned 200 and `/api/live-learning` exposed the isolated `v3_scores` collection.
