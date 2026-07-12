@@ -36,7 +36,7 @@ from app.stage_simulation import simulate_stage_path
 from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
 from app.target import target_progress
-from app.binance_rate import cache_status, rate_status
+from app.binance_rate import BinanceRateLimitError, cache_status, rate_status, request_priority
 from app.telemetry import (
     heartbeat,
     latest_strategy_payload,
@@ -60,7 +60,8 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.3.4")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.3.6")
+_BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
 if assets_dir.exists():
@@ -298,19 +299,35 @@ def runner_heartbeat() -> dict[str, Any]:
 
 @app.get("/api/health/binance", dependencies=[Depends(require_auth)])
 def binance_health() -> dict[str, Any]:
+    now_monotonic = time.monotonic()
+    cache_age = now_monotonic - float(_BINANCE_HEALTH_CACHE.get("checked_monotonic") or 0)
+    if _BINANCE_HEALTH_CACHE.get("payload") and cache_age < 60:
+        return {**_BINANCE_HEALTH_CACHE["payload"], "cached": True, "cacheAgeSeconds": round(cache_age, 2)}
     try:
         client = client_from_config()
-        data = client.server_time()
+        with request_priority("background"):
+            data = client.server_time()
         server_time = int(data.get("serverTime", 0))
         local_time = int(time.time() * 1000)
         offset_ms = local_time - server_time
-        return {
+        payload = {
             "ok": abs(offset_ms) < 3000,
             "serverTime": server_time,
             "localTime": local_time,
             "offsetMs": offset_ms,
             "warning": "VPS 时间偏差过大，请检查 chrony/NTP。" if abs(offset_ms) >= 3000 else "",
         }
+        _BINANCE_HEALTH_CACHE.update({"checked_monotonic": now_monotonic, "payload": payload})
+        return payload
+    except BinanceRateLimitError as exc:
+        if _BINANCE_HEALTH_CACHE.get("payload"):
+            return {
+                **_BINANCE_HEALTH_CACHE["payload"],
+                "cached": True,
+                "cacheAgeSeconds": round(cache_age, 2),
+                "warning": "REST 预算优先保留给交易，当前显示最近一次健康结果。",
+            }
+        return {"ok": None, "deferred": True, "warning": str(exc)}
     except Exception as exc:
         record_event("error", "binance", str(exc))
         return {"ok": False, "error": str(exc)}

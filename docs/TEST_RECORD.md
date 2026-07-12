@@ -62,7 +62,8 @@ This file tracks local verification for the two-stage futures system.
 - Live-credit evidence now decays with a configurable 12-hour half-life instead of retaining old wins at a fixed weight.
 - Fast-lane repeated WAIT records are throttled, compact payloads retain fewer candidates, strategy-run details default to seven-day retention, and closed shadow details default to fourteen-day retention.
 - React Dashboard now shows the global trading-protection state, rolling live PF/loss count, and shadow PF in Chinese.
+- Binance time health checks are cached for 60 seconds and serve the last valid result when internal REST reserves defer background work.
 - `python -m compileall app`: passed.
-- `python -m pytest -q`: `174 passed` (one existing local `requests` dependency compatibility warning).
+- `python -m pytest -q`: `175 passed` (one existing local `requests` dependency compatibility warning).
 - `npm run build`: passed; Vite reported only the existing large-chunk advisory.
 - `git diff --check`: passed; Git reported only Windows LF/CRLF conversion notices.
