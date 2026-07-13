@@ -11,6 +11,7 @@ from app.exchange_filters import ExchangeFilters
 from app.live_learning import apply_live_credit_to_candidate, list_live_scores
 from app.live_reaction import apply_live_reaction_to_candidate
 from app.performance_guard import apply_strategy_evidence_to_candidate, observed_round_trip_cost_pct
+from app.strategy_calibration import calibrate_v3_opportunity
 from app.market_stream import stream_depth, stream_triggers, write_stream_intent
 from app.opportunity_engine import (
     V31_CHALLENGER_FAMILY,
@@ -2049,12 +2050,14 @@ def scan_growth_candidates(
                         signal=signal,
                         ticker=ticker,
                         market_context=v3_market_context,
+                        medium_context=v31_medium_context,
                         depth=depth,
                         derivatives=derivatives,
                         event=event,
                         cost_pct=observed_cost_pct,
                         config=config,
                     )
+                    opportunity = calibrate_v3_opportunity(opportunity, signal, direction, config)
                     challenger = build_v31_challenger(
                         symbol=symbol,
                         direction=direction,
@@ -2102,6 +2105,7 @@ def scan_growth_candidates(
                         "mode": mode["mode"],
                         "strategy": "opportunity_v3_trend",
                         "strategy_family": V3_STRATEGY_FAMILY,
+                        "strategy_version": opportunity.get("strategy_version"),
                         "strategy_generation": "v3",
                         "score": round(float(opportunity.get("score") or 0), 4),
                         "passed": passed,

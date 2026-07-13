@@ -200,6 +200,7 @@ def build_v3_signal(
     lookbacks = [int(value) for value in config.get("opportunity_v3_donchian_lookbacks", [12, 24, 48]) if int(value) >= 3]
     votes = 0
     distances: list[float] = []
+    extensions: list[float] = []
     for lookback in lookbacks:
         if len(bars) <= lookback:
             continue
@@ -208,10 +209,13 @@ def build_v3_signal(
         if is_short:
             votes += int(close <= lower)
             distances.append(max(0.0, close - lower) / atr_value)
+            extensions.append(max(0.0, lower - close) / atr_value)
         else:
             votes += int(close >= upper)
             distances.append(max(0.0, upper - close) / atr_value)
+            extensions.append(max(0.0, close - upper) / atr_value)
     distance_atr = min(distances) if distances else 999.0
+    breakout_extension_atr = max(extensions) if extensions else 0.0
     volume_acceleration = _volume_acceleration(bars)
     buy_ratio = _taker_buy_ratio(bars[-1])
     directed_flow = 1.0 - buy_ratio if is_short else buy_ratio
@@ -260,6 +264,12 @@ def build_v3_signal(
     )
     wick_ratio = adverse_wick / max(body, close * 0.0001)
     signal_ready = setup_type in V3_ENTRY_TYPES
+    entry_phase = {
+        "v3_prebreakout": "ARMED",
+        "v3_pullback": "RETEST",
+        "v3_breakout": "TRIGGERED",
+        "v3_momentum": "TRIGGERED",
+    }.get(setup_type, "WATCH")
     return {
         "enabled": True,
         "engine": "opportunity_v3",
@@ -271,6 +281,7 @@ def build_v3_signal(
         "strategy": "opportunity_v3_trend",
         "entry_type": setup_type,
         "entry_type_label": label,
+        "entry_phase": entry_phase,
         "last_price": close,
         "atr": atr_value,
         "atr_pct": atr_value / close * 100,
@@ -286,6 +297,7 @@ def build_v3_signal(
         "donchian_votes": votes,
         "donchian_models": len(lookbacks),
         "distance_to_trigger_atr": round(distance_atr, 6),
+        "breakout_extension_atr": round(breakout_extension_atr, 6),
         "distance_to_trigger_pct": round(distance_atr * atr_value / close * 100, 6) if distance_atr < 999 else 999.0,
         "volume_acceleration": round(volume_acceleration, 6),
         "directed_trade_flow": round(directed_flow, 6),
@@ -331,6 +343,7 @@ def score_v3_opportunity(
     signal: dict[str, Any],
     ticker: dict[str, Any],
     market_context: dict[str, Any],
+    medium_context: dict[str, dict[str, float | bool]] | None = None,
     depth: dict[str, Any],
     derivatives: dict[str, Any],
     event: dict[str, Any] | None,
@@ -338,7 +351,12 @@ def score_v3_opportunity(
     config: dict[str, Any],
 ) -> dict[str, Any]:
     direction = direction.upper()
+    medium_context = medium_context or {}
     symbol_context = (market_context.get("symbols") or {}).get(symbol.upper(), {})
+    medium = medium_context.get(symbol.upper()) or {}
+    medium_trend_aligned = bool(medium.get("trend_short" if direction == "SHORT" else "trend_long"))
+    medium_path_efficiency = float(medium.get("path_efficiency") or 0.0)
+    medium_ready = bool(medium)
     strength_key = "short_strength_percentile" if direction == "SHORT" else "long_strength_percentile"
     strength = float(symbol_context.get(strength_key) or 0.5)
     relative = strength * 25.0
@@ -385,6 +403,12 @@ def score_v3_opportunity(
         "derivatives": derivative_component,
         "liquidity": liquidity,
     }
+    if medium_ready:
+        components["medium_horizon"] = (
+            8.0 + _clamp(medium_path_efficiency / 0.35, 0.0, 1.0) * 4.0
+            if medium_trend_aligned
+            else -10.0
+        )
     penalties: dict[str, float] = {}
     if float(signal.get("adverse_wick_ratio") or 0) > 2.0:
         penalties["adverse_wick"] = 10.0
@@ -416,11 +440,46 @@ def score_v3_opportunity(
     )
     signal_ready = signal.get("signal") == direction and entry_type in V3_ENTRY_TYPES
     capitulation_short = direction == "SHORT" and float(signal.get("impulse_atr") or 0) >= 2.5 and float(signal.get("adverse_wick_ratio") or 0) >= 1.5
-    eligible = signal_ready and strength >= direction_floor and liquidity_safe and not capitulation_short
+    countertrend = (direction == "SHORT" and regime == "broad_up") or (
+        direction == "LONG" and regime in {"broad_down", "panic"}
+    )
+    panic_chase = (
+        regime == "panic"
+        and direction == "SHORT"
+        and entry_type != "v3_pullback"
+        and bool(config.get("opportunity_v3_panic_requires_pullback", True))
+    )
+    prebreakout_shadow_only = entry_type == "v3_prebreakout" and not bool(
+        config.get("opportunity_v3_prebreakout_live_enabled", False)
+    )
+    extension_atr = float(signal.get("breakout_extension_atr") or 0.0)
+    impulse_atr = max(0.0, float(signal.get("impulse_atr") or 0.0))
+    overextended = entry_type in {"v3_breakout", "v3_momentum"} and (
+        extension_atr > float(config.get("opportunity_v3_max_breakout_extension_atr", 0.65))
+        or impulse_atr > float(config.get("opportunity_v3_max_entry_impulse_atr", 1.35))
+    )
+    weak_medium_path = medium_ready and medium_path_efficiency < float(
+        config.get("opportunity_v3_min_medium_path_efficiency", 0.16)
+    )
+    medium_required = bool(config.get("opportunity_v3_medium_confirmation_enabled", True))
+    eligible = (
+        signal_ready
+        and strength >= direction_floor
+        and liquidity_safe
+        and not capitulation_short
+        and not panic_chase
+        and not overextended
+        and not weak_medium_path
+        and not (countertrend and bool(config.get("opportunity_v3_block_countertrend", True)))
+        and not (medium_required and medium_ready and not medium_trend_aligned)
+    )
     a_plus_score = float(config.get("opportunity_v3_a_plus_score", 82.0))
     a_score = float(config.get("opportunity_v3_a_score", 70.0))
     b_score = float(config.get("opportunity_v3_b_score", 58.0))
-    if eligible and score >= a_plus_score and cost_ratio >= float(config.get("opportunity_v3_a_plus_min_cost_ratio", 3.0)):
+    a_plus_medium_ok = not bool(config.get("opportunity_v3_a_plus_requires_medium_alignment", True)) or (
+        medium_ready and medium_trend_aligned
+    )
+    if eligible and a_plus_medium_ok and score >= a_plus_score and cost_ratio >= float(config.get("opportunity_v3_a_plus_min_cost_ratio", 3.0)):
         tier, label, risk_multiplier, passed = "A+", "顶级机会", 1.0, True
     elif eligible and score >= a_score and cost_ratio >= float(config.get("opportunity_v3_a_min_cost_ratio", 2.0)):
         tier, label, risk_multiplier, passed = "A", "优质机会", 0.65, True
@@ -429,6 +488,9 @@ def score_v3_opportunity(
         passed = bool(config.get("opportunity_v3_b_live_enabled", False))
     else:
         tier, label, risk_multiplier, passed = "WATCH", "继续观察", 0.0, False
+
+    if prebreakout_shadow_only and tier in {"A+", "A", "B"}:
+        tier, label, risk_multiplier, passed = "B", "影子观察", 0.25, False
 
     blockers = []
     if not signal_ready:
@@ -439,6 +501,18 @@ def score_v3_opportunity(
         blockers.append("盘口点差或深度不适合执行")
     if capitulation_short:
         blockers.append("单根急跌后禁止追空")
+    if countertrend and bool(config.get("opportunity_v3_block_countertrend", True)):
+        blockers.append("方向与全市场趋势相反")
+    if panic_chase:
+        blockers.append("恐慌行情禁止直接追空，等待回踩确认")
+    if prebreakout_shadow_only:
+        blockers.append("突破前预判只做影子验证")
+    if overextended:
+        blockers.append("价格已偏离触发位过远，禁止追单")
+    if weak_medium_path:
+        blockers.append("中周期路径过于反复")
+    if medium_required and medium_ready and not medium_trend_aligned:
+        blockers.append("1小时中周期趋势未同向")
     if cost_ratio < float(config.get("opportunity_v3_b_min_cost_ratio", 1.35)):
         blockers.append("扣费后空间不足")
     if tier == "B" and not passed:
@@ -473,6 +547,13 @@ def score_v3_opportunity(
         "estimated_cost_pct": round(cost_pct, 6),
         "event_age_seconds": round(event_age, 3) if event_age is not None else None,
         "liquidity_safe": liquidity_safe,
+        "entry_phase": signal.get("entry_phase") or "WATCH",
+        "medium_ready": medium_ready,
+        "medium_trend_aligned": medium_trend_aligned,
+        "medium_path_efficiency": round(medium_path_efficiency, 6),
+        "countertrend_blocked": countertrend and bool(config.get("opportunity_v3_block_countertrend", True)),
+        "panic_chase_blocked": panic_chase,
+        "overextended": overextended,
     }
 
 

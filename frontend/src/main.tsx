@@ -27,12 +27,12 @@ import {
 import { api, fmt, modeLabel, stageLabel, statusLabel } from "./lib/api";
 import "./styles.css";
 
-type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; user_stream?: Record<string, any>; binance_rate?: Record<string, any>; opportunity_queue?: Record<string, any>; runtime?: Record<string, any>; target_progress?: Record<string, any>; stage_profile?: Record<string, any>; stage_route?: Record<string, any>; stage_profiles?: Record<string, any>[]; product_completion?: Record<string, any> };
+type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; user_stream?: Record<string, any>; binance_rate?: Record<string, any>; opportunity_queue?: Record<string, any>; runtime?: Record<string, any>; target_progress?: Record<string, any>; stage_profile?: Record<string, any>; stage_route?: Record<string, any>; stage_profiles?: Record<string, any>[]; product_completion?: Record<string, any>; storage?: Record<string, any> };
 type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any; funnel?: any }; stage2_grid: any[]; auth_error?: string };
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
-type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[]; v3_scores?: any[] };
+type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[]; v3_scores?: any[]; v3_calibration?: Record<string, any> };
 type LiveReactionData = { reactions: any[]; recent_trades: any[] };
 type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; trades: any[] };
 type SimulationData = Record<string, any>;
@@ -124,6 +124,7 @@ function useData() {
         scalp_scores: learningRes.scalp_scores || [],
         extreme_scores: learningRes.extreme_scores || [],
         v3_scores: learningRes.v3_scores || [],
+        v3_calibration: learningRes.v3_calibration || {},
       });
       setLiveReaction(await api<LiveReactionData>("/api/live-reaction?limit=100"));
       setShadow(await api<ShadowData>("/api/shadow-trades?limit=100"));
@@ -410,7 +411,7 @@ function App() {
         {active === "config" && <ConfigPanel config={config} onSave={saveConfig} onTestApi={testBinanceApi} />}
         {active === "system" && (
           <section className="stack">
-            <StageRoutePanel route={stageRoute} profiles={stageProfiles} stream={stream} userStream={userStream} rate={binanceRate} equity={account.equity} />
+            <StageRoutePanel route={stageRoute} profiles={stageProfiles} stream={stream} userStream={userStream} rate={binanceRate} equity={account.equity} storage={data.status?.storage || {}} />
             <LogsPanel rows={data.logs} />
           </section>
         )}
@@ -626,12 +627,12 @@ function OpportunityV3Panel({ funnel }: { funnel: any }) {
       <div className="panel-head">
         <div>
           <h2>机会引擎 V3</h2>
-          <p>A+ 是顶级趋势机会，A 是优质机会，B 只记影子交易；旧 V2 信用不会影响这里的仓位。</p>
+          <p>A+ 只有中周期同向且当前版本证据达标后才会放大；A 可折扣实盘，B 只做影子验证，旧 V2 结果不会混入。</p>
         </div>
       </div>
       <div className="metrics">
         <MetricCard title="市场状态" value={v3.market_label || "等待行情"} sub={`上涨广度 ${fmt(Number(v3.breadth_positive || 0) * 100, 1)}% · 离散 ${fmt(v3.dispersion_pct, 2)}%`} />
-        <MetricCard title="A+ 顶级机会" value={`${fmt(tiers["A+"], 0)} 个`} sub="结构、成本、流动性全部达标" tone={Number(tiers["A+"] || 0) > 0 ? "positive" : ""} />
+        <MetricCard title="A+ 待校准机会" value={`${fmt(tiers["A+"], 0)} 个`} sub="结构达标后仍需当前版本实盘与影子证据" tone={Number(tiers["A+"] || 0) > 0 ? "positive" : ""} />
         <MetricCard title="A 优质机会" value={`${fmt(tiers.A, 0)} 个`} sub="允许折扣仓位实盘" />
         <MetricCard title="B 影子机会" value={`${fmt(tiers.B, 0)} 个`} sub="不下实单，先累计真实行情结果" />
         <MetricCard title="继续观察" value={`${fmt(tiers.WATCH, 0)} 个`} sub="结构或成本尚未达到准入" />
@@ -693,7 +694,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               <td className="symbol">{row.symbol}</td>
               <td>{signalLabel(row.direction || row.signal?.signal)}</td>
               <td>{entryTypeLabel(row, "-")}</td>
-              {!compact && <td>{row.v3_tier || "-"}</td>}
+              {!compact && <td>{row.v3_tier || "-"}<small>{row.opportunity_v3?.calibration?.label || row.opportunity_v3?.entry_phase || ""}</small></td>}
               <td>{fmt(row.score, 2)}</td>
               <td>
                 {row.live_credit ? `${fmt(row.live_credit.score, 1)} · ${row.live_credit.status_label || "-"}` : "-"}
@@ -733,6 +734,9 @@ function LiveLearningPanel({ data, onSync }: { data: LiveLearningData; onSync: (
   const scalpNet = scalpRows.reduce((sum, row) => sum + Number(row.net_pnl || 0), 0);
   const activePower = v3Rows.filter((row) => Number(row.risk_multiplier || 0) >= 1).length;
   const activeFuse = v3Rows.filter((row) => Number(row.risk_multiplier || 0) < 1).length;
+  const calibrationRows = Object.entries(data.v3_calibration || {}).map(([key, value]: [string, any]) => ({ key, ...value }));
+  const validatedCalibration = calibrationRows.filter((row) => Number(row.live?.trades || 0) >= 30 && Number(row.shadow?.trades || 0) >= 70 && Number(row.live?.profit_factor || 0) >= 1.2 && Number(row.shadow?.profit_factor || 0) >= 1.2).length;
+  const currentVersionRows = calibrationRows.filter((row) => row.key.includes("|v3.2|"));
   const renderRows = (items: any[], empty: string) => (
     <div className="table-wrap">
       <table>
@@ -788,6 +792,15 @@ function LiveLearningPanel({ data, onSync }: { data: LiveLearningData; onSync: (
         <MetricCard title="正常以上倍率" value={String(activePower)} sub="V3 独立信用倍率 >= 1" />
         <MetricCard title="受限方向" value={String(activeFuse)} sub="V3 近期亏损方向" tone={activeFuse ? "negative" : ""} />
         <MetricCard title="V3 净盈亏" value={`${fmt(v3Net, 4)} U`} tone={v3Net >= 0 ? "positive" : "negative"} />
+        <MetricCard title="V3.2 证据组" value={String(currentVersionRows.length)} sub="按机会档位、市场状态、方向和入场类型分组" />
+        <MetricCard title="已通过校准" value={String(validatedCalibration)} sub="需同时满足实盘、影子、PF 与扣费后期望" tone={validatedCalibration ? "positive" : ""} />
+      </div>
+      <div className="panel">
+        <div className="panel-head"><div><h2>当前版本策略证据</h2><p>这里回答“这类机会以前是否真的赚钱”。旧版交易只保留复盘，不会替 V3.2 提高仓位；样本不足的 A+ 最多按 A 档仓位运行。</p></div></div>
+        <div className="table-wrap"><table><thead><tr><th>证据组</th><th>实盘笔数</th><th>实盘 PF</th><th>实盘保守期望</th><th>影子笔数</th><th>影子 PF</th><th>影子保守期望</th><th>结论</th></tr></thead><tbody>
+          {currentVersionRows.slice(0, 30).map((row) => <tr key={row.key}><td className="reason-cell">{row.key}</td><td>{fmt(row.live?.trades, 0)}</td><td>{fmt(row.live?.profit_factor, 2)}</td><td>{fmt(row.live?.lower_expected_net_pct, 3)}%</td><td>{fmt(row.shadow?.trades, 0)}</td><td>{fmt(row.shadow?.profit_factor, 2)}</td><td>{fmt(row.shadow?.lower_expected_net_pct, 3)}%</td><td>{Number(row.live?.trades || 0) >= 30 && Number(row.shadow?.trades || 0) >= 70 && Number(row.live?.profit_factor || 0) >= 1.2 && Number(row.shadow?.profit_factor || 0) >= 1.2 ? <span className="pill ok">通过</span> : <span className="pill">继续积累</span>}</td></tr>)}
+          {!currentVersionRows.length && <tr><td colSpan={8}>V3.2 刚启用，先用影子交易和受限仓位积累同版本样本。</td></tr>}
+        </tbody></table></div>
       </div>
       <div className="panel">
         <div className="panel-head">
@@ -833,7 +846,7 @@ function LiveLearningPanel({ data, onSync }: { data: LiveLearningData; onSync: (
 
 function ReviewPanel({ chartData, snapshots, learning, shadow, reaction, onSync }: { chartData: any[]; snapshots: any[]; learning: LiveLearningData; shadow: ShadowData; reaction: LiveReactionData | null; onSync: () => Promise<void> }) {
   const [tab, setTab] = useState("equity");
-  const tabs = [["equity", "收益曲线"], ["trades", "实盘学习"], ["shadow", "影子交易"], ["reaction", "实时风控"]];
+  const tabs = [["equity", "收益曲线"], ["trades", "策略证据"], ["shadow", "影子交易"], ["reaction", "实时风控"]];
   const challenger = (shadow.by_strategy || []).find((item: any) => item.strategy_family === "extreme_v31_challenger") || {};
   return (
     <section className="stack">
@@ -855,7 +868,7 @@ function ReviewPanel({ chartData, snapshots, learning, shadow, reaction, onSync 
   );
 }
 
-function StageRoutePanel({ route, profiles, stream, userStream, rate, equity }: { route: any; profiles: any[]; stream: any; userStream: any; rate: any; equity: any }) {
+function StageRoutePanel({ route, profiles, stream, userStream, rate, equity, storage }: { route: any; profiles: any[]; stream: any; userStream: any; rate: any; equity: any; storage: any }) {
   const routeReason: Record<string, string> = {
     equity_range: "账户权益位于当前区间",
     hysteresis_hold: "处于阶段切换缓冲区，暂不来回跳档",
@@ -918,6 +931,8 @@ function StageRoutePanel({ route, profiles, stream, userStream, rate, equity }: 
           <MetricCard title="REST 本分钟" value={`${fmt(used, 0)} / ${fmt(advertised, 0)}`} sub={`交易所额度使用 ${fmt(rate.exchange_limit_used_pct, 1)}%`} tone={rate.cooldown_active ? "negative" : "positive"} />
           <MetricCard title="普通任务预算" value={`${fmt(rate.budgets?.normal, 0)}`} sub={`已使用普通预算 ${fmt(rate.normal_budget_used_pct, 1)}%`} />
           <MetricCard title="限流状态" value={rate.cooldown_active ? "等待恢复" : "正常"} sub={rate.cooldown_active ? `${fmt(rate.cooldown_remaining_seconds, 0)} 秒后重试` : "关键保护和下单保留独立额度"} tone={rate.cooldown_active ? "negative" : "positive"} />
+          <MetricCard title="运行数据库" value={`${fmt(storage.database_mb, 1)} MB`} sub={`WAL ${fmt(storage.wal_mb, 1)} MB · 可回收 ${fmt(storage.reclaimable_mb, 1)} MB`} tone={Number(storage.database_mb || 0) > 2048 ? "negative" : ""} />
+          <MetricCard title="策略决策序号" value={`${fmt(storage.rows?.strategy_runs, 0)}`} sub="高频决策只保留 2 天；实盘成交与影子样本独立保留" />
         </div>
       </div>
     </section>
@@ -1317,9 +1332,9 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("telemetry_retention_days", "系统明细保留天数", "默认 30 天；成交与实盘学习记录不受影响")}
           {number("strategy_run_retention_days", "扫描决策明细保留天数", "默认 7 天；更早数据只保留聚合与真实成交，控制数据库体积")}
           {number("shadow_trade_retention_days", "影子交易明细保留天数", "默认 14 天；过期已平仓明细自动清理")}
-          {toggle("performance_guard_enabled", "全局负期望保护", "推荐开启：实盘和影子交易同时变差时，暂停开仓后只允许低风险恢复探路")}
-          {number("performance_guard_pause_minutes", "全局保护暂停分钟", "默认 60 分钟；保护期间仍管理已有持仓和止盈止损")}
-          {number("performance_guard_recovery_risk_multiplier", "恢复探路倍率", "默认 0.20x；滚动表现恢复前不允许大仓位")}
+          {toggle("performance_guard_enabled", "全局负期望保护", "推荐开启：实盘出现严重连续亏损或权益高点回撤时立即停止新仓；已有持仓保护仍继续运行")}
+          {number("performance_guard_pause_minutes", "全局保护暂停分钟", "默认 120 分钟；到期后仍需表现恢复，不会自动重新放大")}
+          {number("performance_guard_recovery_risk_multiplier", "恢复探路倍率", "仅在恢复证据达标后使用；严重负期望期间不会放行探路单")}
           {toggle("strategy_evidence_enabled", "影子/实盘双确认", "推荐开启：只有两边都盈利并满足样本量，信用分才允许提高仓位")}
           {number("strategy_evidence_loss_reentry_minutes", "亏损后同向等待分钟", "默认 30 分钟；避免同一币种同方向连续追假突破")}
           {toggle("adaptive_thresholds_enabled", "市场自适应阈值", "复用现有行情数据，按市场冷热和币种自身成交量动态调整放量与异动门槛")}
@@ -1492,7 +1507,6 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("opportunity_v3_b_live_enabled", "允许 V3 B 级实盘", "默认关闭；B 级样本不足，只建议留在影子交易")}
           {number("opportunity_v3_credit_min_multiplier", "V3 中性信用最低倍率", "默认 0.8；旧策略亏损不会把 V3 压到小仓")}
           {number("opportunity_v3_credit_max_multiplier", "V3 信用最高倍率", "默认 1.2；只有 V3 自己盈利后才逐步提高")}
-          {toggle("opportunity_v3_canary_bypass_enabled", "V3 A+ 冷却期受限验证", "旧滚动窗口仍在冷却时，仅 A+ 可用 0.35 倍验证；5U 硬停止、日损与持仓保护不会绕过")}
           {number("opportunity_v3_canary_risk_multiplier", "V3 A+ 受限验证倍率", "默认 0.35")}
           {toggle("extreme_sprint_enabled", "开启 V3 极限滚仓", "必须配合确认短语 ENABLE_EXTREME_SPRINT 才会生效")}
           {text("extreme_sprint_confirmation", "V3 滚仓确认短语", "填写 ENABLE_EXTREME_SPRINT 后，增长模式选择机会引擎 V3 才会启用")}
@@ -1636,7 +1650,6 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
                 {number("live_reaction_giveback_cooldown_minutes", "回吐降仓分钟", "默认 60 分钟")}
                 {number("live_reaction_giveback_ban_minutes", "回吐暂停分钟", "默认 180 分钟")}
                 {number("symbol_cooldown_minutes", "同币开仓冷却分钟", "默认 15")}
-          {toggle("position_rotation_enabled", "持仓轮换", "满仓时，只有明显更强的新信号才会替换当前弱仓")}
           {number("tournament_rotation_min_new_score", "锦标赛轮换最低新评分", "默认 95")}
           {number("tournament_rotation_min_score_delta", "锦标赛轮换最低分差", "默认 12")}
           {number("rotation_min_cost_ratio", "轮换最低收益/成本比", "默认 8")}

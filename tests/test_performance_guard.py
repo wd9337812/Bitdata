@@ -96,8 +96,22 @@ def test_global_guard_allows_only_small_recovery_after_pause(monkeypatch, tmp_pa
     )
 
     assert status["status"] == "risk_off"
-    assert status["allowed"] is True
-    assert status["risk_multiplier"] == 0.2
+    assert status["allowed"] is False
+    assert status["risk_multiplier"] == 0.0
+
+
+def test_severe_live_loss_pauses_even_when_shadow_is_not_bad(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _seed_live("BADUSDT", "SHORT", [-0.4] * 9 + [0.01])
+    _seed_shadow("GOODUSDT", "LONG", [0.1] * 50)
+    clear_performance_cache()
+
+    status = global_performance_guard({}, 20)
+
+    assert status["live_severe"] is True
+    assert status["shadow_bad"] is False
+    assert status["allowed"] is False
+    assert "影子交易不得否决" in status["reason"]
 
 
 def test_negative_shadow_and_live_evidence_caps_risk_and_blocks_reentry(monkeypatch, tmp_path):

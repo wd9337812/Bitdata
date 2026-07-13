@@ -2,6 +2,17 @@
 
 This file tracks local verification for the two-stage futures system.
 
+## 2026-07-13 v0.6.0 V3.2 Evidence Guard
+
+- Severe live losses and peak-equity drawdown independently close new-entry admission; A+ can no longer bypass the global guard.
+- V3.2 blocks countertrend, panic-chase and overextended entries, keeps pre-breakout entries shadow-only, and requires medium-horizon confirmation for A+.
+- Strategy evidence is isolated by strategy version and calibrated from bounded live/shadow samples with conservative net expectancy.
+- SQLite schema setup runs once per process/database, compact telemetry payloads and two-day decision retention prevent unbounded growth.
+- Dashboard exposes V3.2 evidence, calibration status and cached database storage metrics in Chinese.
+- `python -m pytest -q`: `196 passed`.
+- `npm run build`: passed; output split into business, React and chart chunks with no large-chunk warning.
+- `git diff --check`: passed; Git reported only Windows LF/CRLF conversion notices.
+
 ## 2026-07-13 v0.5.0 V3.1 and Dashboard
 
 - V3.1 medium-horizon challenger remains shadow-only and shares V3 market inputs.

@@ -663,6 +663,7 @@ def coordinator_main() -> None:
                     strategy_run_retention_days=int(config.get("strategy_run_retention_days", 7)),
                     shadow_trade_retention_days=int(config.get("shadow_trade_retention_days", 14)),
                     batch_size=int(config.get("telemetry_maintenance_batch_size", 50_000)),
+                    max_batches=int(config.get("telemetry_maintenance_max_batches", 4)),
                 )
                 last_maintenance_day = today
             except Exception as exc:

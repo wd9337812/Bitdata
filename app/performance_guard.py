@@ -85,7 +85,19 @@ def global_performance_guard(
                 ]
             except sqlite3.OperationalError:
                 shadow = []
-        return {"live_rows": live, "shadow_rows": shadow}
+            peak_equity = None
+            try:
+                peak_cutoff = (
+                    now - timedelta(hours=float(config.get("performance_guard_peak_lookback_hours", 24)))
+                ).isoformat()
+                row = conn.execute(
+                    "SELECT MAX(equity) AS peak_equity FROM equity_snapshots WHERE ts >= ? AND equity > 0",
+                    (peak_cutoff,),
+                ).fetchone()
+                peak_equity = float(row["peak_equity"] or 0) if row else None
+            except sqlite3.OperationalError:
+                peak_equity = None
+        return {"live_rows": live, "shadow_rows": shadow, "peak_equity": peak_equity}
 
     raw = _cached("global", float(config.get("performance_guard_cache_seconds", 15)), load)
     live_rows = raw["live_rows"]
@@ -96,6 +108,12 @@ def global_performance_guard(
     min_shadow = int(config.get("performance_guard_min_shadow_trades", 50))
     max_pf = float(config.get("performance_guard_max_bad_profit_factor", 0.8))
     max_win_rate = float(config.get("performance_guard_max_bad_win_rate", 25.0))
+    tail_losses = 0
+    for row in live_rows:
+        if float(row.get("net_pnl") or 0) > 0:
+            break
+        tail_losses += 1
+    rolling_losses = sum(1 for row in live_rows if float(row.get("net_pnl") or 0) <= 0)
     live_bad = (
         live["trades"] >= min_live
         and live["net_pnl"] < 0
@@ -107,18 +125,34 @@ def global_performance_guard(
         and shadow["net_pnl"] < 0
         and shadow["profit_factor"] < max_pf
     )
-    risk_off = live_bad and shadow_bad
+    window_loss_pct = (
+        abs(min(0.0, float(live.get("net_pnl") or 0))) / max(float(equity or 0), 0.00000001) * 100
+        if equity
+        else 0.0
+    )
+    live_severe = bool(
+        live["trades"] >= min_live
+        and live["net_pnl"] < 0
+        and (
+            live["profit_factor"] < float(config.get("performance_guard_severe_profit_factor", 0.5))
+            or live["win_rate"] < float(config.get("performance_guard_severe_win_rate", 20.0))
+            or tail_losses >= int(config.get("performance_guard_severe_consecutive_losses", 4))
+            or window_loss_pct >= float(config.get("performance_guard_severe_window_loss_equity_pct", 8.0))
+        )
+    )
+    peak_equity = float(raw.get("peak_equity") or 0)
+    peak_drawdown_pct = (
+        max(0.0, (peak_equity - float(equity)) / peak_equity * 100)
+        if peak_equity > 0 and equity is not None
+        else 0.0
+    )
+    peak_drawdown_severe = peak_drawdown_pct >= float(config.get("performance_guard_peak_drawdown_pct", 12.0))
+    risk_off = live_severe or peak_drawdown_severe or (live_bad and shadow_bad)
     latest_close_ms = int(live_rows[0].get("close_time") or 0) if live_rows else 0
     latest_close = datetime.fromtimestamp(latest_close_ms / 1000, timezone.utc) if latest_close_ms else None
     pause_minutes = float(config.get("performance_guard_pause_minutes", 60))
-    pause_until = latest_close + timedelta(minutes=pause_minutes) if risk_off and latest_close else None
+    pause_until = (latest_close or now) + timedelta(minutes=pause_minutes) if risk_off else None
     cooldown_active = bool(pause_until and now < pause_until)
-    tail_losses = 0
-    for row in live_rows:
-        if float(row.get("net_pnl") or 0) > 0:
-            break
-        tail_losses += 1
-    rolling_losses = sum(1 for row in live_rows if float(row.get("net_pnl") or 0) <= 0)
     live_tail = _stats(live_rows[: max(3, min_live // 2)])
     shadow_tail = _stats(shadow_rows[: max(10, min_shadow // 3)])
     recovery_level = 0
@@ -148,26 +182,35 @@ def global_performance_guard(
     status = (
         "cooldown"
         if cooldown_active
-        else "risk_off"
-        if risk_off and recovery_level <= 1
         else f"recovery_{recovery_level}"
+        if risk_off and recovery_level >= 2
+        else "risk_off"
         if risk_off
         else "normal"
     )
     labels = {
         "normal": "正常",
         "cooldown": "暂停新开仓",
-        "risk_off": "一级低风险探路",
-        "recovery_1": "一级低风险探路",
-        "recovery_2": "二级恢复",
-        "recovery_3": "三级恢复",
+        "risk_off": "等待影子验证恢复",
+        "recovery_2": "二级小仓恢复",
+        "recovery_3": "三级受限恢复",
     }
+    allowed = not cooldown_active and (not risk_off or recovery_level >= 2)
+    reason = "滚动表现正常"
+    if live_severe:
+        reason = "实盘短窗口发生严重恶化，影子交易不得否决紧急暂停"
+    elif peak_drawdown_severe:
+        reason = f"权益高点回撤 {peak_drawdown_pct:.2f}% 已触发保护"
+    elif live_bad and shadow_bad:
+        reason = "实盘与影子交易同时处于负期望"
+    elif risk_off:
+        reason = "等待影子交易证明恢复后才允许小仓验证"
     return {
         "enabled": True,
-        "allowed": not cooldown_active,
+        "allowed": allowed,
         "status": status,
         "status_label": labels[status],
-        "risk_multiplier": 0.0 if cooldown_active else recovery_multiplier if risk_off else 1.0,
+        "risk_multiplier": 0.0 if not allowed else recovery_multiplier if risk_off else 1.0,
         "pause_until": pause_until.isoformat() if pause_until else None,
         "live": live,
         "shadow": shadow,
@@ -176,10 +219,15 @@ def global_performance_guard(
         "recovery_level": recovery_level,
         "live_bad": live_bad,
         "shadow_bad": shadow_bad,
+        "live_severe": live_severe,
+        "window_loss_equity_pct": round(window_loss_pct, 4),
+        "peak_equity": round(peak_equity, 8) if peak_equity else None,
+        "peak_drawdown_pct": round(peak_drawdown_pct, 4),
+        "peak_drawdown_severe": peak_drawdown_severe,
         "rolling_losses": rolling_losses,
         "tail_losses": tail_losses,
         "equity": equity,
-        "reason": "实盘与影子交易同时处于负期望" if risk_off else "滚动表现未触发全局保护",
+        "reason": reason,
     }
 
 

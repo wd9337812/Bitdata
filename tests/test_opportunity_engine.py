@@ -113,6 +113,7 @@ def test_v3_a_plus_requires_structure_liquidity_and_cost_room():
         signal=signal,
         ticker=_ticker("ALTUSDT", 8),
         market_context=context,
+        medium_context={"ALTUSDT": {"trend_long": True, "path_efficiency": 0.42}},
         depth={"spread_pct": 0.02, "depth_notional": 20_000, "available": True},
         derivatives={"enabled": True, "confirmed": True, "score_delta": 10},
         event=None,
@@ -124,6 +125,81 @@ def test_v3_a_plus_requires_structure_liquidity_and_cost_room():
     assert result["tier"] == "A+"
     assert result["canary_eligible"] is True
     assert result["cost_ratio"] >= 3
+
+
+def test_v3_a_plus_is_capped_without_medium_confirmation():
+    context = {
+        "regime": "broad_up",
+        "label": "广泛上涨趋势",
+        "direction_multipliers": {"LONG": 1.1, "SHORT": 0.65},
+        "symbols": {"ALTUSDT": {"long_strength_percentile": 0.99, "absolute_move_percentile": 0.8}},
+    }
+    signal = {
+        "signal": "LONG",
+        "entry_type": "v3_breakout",
+        "trend": True,
+        "donchian_votes": 3,
+        "donchian_models": 3,
+        "multi_horizon_returns": [0.2, 0.5, 1.2, 3.0],
+        "volume_acceleration": 2.5,
+        "directed_trade_flow": 0.65,
+        "expected_profit_pct": 1.2,
+        "impulse_atr": 1.0,
+    }
+    result = score_v3_opportunity(
+        symbol="ALTUSDT",
+        direction="LONG",
+        signal=signal,
+        ticker=_ticker("ALTUSDT", 8),
+        market_context=context,
+        depth={"spread_pct": 0.02, "depth_notional": 20_000, "available": True},
+        derivatives={"enabled": True, "confirmed": True},
+        event=None,
+        cost_pct=0.12,
+        config={},
+    )
+
+    assert result["passed"] is True
+    assert result["tier"] == "A"
+
+
+def test_v3_blocks_countertrend_and_overextended_entries():
+    context = {
+        "regime": "broad_up",
+        "label": "广泛上涨趋势",
+        "direction_multipliers": {"LONG": 1.1, "SHORT": 0.65},
+        "symbols": {"ALTUSDT": {"short_strength_percentile": 0.99, "absolute_move_percentile": 0.8}},
+    }
+    signal = {
+        "signal": "SHORT",
+        "entry_type": "v3_breakout",
+        "trend": True,
+        "donchian_votes": 3,
+        "donchian_models": 3,
+        "multi_horizon_returns": [0.2, 0.5, 1.2, 3.0],
+        "volume_acceleration": 2.5,
+        "directed_trade_flow": 0.65,
+        "expected_profit_pct": 1.2,
+        "impulse_atr": 1.5,
+        "breakout_extension_atr": 0.8,
+    }
+    result = score_v3_opportunity(
+        symbol="ALTUSDT",
+        direction="SHORT",
+        signal=signal,
+        ticker=_ticker("ALTUSDT", -8),
+        market_context=context,
+        medium_context={"ALTUSDT": {"trend_short": True, "path_efficiency": 0.4}},
+        depth={"spread_pct": 0.02, "depth_notional": 20_000, "available": True},
+        derivatives={"enabled": True, "confirmed": True},
+        event=None,
+        cost_pct=0.12,
+        config={},
+    )
+
+    assert result["passed"] is False
+    assert result["countertrend_blocked"] is True
+    assert result["overextended"] is True
 
 
 def test_v3_live_candidate_requires_confirmed_orderbook_liquidity():

@@ -50,10 +50,11 @@ class TradingConfig(BaseModel):
     fast_lane_max_symbols: int = Field(default=3, ge=1, le=20)
     fast_lane_depth_checks: int = Field(default=3, ge=0, le=20)
     fast_lane_budget_seconds: float = Field(default=5.0, ge=1, le=60)
-    telemetry_retention_days: int = Field(default=30, ge=7, le=3650)
-    strategy_run_retention_days: int = Field(default=7, ge=1, le=365)
+    telemetry_retention_days: int = Field(default=14, ge=7, le=3650)
+    strategy_run_retention_days: int = Field(default=2, ge=1, le=365)
     shadow_trade_retention_days: int = Field(default=14, ge=1, le=365)
     telemetry_maintenance_batch_size: int = Field(default=50_000, ge=100, le=500_000)
+    telemetry_maintenance_max_batches: int = Field(default=4, ge=1, le=20)
     performance_guard_enabled: bool = True
     performance_guard_cache_seconds: int = Field(default=15, ge=1, le=300)
     performance_guard_live_window_trades: int = Field(default=10, ge=3, le=200)
@@ -62,7 +63,13 @@ class TradingConfig(BaseModel):
     performance_guard_min_shadow_trades: int = Field(default=50, ge=10, le=2000)
     performance_guard_max_bad_profit_factor: float = Field(default=0.8, ge=0, le=10)
     performance_guard_max_bad_win_rate: float = Field(default=25.0, ge=0, le=100)
-    performance_guard_pause_minutes: int = Field(default=60, ge=1, le=1440)
+    performance_guard_severe_profit_factor: float = Field(default=0.5, ge=0, le=10)
+    performance_guard_severe_win_rate: float = Field(default=20.0, ge=0, le=100)
+    performance_guard_severe_consecutive_losses: int = Field(default=4, ge=1, le=50)
+    performance_guard_severe_window_loss_equity_pct: float = Field(default=8.0, ge=0, le=100)
+    performance_guard_peak_lookback_hours: int = Field(default=24, ge=1, le=720)
+    performance_guard_peak_drawdown_pct: float = Field(default=12.0, ge=0, le=100)
+    performance_guard_pause_minutes: int = Field(default=120, ge=1, le=1440)
     performance_guard_recovery_risk_multiplier: float = Field(default=0.20, ge=0.01, le=1)
     performance_guard_recovery_level_1_multiplier: float = Field(default=0.20, ge=0.01, le=1)
     performance_guard_recovery_level_2_multiplier: float = Field(default=0.40, ge=0.01, le=1)
@@ -495,8 +502,30 @@ class TradingConfig(BaseModel):
     opportunity_v3_basis_divergence_pct: float = Field(default=0.08, ge=0, le=10)
     opportunity_v3_basis_confirm_bonus: float = Field(default=2.0, ge=0, le=20)
     opportunity_v3_basis_divergence_penalty: float = Field(default=3.0, ge=0, le=30)
-    opportunity_v3_canary_bypass_enabled: bool = True
-    opportunity_v3_canary_risk_multiplier: float = Field(default=0.35, ge=0.01, le=1)
+    opportunity_v3_canary_bypass_enabled: bool = False
+    opportunity_v3_canary_risk_multiplier: float = Field(default=0.25, ge=0.01, le=1)
+    opportunity_v3_strategy_version: str = "v3.2"
+    opportunity_v3_calibration_enabled: bool = True
+    opportunity_v3_calibration_live_min_trades: int = Field(default=30, ge=1, le=10000)
+    opportunity_v3_calibration_shadow_min_trades: int = Field(default=70, ge=1, le=10000)
+    opportunity_v3_calibration_lookback_days: float = Field(default=30, ge=1, le=3650)
+    opportunity_v3_calibration_cache_seconds: int = Field(default=60, ge=1, le=3600)
+    opportunity_v3_calibration_max_live_trades: int = Field(default=500, ge=1, le=10000)
+    opportunity_v3_calibration_max_shadow_trades: int = Field(default=1500, ge=1, le=50000)
+    opportunity_v3_calibration_max_strategy_runs: int = Field(default=2500, ge=100, le=100000)
+    opportunity_v3_calibration_min_profit_factor: float = Field(default=1.20, ge=0, le=100)
+    opportunity_v3_calibration_min_net_expectancy_pct: float = Field(default=0.02, ge=-100, le=100)
+    opportunity_v3_calibration_negative_live_trades: int = Field(default=10, ge=1, le=10000)
+    opportunity_v3_calibration_negative_profit_factor: float = Field(default=0.70, ge=0, le=100)
+    opportunity_v3_unvalidated_a_plus_risk_multiplier: float = Field(default=0.65, ge=0, le=1)
+    opportunity_v3_block_countertrend: bool = True
+    opportunity_v3_panic_requires_pullback: bool = True
+    opportunity_v3_prebreakout_live_enabled: bool = False
+    opportunity_v3_max_breakout_extension_atr: float = Field(default=0.65, ge=0, le=20)
+    opportunity_v3_max_entry_impulse_atr: float = Field(default=1.35, ge=0, le=20)
+    opportunity_v3_medium_confirmation_enabled: bool = True
+    opportunity_v3_a_plus_requires_medium_alignment: bool = True
+    opportunity_v3_min_medium_path_efficiency: float = Field(default=0.16, ge=0, le=1)
     opportunity_v3_credit_min_multiplier: float = Field(default=0.80, ge=0.01, le=2)
     opportunity_v3_credit_cooldown_min_multiplier: float = Field(default=0.35, ge=0.01, le=1)
     opportunity_v3_credit_max_multiplier: float = Field(default=1.20, ge=0.1, le=2)
@@ -613,12 +642,15 @@ class TradingConfig(BaseModel):
     max_open_positions: int = Field(default=1, ge=1, le=20)
     tournament_sprint_max_open_positions: int = Field(default=1, ge=1, le=5)
     tournament_sprint_second_position_equity: float = Field(default=100.0, ge=0)
-    position_rotation_enabled: bool = True
-    tournament_rotation_enabled: bool = True
-    tournament_sprint_rotation_enabled: bool = True
-    extreme_sprint_rotation_enabled: bool = True
-    attack_rotation_enabled: bool = True
-    balanced_rotation_enabled: bool = True
+    position_rotation_enabled: bool = False
+    position_rotation_shadow_enabled: bool = True
+    rotation_validation_min_trades: int = Field(default=50, ge=1, le=10000)
+    rotation_validation_min_net_pnl: float = Field(default=0.0, ge=-1000000, le=1000000)
+    tournament_rotation_enabled: bool = False
+    tournament_sprint_rotation_enabled: bool = False
+    extreme_sprint_rotation_enabled: bool = False
+    attack_rotation_enabled: bool = False
+    balanced_rotation_enabled: bool = False
     conservative_rotation_enabled: bool = False
     tournament_rotation_min_new_score: float = Field(default=95.0, ge=0, le=200)
     tournament_sprint_rotation_min_new_score: float = Field(default=88.0, ge=0, le=200)

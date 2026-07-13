@@ -3,12 +3,17 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 _EVENT_THROTTLE: dict[str, float] = {}
 _STRATEGY_RUN_THROTTLE: dict[str, float] = {}
+_SCHEMA_READY: set[str] = set()
+_SCHEMA_LOCK = threading.Lock()
+_STORAGE_CACHE: tuple[float, dict[str, Any]] | None = None
 
 
 def db_path() -> Path:
@@ -24,6 +29,18 @@ def connect() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA busy_timeout=15000")
+    path_key = str(path.resolve())
+    if path_key in _SCHEMA_READY:
+        return conn
+    with _SCHEMA_LOCK:
+        if path_key in _SCHEMA_READY:
+            return conn
+        _initialize_schema(conn)
+        _SCHEMA_READY.add(path_key)
+    return conn
+
+
+def _initialize_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS equity_snapshots (
@@ -80,7 +97,6 @@ def connect() -> sqlite3.Connection:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_strategy_runs_symbol_ts ON strategy_runs(symbol, ts)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_strategy_runs_action_ts ON strategy_runs(action, ts)")
     conn.commit()
-    return conn
 
 
 def now_iso() -> str:
@@ -211,37 +227,61 @@ def record_strategy_run(
 def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
     """Keep optimization evidence without persisting the full market universe every loop."""
     compact = dict(decision)
-    def compact_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
-        item = dict(candidate)
-        item.pop("coarse", None)
+    def compact_candidate(candidate: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
+        keys = {
+            "symbol", "direction", "mode", "strategy", "strategy_family", "strategy_version",
+            "score", "passed", "reason", "decision_reason", "entry_type", "entry_type_label",
+            "v3_tier", "symbol_pool", "cost_ratio", "estimated_cost_pct", "expected_profit_pct",
+            "risk_pct", "base_risk_pct", "leverage", "margin_pct", "current_score",
+        }
+        item = {key: candidate.get(key) for key in keys if key in candidate}
+        for nested_key in ("opportunity_v3", "market_state", "risk_adjustment", "ticker"):
+            if isinstance(candidate.get(nested_key), dict):
+                item[nested_key] = candidate[nested_key]
+        signal = candidate.get("signal") or {}
+        if isinstance(signal, dict):
+            item["signal"] = {
+                key: signal.get(key)
+                for key in (
+                    "signal", "entry_type", "last_price", "stop", "take_profit", "atr", "atr_pct",
+                    "volume_acceleration", "directed_trade_flow", "impulse_atr", "adverse_wick_ratio",
+                    "breakout_extension_atr", "entry_phase", "protection_profile",
+                )
+                if key in signal
+            }
         item["backtests"] = {
             str(day): {
                 key: value
                 for key, value in (summary or {}).items()
                 if key in {"trades", "wins", "win_rate", "net_pct", "profit_factor"}
             }
-            for day, summary in (item.get("backtests") or {}).items()
+            for day, summary in (candidate.get("backtests") or {}).items()
         }
+        if not detail:
+            return item
         return item
 
     if isinstance(compact.get("candidate"), dict):
-        compact["candidate"] = compact_candidate(compact["candidate"])
-    scan = dict(compact.get("scan") or {})
-    if scan:
-        scan.pop("ranked_symbols", None)
-        scan.pop("recalled_symbols", None)
-        scan["symbols"] = list(scan.get("symbols") or [])[:30]
-        scan["opportunity_events"] = list(scan.get("opportunity_events") or [])[:10]
-        scan["candidates"] = [compact_candidate(candidate) for candidate in list(scan.get("candidates") or [])[:12]]
-        if isinstance(scan.get("best"), dict):
-            scan["best"] = compact_candidate(scan["best"])
+        compact["candidate"] = compact_candidate(compact["candidate"], detail=True)
+    raw_scan = dict(compact.get("scan") or {})
+    scan = {
+        key: raw_scan.get(key)
+        for key in ("mode", "funnel", "market_context", "opportunity_v3", "opportunity_v31", "elapsed_seconds")
+        if key in raw_scan
+    }
+    if isinstance(raw_scan.get("best"), dict):
+        scan["best"] = compact_candidate(raw_scan["best"], detail=True)
+    if raw_scan:
+        scan["symbols"] = list(raw_scan.get("symbols") or [])[:20]
+        scan["opportunity_events"] = list(raw_scan.get("opportunity_events") or [])[:6]
+        scan["candidates"] = [compact_candidate(candidate) for candidate in list(raw_scan.get("candidates") or [])[:8]]
         for pool_name in ["trade_pool", "observe_pool"]:
             scan[pool_name] = [
                 {
                     key: item.get(key)
                     for key in ["symbol", "direction", "score", "passed", "entry_type", "decision_reason", "risk_pct"]
                 }
-                for item in list(scan.get(pool_name) or [])[:24]
+                for item in list(raw_scan.get(pool_name) or [])[:16]
             ]
         compact["scan"] = scan
     return compact
@@ -262,6 +302,7 @@ def maintain_telemetry(
     strategy_run_retention_days: int = 7,
     shadow_trade_retention_days: int = 14,
     batch_size: int = 50_000,
+    max_batches: int = 4,
 ) -> dict[str, int]:
     cutoff = datetime.now(timezone.utc).timestamp() - max(1, retention_days) * 86400
     cutoff_iso = datetime.fromtimestamp(cutoff, timezone.utc).isoformat()
@@ -271,7 +312,12 @@ def maintain_telemetry(
         with connect() as conn:
             events = conn.execute("DELETE FROM event_logs WHERE ts < ?", (cutoff_iso,)).rowcount
             snapshots = conn.execute("DELETE FROM equity_snapshots WHERE ts < ?", (cutoff_iso,)).rowcount
-            strategy_runs = _delete_batch(conn, "strategy_runs", "ts", strategy_cutoff.isoformat(), max(100, batch_size))
+            strategy_runs = 0
+            for _ in range(max(1, max_batches)):
+                deleted = _delete_batch(conn, "strategy_runs", "ts", strategy_cutoff.isoformat(), max(100, batch_size))
+                strategy_runs += deleted
+                if deleted < max(100, batch_size):
+                    break
             try:
                 before_shadow = conn.total_changes
                 conn.execute(
@@ -286,6 +332,7 @@ def maintain_telemetry(
             conn.commit()
             try:
                 conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+                conn.execute("PRAGMA optimize")
             except sqlite3.OperationalError:
                 pass
     except sqlite3.OperationalError as exc:
@@ -305,6 +352,36 @@ def maintain_telemetry(
         "strategy_runs_deleted": max(0, strategy_runs),
         "shadow_trades_deleted": max(0, shadow_trades),
     }
+
+
+def telemetry_storage_status() -> dict[str, Any]:
+    global _STORAGE_CACHE
+    now = time.monotonic()
+    if _STORAGE_CACHE and now - _STORAGE_CACHE[0] <= 60:
+        return _STORAGE_CACHE[1]
+    path = db_path()
+    if not path.exists():
+        return {"database_mb": 0.0, "wal_mb": 0.0, "reclaimable_mb": 0.0}
+    with connect() as conn:
+        page_size = int(conn.execute("PRAGMA page_size").fetchone()[0])
+        page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
+        freelist = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
+        counts: dict[str, int] = {}
+        for table in ("strategy_runs", "live_trade_records", "shadow_trades", "equity_snapshots", "event_logs"):
+            try:
+                counts[table] = int(conn.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table}").fetchone()[0])
+            except sqlite3.OperationalError:
+                counts[table] = 0
+    wal = path.with_name(path.name + "-wal")
+    result = {
+        "database_mb": round(path.stat().st_size / 1024 / 1024, 2),
+        "wal_mb": round(wal.stat().st_size / 1024 / 1024, 2) if wal.exists() else 0.0,
+        "reclaimable_mb": round(freelist * page_size / 1024 / 1024, 2),
+        "page_count": page_count,
+        "rows": counts,
+    }
+    _STORAGE_CACHE = (now, result)
+    return result
 
 
 def list_equity_snapshots(limit: int = 500) -> list[dict[str, Any]]:

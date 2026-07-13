@@ -32,6 +32,7 @@ from app.runtime_protection import manage_runtime_protection
 from app.runtime_snapshot import read_runtime_snapshot
 from app.scanner import mode_config
 from app.shadow_trading import shadow_summary
+from app.strategy_calibration import calibration_snapshot
 from app.stage_modes import all_stage_profiles, stage_profile_for_equity
 from app.stage_simulation import simulate_stage_path
 from app.state_store import load_state, save_state
@@ -46,6 +47,7 @@ from app.telemetry import (
     list_strategy_runs,
     record_equity_snapshot,
     record_event,
+    telemetry_storage_status,
 )
 from app.user_stream import user_stream_status
 from app.v31_validation import compare_v31_to_plain_breakout
@@ -62,7 +64,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.5.0")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.6.0")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -175,6 +177,7 @@ def status() -> dict[str, Any]:
             limit=int(config.get("opportunity_queue_scan_limit", 50)),
         ),
         "runtime": runtime_status,
+        "storage": telemetry_storage_status(),
     }
 
 
@@ -254,6 +257,7 @@ def live_learning(limit: int = 100) -> dict[str, Any]:
         "scalp_scores": list_strategy_live_scores(limit, config, strategy_family=ORDERBOOK_SCALP_FAMILY),
         "extreme_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V2_FAMILY),
         "v3_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V3_FAMILY),
+        "v3_calibration": calibration_snapshot(config),
     }
 
 

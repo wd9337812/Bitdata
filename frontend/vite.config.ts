@@ -7,5 +7,15 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, "../app/static"),
     emptyOutDir: true,
+    rolldownOptions: {
+      output: {
+        codeSplitting: {
+          groups: [
+            { name: "charts", test: /node_modules[\\/]recharts|node_modules[\\/]d3-/ },
+            { name: "react", test: /node_modules[\\/](react|react-dom)[\\/]/ },
+          ],
+        },
+      },
+    },
   },
 });
