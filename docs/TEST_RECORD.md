@@ -2,6 +2,20 @@
 
 This file tracks local verification for the two-stage futures system.
 
+## 2026-07-13 v0.5.0 V3.1 and Dashboard
+
+- V3.1 medium-horizon challenger remains shadow-only and shares V3 market inputs.
+- V3 and V3.1 shadow trades can coexist for the same symbol, direction, and signal.
+- Dynamic stop test verifies the replacement stop is confirmed before the old stop is cancelled.
+- Binance algo-order cancellation is regression-tested against the current `algoId`-only request contract.
+- Manual V3.1 validation is cost-aware and reports an out-of-sample segment.
+- Dashboard builds with five primary navigation items and a simplified active-settings view.
+- Desktop and 390px mobile layouts were inspected in a running local build; no page-level horizontal overflow or browser console errors were found.
+- `python -m compileall -q app`: passed.
+- `python -m pytest -q`: `189 passed` (one existing local `requests` dependency compatibility warning).
+- `npm run build`: passed; Vite reported only the existing large-chunk advisory.
+- `git diff --check`: passed; Git reported only Windows LF/CRLF conversion notices.
+
 ## 2026-07-12 v0.4.1 V3 Liquidity Admission Hotfix
 
 - Unknown order-book liquidity blocks V3 A+/A live admission.

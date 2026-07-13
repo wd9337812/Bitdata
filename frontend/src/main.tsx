@@ -34,21 +34,16 @@ type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
 type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[]; v3_scores?: any[] };
 type LiveReactionData = { reactions: any[]; recent_trades: any[] };
-type ShadowData = { stats: Record<string, any>; trades: any[] };
+type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; trades: any[] };
 type SimulationData = Record<string, any>;
 type ReportData = Record<string, any>;
 
 const menu = [
-  { id: "overview", label: "总览", icon: Activity },
-  { id: "stages", label: "阶段路线", icon: Route },
-  { id: "scan", label: "多币种扫描", icon: CandlestickChart },
-  { id: "learning", label: "实盘学习", icon: Zap },
-  { id: "shadow", label: "影子交易", icon: CandlestickChart },
-  { id: "reaction", label: "实时风控", icon: AlertTriangle },
-  { id: "pnl", label: "收益曲线", icon: LineChart },
-  { id: "risk", label: "风控中心", icon: Shield },
-  { id: "config", label: "配置中心", icon: Settings },
-  { id: "logs", label: "系统日志", icon: FileText },
+  { id: "overview", label: "控制台", icon: Activity },
+  { id: "scan", label: "机会中心", icon: CandlestickChart },
+  { id: "review", label: "交易复盘", icon: LineChart },
+  { id: "config", label: "设置", icon: Settings },
+  { id: "system", label: "系统", icon: Shield },
 ];
 
 const intervalOptions = [
@@ -102,6 +97,13 @@ function useData() {
 
   async function refresh(light = false, throwOnError = false) {
     try {
+      if (light) {
+        const live = await api<{ status: StatusData; decisions: DecisionsData }>("/api/dashboard/live");
+        setStatus(live.status);
+        setDecisions(live.decisions);
+        setError("");
+        return;
+      }
       const [statusRes, marketRes, snapshotRes, logsRes, healthRes] = await Promise.all([
         api<StatusData>("/api/status"),
         api<MarketData>("/api/market"),
@@ -114,21 +116,19 @@ function useData() {
       setSnapshots(snapshotRes.snapshots || []);
       setLogs(logsRes.events || []);
       setHealth(healthRes);
-      if (!light) {
-        setDecisions(await api<DecisionsData>("/api/decisions"));
-        const learningRes = await api<LiveLearningData>("/api/live-learning?limit=100");
-        setLiveLearning({
-          scores: learningRes.scores || [],
-          strategy_scores: learningRes.strategy_scores || [],
-          scalp_scores: learningRes.scalp_scores || [],
-          extreme_scores: learningRes.extreme_scores || [],
-          v3_scores: learningRes.v3_scores || [],
-        });
-        setLiveReaction(await api<LiveReactionData>("/api/live-reaction?limit=100"));
-        setShadow(await api<ShadowData>("/api/shadow-trades?limit=100"));
-        setSimulation(await api<SimulationData>("/api/simulation/stage"));
-        setReport(await api<ReportData>("/api/reports/latest"));
-      }
+      setDecisions(await api<DecisionsData>("/api/decisions"));
+      const learningRes = await api<LiveLearningData>("/api/live-learning?limit=100");
+      setLiveLearning({
+        scores: learningRes.scores || [],
+        strategy_scores: learningRes.strategy_scores || [],
+        scalp_scores: learningRes.scalp_scores || [],
+        extreme_scores: learningRes.extreme_scores || [],
+        v3_scores: learningRes.v3_scores || [],
+      });
+      setLiveReaction(await api<LiveReactionData>("/api/live-reaction?limit=100"));
+      setShadow(await api<ShadowData>("/api/shadow-trades?limit=100"));
+      setSimulation(await api<SimulationData>("/api/simulation/stage"));
+      setReport(await api<ReportData>("/api/reports/latest"));
       setError("");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -373,30 +373,12 @@ function App() {
             </div>
             <ProtectionAuditPanel audit={runtime?.protection_audit} />
             <TargetProgressPanel target={target} />
-            <ProductCompletionPanel completion={completion} stageProfile={stageProfile} simulation={data.simulation} report={data.report} />
             <SignalExplain best={best} />
-            <div className="grid-two">
-              <div className="panel">
-                <h2>最高分候选</h2>
-                <CandidateTable rows={candidates.slice(0, 5)} compact />
-              </div>
-              <div className="panel">
-                <h2>市场行情</h2>
-                <MarketTable rows={data.market?.symbols || []} />
-              </div>
+            <div className="panel">
+              <h2>最高分候选</h2>
+              <CandidateTable rows={candidates.slice(0, 5)} compact />
             </div>
           </section>
-        )}
-
-        {active === "stages" && (
-          <StageRoutePanel
-            route={stageRoute}
-            profiles={stageProfiles}
-            stream={stream}
-            userStream={userStream}
-            rate={binanceRate}
-            equity={account.equity}
-          />
         )}
 
         {active === "scan" && (
@@ -424,38 +406,14 @@ function App() {
           </section>
         )}
 
-      {active === "learning" && <LiveLearningPanel data={data.liveLearning} onSync={syncLiveLearning} />}
-        {active === "shadow" && <ShadowTradingPanel data={data.shadow} />}
-        {active === "reaction" && <LiveReactionPanel data={data.liveReaction} />}
-
-        {active === "pnl" && (
+        {active === "review" && <ReviewPanel chartData={chartData} snapshots={data.snapshots} learning={data.liveLearning} shadow={data.shadow} reaction={data.liveReaction} onSync={syncLiveLearning} />}
+        {active === "config" && <ConfigPanel config={config} onSave={saveConfig} onTestApi={testBinanceApi} />}
+        {active === "system" && (
           <section className="stack">
-            <div className="metrics">
-              <MetricCard title="快照数量" value={String(data.snapshots.length)} />
-              <MetricCard title="最新权益" value={`${fmt(data.snapshots.at(-1)?.equity, 4)} U`} />
-              <MetricCard title="最新可用" value={`${fmt(data.snapshots.at(-1)?.available_balance, 4)} U`} />
-            </div>
-            <div className="panel chart-panel">
-              <h2>权益与盈亏曲线</h2>
-              <ResponsiveContainer width="100%" height={360}>
-                <ReLineChart data={chartData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#14345a" />
-                  <XAxis dataKey="time" stroke="#91a7c4" minTickGap={32} />
-                  <YAxis stroke="#91a7c4" />
-                  <Tooltip contentStyle={{ background: "#07111f", border: "1px solid #22d3ee", color: "#e5f6ff" }} />
-                  <Legend />
-                  <Line type="monotone" dataKey="equity" name="账户权益" stroke="#38bdf8" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="available" name="可用余额" stroke="#22c55e" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="unrealized" name="未实现盈亏" stroke="#f97316" strokeWidth={2} dot={false} />
-                </ReLineChart>
-              </ResponsiveContainer>
-            </div>
+            <StageRoutePanel route={stageRoute} profiles={stageProfiles} stream={stream} userStream={userStream} rate={binanceRate} equity={account.equity} />
+            <LogsPanel rows={data.logs} />
           </section>
         )}
-
-        {active === "risk" && <RiskPanel config={config} state={state} account={account} />}
-        {active === "config" && <ConfigPanel config={config} onSave={saveConfig} onTestApi={testBinanceApi} />}
-        {active === "logs" && <LogsPanel rows={data.logs} />}
       </main>
     </div>
   );
@@ -660,6 +618,7 @@ function FunnelPanel({ funnel }: { funnel: any }) {
 
 function OpportunityV3Panel({ funnel }: { funnel: any }) {
   const v3 = funnel?.opportunity_v3 || {};
+  const v31 = funnel?.opportunity_v31 || {};
   if (!v3.enabled) return null;
   const tiers = v3.tiers || {};
   return (
@@ -677,6 +636,7 @@ function OpportunityV3Panel({ funnel }: { funnel: any }) {
         <MetricCard title="B 影子机会" value={`${fmt(tiers.B, 0)} 个`} sub="不下实单，先累计真实行情结果" />
         <MetricCard title="继续观察" value={`${fmt(tiers.WATCH, 0)} 个`} sub="结构或成本尚未达到准入" />
         <MetricCard title="真实成本线" value={`${fmt(v3.observed_cost_floor_pct, 3)}%`} sub="手续费、资金费和历史滑点的保守估计" />
+        <MetricCard title="V3.1 挑战者" value={`${fmt(v31.shadow_ready, 0)} 个影子机会`} sub={`中周期已覆盖 ${fmt(v31.medium_symbols, 0)} 个精排币，不会直接实盘`} tone={Number(v31.shadow_ready || 0) > 0 ? "positive" : ""} />
       </div>
     </div>
   );
@@ -871,6 +831,30 @@ function LiveLearningPanel({ data, onSync }: { data: LiveLearningData; onSync: (
   );
 }
 
+function ReviewPanel({ chartData, snapshots, learning, shadow, reaction, onSync }: { chartData: any[]; snapshots: any[]; learning: LiveLearningData; shadow: ShadowData; reaction: LiveReactionData | null; onSync: () => Promise<void> }) {
+  const [tab, setTab] = useState("equity");
+  const tabs = [["equity", "收益曲线"], ["trades", "实盘学习"], ["shadow", "影子交易"], ["reaction", "实时风控"]];
+  const challenger = (shadow.by_strategy || []).find((item: any) => item.strategy_family === "extreme_v31_challenger") || {};
+  return (
+    <section className="stack">
+      <div className="metrics">
+        <MetricCard title="最新权益" value={`${fmt(snapshots.at(-1)?.equity, 4)} U`} />
+        <MetricCard title="V3.1 影子样本" value={`${fmt(challenger.closed, 0)} 笔`} sub={`胜率 ${fmt(challenger.win_rate, 1)}% · PF ${fmt(challenger.profit_factor, 2)}`} />
+        <MetricCard title="V3.1 影子净收益" value={`${fmt(challenger.net_pnl, 4)} U`} sub="达到100笔且PF≥1.15后才具备晋级资格" tone={Number(challenger.net_pnl || 0) >= 0 ? "positive" : "negative"} />
+      </div>
+      <div className="panel">
+        <div className="review-tabs">
+          {tabs.map(([value, label]) => <button key={value} className={tab === value ? "active" : "secondary"} onClick={() => setTab(value)}>{label}</button>)}
+        </div>
+      </div>
+      {tab === "equity" && <div className="panel chart-panel"><h2>权益与盈亏曲线</h2><ResponsiveContainer width="100%" height={360}><ReLineChart data={chartData}><CartesianGrid strokeDasharray="3 3" stroke="#14345a" /><XAxis dataKey="time" stroke="#91a7c4" minTickGap={32} /><YAxis stroke="#91a7c4" /><Tooltip contentStyle={{ background: "#07111f", border: "1px solid #22d3ee", color: "#e5f6ff" }} /><Legend /><Line type="monotone" dataKey="equity" name="账户权益" stroke="#38bdf8" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="available" name="可用余额" stroke="#22c55e" strokeWidth={2} dot={false} /><Line type="monotone" dataKey="unrealized" name="未实现盈亏" stroke="#f97316" strokeWidth={2} dot={false} /></ReLineChart></ResponsiveContainer></div>}
+      {tab === "trades" && <LiveLearningPanel data={learning} onSync={onSync} />}
+      {tab === "shadow" && <ShadowTradingPanel data={shadow} />}
+      {tab === "reaction" && <LiveReactionPanel data={reaction} />}
+    </section>
+  );
+}
+
 function StageRoutePanel({ route, profiles, stream, userStream, rate, equity }: { route: any; profiles: any[]; stream: any; userStream: any; rate: any; equity: any }) {
   const routeReason: Record<string, string> = {
     equity_range: "账户权益位于当前区间",
@@ -943,6 +927,7 @@ function StageRoutePanel({ route, profiles, stream, userStream, rate, equity }: 
 function strategyFamilyLabel(value?: string) {
   const labels: Record<string, string> = {
     extreme_v3_roll: "机会引擎 V3 滚仓",
+    extreme_v31_challenger: "V3.1 中周期挑战者",
     extreme_v2_roll: "Extreme V2 滚仓",
     orderbook_scalp: "盘口剥头皮",
     grid_stable: "稳定网格",
@@ -1008,6 +993,7 @@ function MarketTable({ rows }: { rows: any[] }) {
 
 function ShadowTradingPanel({ data }: { data: ShadowData }) {
   const stats = data?.stats || {};
+  const strategies = data?.by_strategy || [];
   const rows = data?.trades || [];
   const outcomeLabel: Record<string, string> = {
     STOP: "模拟止损",
@@ -1030,6 +1016,13 @@ function ShadowTradingPanel({ data }: { data: ShadowData }) {
           <MetricCard title="模拟胜率" value={`${fmt(stats.win_rate, 1)}%`} sub="样本少时只供观察" />
           <MetricCard title="模拟净收益" value={`${fmt(stats.net_pnl, 4)} U`} sub={`已扣模拟成本 ${fmt(stats.cost, 4)} U`} tone={Number(stats.net_pnl || 0) >= 0 ? "positive" : "negative"} />
         </div>
+      </div>
+      <div className="panel table-wrap">
+        <h2>按策略版本对比</h2>
+        <table>
+          <thead><tr><th>策略</th><th>已结束</th><th>胜率</th><th>PF</th><th>净收益</th><th>成本</th></tr></thead>
+          <tbody>{strategies.map((item: any) => <tr key={item.strategy_family}><td>{strategyFamilyLabel(item.strategy_family)}</td><td>{fmt(item.closed, 0)}</td><td>{fmt(item.win_rate, 1)}%</td><td>{fmt(item.profit_factor, 2)}</td><td className={Number(item.net_pnl || 0) >= 0 ? "positive-text" : "negative-text"}>{fmt(item.net_pnl, 4)} U</td><td>{fmt(item.cost, 4)} U</td></tr>)}</tbody>
+        </table>
       </div>
       <div className="panel table-wrap">
         <h2>最近影子交易</h2>
@@ -1222,6 +1215,7 @@ function SymbolMultiPicker({ value, onChange }: { value: any; onChange: (symbols
 
 function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payload: any) => Promise<void>; onTestApi: () => Promise<void> }) {
   const [form, setForm] = useState<Record<string, any>>(config);
+  const [expert, setExpert] = useState(false);
   useEffect(() => setForm(config), [config]);
   const update = (key: string, value: any) => setForm((prev) => ({ ...prev, [key]: value }));
   const number = (key: string, label: string, hint?: string) => (
@@ -1255,8 +1249,44 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
     </label>
   );
 
+  if (!expert) {
+    return (
+      <section className="stack">
+        <div className="panel">
+          <div className="panel-head"><div><h2>当前生效设置</h2><p>这里只显示当前阶段真正参与执行的参数。旧策略和未来阶段参数已收进专家设置。</p></div><button className="secondary" onClick={() => setExpert(true)}>进入专家设置</button></div>
+          <div className="form-grid">
+            {toggle("stage_routing_enabled", "按权益自动选择阶段", "推荐开启；当前 S0-S2 使用 V3 滚仓")}
+            {select("stage_manual_mode", "阶段控制", stageManualOptions.slice(0, 4), "自动模式会按权益切换策略")}
+            {toggle("dry_run", "模拟交易", "开启后绝不会真实下单")}
+            {toggle("live_trading_enabled", "允许实盘交易", "还需要正确的实盘确认短语")}
+            {toggle("allow_short", "允许系统做空", "V3 做空门槛高于做多")}
+            {number("hard_stop_equity", "权益硬停止线 U", "当前建议保持 5U")}
+            {number("stage_s0_risk_pct", "S0 单笔风险上限%", "0-300U 当前生效")}
+            {number("stage_s0_max_leverage", "S0 最大杠杆", "当前生效")}
+            {number("opportunity_v3_a_plus_score", "V3 A+ 机会分", "默认 82")}
+            {number("opportunity_v3_a_score", "V3 A 机会分", "默认 70")}
+            {number("opportunity_v3_max_spread_pct", "V3 最大点差%", "超过后不实盘")}
+            {number("opportunity_v3_min_depth_notional_usdt", "V3 最低盘口深度 U", "低于后不实盘")}
+            {toggle("opportunity_v31_challenger_enabled", "V3.1 影子挑战者", "只记录模拟结果，不会直接接管实盘")}
+            {toggle("runtime_stop_management_enabled", "自动保本与移动止盈", "仅对升级后新开的 V3 仓位生效")}
+          </div>
+        </div>
+        <div className="panel danger-zone">
+          <h2>Binance API 与实盘授权</h2>
+          <div className="form-grid">
+            <div className="field-wide credential-field">{text("api_key", "Binance API Key", "已保存时保持原样即可")}</div>
+            <div className="field-wide credential-field">{password("api_secret", "Binance API Secret", "已保存过时留空表示不修改")}</div>
+            {text("live_trading_confirmation", "实盘确认短语", "必须填写 ENABLE_LIVE_TRADING")}
+          </div>
+        </div>
+        <div className="button-row"><button className="primary" onClick={() => onSave(form)}>保存设置</button><button className="secondary" onClick={onTestApi}>测试 Binance API</button></div>
+      </section>
+    );
+  }
+
   return (
     <section className="stack">
+      <div className="panel panel-head"><div><h2>专家设置</h2><p>包含兼容旧策略、未来阶段和基础设施参数。修改前应先完成回测。</p></div><button className="secondary" onClick={() => setExpert(false)}>返回简洁设置</button></div>
       <div className="panel">
         <h2>基础配置</h2>
         <div className="form-grid">

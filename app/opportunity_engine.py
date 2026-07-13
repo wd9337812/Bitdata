@@ -10,6 +10,7 @@ from app.strategy import atr, ema
 
 
 V3_STRATEGY_FAMILY = "extreme_v3_roll"
+V31_CHALLENGER_FAMILY = "extreme_v31_challenger"
 V3_ENTRY_TYPES = {"v3_breakout", "v3_pullback", "v3_momentum", "v3_prebreakout"}
 
 
@@ -472,4 +473,104 @@ def score_v3_opportunity(
         "estimated_cost_pct": round(cost_pct, 6),
         "event_age_seconds": round(event_age, 3) if event_age is not None else None,
         "liquidity_safe": liquidity_safe,
+    }
+
+
+def build_v31_medium_context(
+    bars_by_symbol: dict[str, list[list[Any]]],
+) -> dict[str, dict[str, float | bool]]:
+    """Build a medium-horizon cross-section from one shared, cached 1h bar set."""
+    raw: dict[str, dict[str, float | bool]] = {}
+    returns_3d: list[float] = []
+    returns_7d: list[float] = []
+    for symbol, bars in bars_by_symbol.items():
+        if len(bars) < 80:
+            continue
+        closes = [float(row[4]) for row in bars]
+        e20 = ema(closes, 20)
+        e50 = ema(closes, 50)
+        ret_3d = (closes[-1] / closes[-73] - 1.0) * 100 if len(closes) >= 73 else 0.0
+        ret_7d = (closes[-1] / closes[-169] - 1.0) * 100 if len(closes) >= 169 else ret_3d
+        path = closes[-73:] if len(closes) >= 73 else closes
+        travelled = sum(abs(path[index] - path[index - 1]) for index in range(1, len(path)))
+        efficiency = abs(path[-1] - path[0]) / travelled if travelled > 0 else 0.0
+        slope = (e20[-1] - e20[-5]) / max(closes[-1], 0.00000001)
+        raw[symbol] = {
+            "return_3d_pct": ret_3d,
+            "return_7d_pct": ret_7d,
+            "path_efficiency": _clamp(efficiency, 0.0, 1.0),
+            "trend_long": closes[-1] > e20[-1] > e50[-1] and slope > 0,
+            "trend_short": closes[-1] < e20[-1] < e50[-1] and slope < 0,
+            "ema20_slope": slope,
+        }
+        returns_3d.append(ret_3d)
+        returns_7d.append(ret_7d)
+    for item in raw.values():
+        item["long_rank_3d"] = _percentile_rank(returns_3d, float(item["return_3d_pct"]))
+        item["short_rank_3d"] = 1.0 - float(item["long_rank_3d"])
+        item["long_rank_7d"] = _percentile_rank(returns_7d, float(item["return_7d_pct"]))
+        item["short_rank_7d"] = 1.0 - float(item["long_rank_7d"])
+    return raw
+
+
+def build_v31_challenger(
+    *,
+    symbol: str,
+    direction: str,
+    signal: dict[str, Any],
+    opportunity: dict[str, Any],
+    medium_context: dict[str, dict[str, float | bool]],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Score V3.1 without making it eligible for live execution."""
+    direction = direction.upper()
+    medium = medium_context.get(symbol.upper()) or {}
+    if not config.get("opportunity_v31_challenger_enabled", True) or not medium:
+        return {"enabled": False, "strategy_family": V31_CHALLENGER_FAMILY, "reason": "medium_horizon_not_ready"}
+    is_short = direction == "SHORT"
+    trend_aligned = bool(medium.get("trend_short" if is_short else "trend_long"))
+    return_3d = float(medium.get("return_3d_pct") or 0)
+    return_7d = float(medium.get("return_7d_pct") or 0)
+    signed_3d = -return_3d if is_short else return_3d
+    signed_7d = -return_7d if is_short else return_7d
+    rank_3d = float(medium.get("short_rank_3d" if is_short else "long_rank_3d") or 0.5)
+    rank_7d = float(medium.get("short_rank_7d" if is_short else "long_rank_7d") or 0.5)
+    efficiency = float(medium.get("path_efficiency") or 0)
+    adjustment = 0.0
+    components = {
+        "medium_trend": 10.0 if trend_aligned else -12.0,
+        "medium_strength": ((rank_3d + rank_7d) / 2.0 - 0.5) * 16.0,
+        "path_quality": (efficiency - 0.25) * 12.0,
+    }
+    adjustment += sum(components.values())
+    blockers: list[str] = []
+    if not trend_aligned:
+        blockers.append("1小时中周期趋势未同向")
+    if max(signed_3d, signed_7d) <= 0:
+        blockers.append("3日和7日动量未确认")
+    if efficiency < float(config.get("opportunity_v31_min_path_efficiency", 0.18)):
+        blockers.append("趋势路径过于反复")
+    if not opportunity.get("liquidity_safe"):
+        blockers.append("盘口执行质量未通过")
+    if signal.get("signal") != direction:
+        blockers.append("短周期尚未触发")
+    score = _clamp(float(opportunity.get("score") or 0) + adjustment, 0.0, 100.0)
+    min_score = float(config.get("opportunity_v31_shadow_min_score", 68.0))
+    eligible = not blockers and score >= min_score
+    profile = dict(signal.get("protection_profile") or {})
+    entry_type = str(signal.get("entry_type") or "watch")
+    if entry_type in {"v3_breakout", "v3_pullback"}:
+        profile.update({"take_profit_atr": 2.8 if entry_type == "v3_breakout" else 2.4, "max_hold_bars": 24 if entry_type == "v3_breakout" else 18})
+    profile["protection_version"] = "v5_dynamic"
+    return {
+        "enabled": True,
+        "strategy_family": V31_CHALLENGER_FAMILY,
+        "score": round(score, 4),
+        "eligible": eligible,
+        "shadow_only": True,
+        "reason": "V3.1挑战者通过，进入影子验证" if eligible else "；".join(blockers or [f"挑战者评分 {score:.2f}<{min_score:.2f}"]),
+        "blockers": blockers,
+        "components": {key: round(value, 4) for key, value in components.items()},
+        "medium": {key: round(value, 6) if isinstance(value, float) else value for key, value in medium.items()},
+        "protection_profile": profile,
     }

@@ -300,6 +300,9 @@ class BinanceFuturesClient:
     def cancel_all_open_algo_orders(self, symbol: str) -> Any:
         return self.signed_request("DELETE", "/fapi/v1/algoOpenOrders", {"symbol": symbol.upper()})
 
+    def cancel_algo_order(self, algo_id: int | str) -> Any:
+        return self.signed_request("DELETE", "/fapi/v1/algoOrder", {"algoId": algo_id})
+
     def set_leverage(self, symbol: str, leverage: int) -> Any:
         return self.signed_request("POST", "/fapi/v1/leverage", {"symbol": symbol.upper(), "leverage": leverage})
 

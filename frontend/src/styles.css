@@ -284,6 +284,18 @@ option { color: #0f172a; background: #e0f2fe; }
   gap: 12px;
   flex-wrap: wrap;
 }
+
+.review-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.review-tabs button.active {
+  background: #0891b2;
+  border-color: #22d3ee;
+  color: #fff;
+}
 .button-row button { min-width: 180px; }
 .chip-row {
   display: flex;

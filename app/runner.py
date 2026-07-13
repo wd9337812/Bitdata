@@ -132,12 +132,19 @@ def track_runtime_position(decision: dict) -> None:
     if not symbol or direction not in {"LONG", "SHORT"}:
         return
     protection_plan = decision.get("protection_plan") or (decision.get("signal") or {}).get("protection_plan") or {}
+    protection_profile = (decision.get("signal") or {}).get("protection_profile") or {}
+    strategy_family = str((decision.get("candidate") or {}).get("strategy_family") or decision.get("strategy_family") or "")
     tracked = dict(load_state().get("runtime_protection_positions") or {})
     tracked[f"{symbol}:{direction}"] = {
         "opened_at": datetime.now(timezone.utc).isoformat(),
         "entry_type": decision.get("entry_type"),
         "max_hold_bars": protection_plan.get("max_hold_bars"),
-        "max_hold_seconds": ((decision.get("signal") or {}).get("protection_profile") or {}).get("max_hold_seconds"),
+        "max_hold_seconds": protection_profile.get("max_hold_seconds"),
+        "strategy_family": strategy_family,
+        "protection_version": "v5_dynamic" if strategy_family == "extreme_v3_roll" else protection_profile.get("protection_version"),
+        "break_even_atr": protection_profile.get("break_even_atr"),
+        "trailing_trigger_atr": protection_profile.get("trailing_trigger_atr"),
+        "trailing_distance_atr": protection_profile.get("trailing_distance_atr"),
     }
     save_state({"runtime_protection_positions": tracked})
 
@@ -406,6 +413,33 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     )
     scan = decision.get("scan") or {}
     shadow_candidates = [item for item in scan.get("candidates", []) if not item.get("passed")]
+    if config.get("opportunity_v31_challenger_enabled", True):
+        for item in scan.get("candidates", []):
+            challenger = item.get("v31_challenger") or {}
+            if not challenger.get("eligible"):
+                continue
+            signal = dict(item.get("signal") or {})
+            profile = dict(challenger.get("protection_profile") or signal.get("protection_profile") or {})
+            atr_value = float(signal.get("atr") or 0)
+            entry = float(signal.get("last_price") or 0)
+            direction = str(item.get("direction") or signal.get("signal") or "LONG").upper()
+            take_atr = float(profile.get("take_profit_atr") or 0)
+            if entry > 0 and atr_value > 0 and take_atr > 0:
+                signal["take_profit"] = entry - atr_value * take_atr if direction == "SHORT" else entry + atr_value * take_atr
+            signal["protection_profile"] = profile
+            shadow_candidates.append(
+                {
+                    **item,
+                    "strategy": "opportunity_v31_trend",
+                    "strategy_family": "extreme_v31_challenger",
+                    "strategy_generation": "v3.1-shadow",
+                    "score": challenger.get("score"),
+                    "passed": False,
+                    "decision_reason": challenger.get("reason"),
+                    "signal": signal,
+                    "opportunity_v31": challenger,
+                }
+            )
     if decision.get("action") == "WAIT" and (decision.get("candidate") or {}).get("passed"):
         shadow_candidates.append(
             {

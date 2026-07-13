@@ -13,8 +13,11 @@ from app.live_reaction import apply_live_reaction_to_candidate
 from app.performance_guard import apply_strategy_evidence_to_candidate, observed_round_trip_cost_pct
 from app.market_stream import stream_depth, stream_triggers, write_stream_intent
 from app.opportunity_engine import (
+    V31_CHALLENGER_FAMILY,
     V3_STRATEGY_FAMILY,
     build_market_context,
+    build_v31_challenger,
+    build_v31_medium_context,
     build_v3_signal,
     score_v3_opportunity,
 )
@@ -115,6 +118,39 @@ PIPELINE_DEFAULTS: dict[str, dict[str, int]] = {
     "extreme_sprint": {"recall": 650, "coarse": 240, "rank": 110, "auction": 18},
     "yolo_scalp": {"recall": 700, "coarse": 260, "rank": 120, "auction": 20},
 }
+
+_V31_BAR_CACHE: dict[str, tuple[float, list[list[Any]]]] = {}
+
+
+def _v31_medium_bars(
+    client: BinanceFuturesClient,
+    symbols: list[str],
+    config: dict[str, Any],
+) -> dict[str, list[list[Any]]]:
+    """Load a small cached 1h shortlist; never fan out across the recall universe."""
+    if not config.get("opportunity_v31_challenger_enabled", True):
+        return {}
+    ttl = max(60, int(config.get("opportunity_v31_bar_cache_seconds", 600)))
+    limit = max(1, int(config.get("opportunity_v31_medium_pool_limit", 12)))
+    now = time.monotonic()
+    result: dict[str, list[list[Any]]] = {}
+    for symbol in symbols[:limit]:
+        cached = _V31_BAR_CACHE.get(symbol)
+        if cached and now - cached[0] <= ttl:
+            result[symbol] = cached[1]
+            continue
+        try:
+            bars = client.klines(symbol, "1h", 200)
+        except Exception:
+            continue
+        if len(bars) >= 80:
+            _V31_BAR_CACHE[symbol] = (now, bars)
+            result[symbol] = bars
+    if len(_V31_BAR_CACHE) > limit * 4:
+        for key, value in list(_V31_BAR_CACHE.items()):
+            if now - value[0] > ttl * 2:
+                _V31_BAR_CACHE.pop(key, None)
+    return result
 
 
 def extreme_sprint_armed(config: dict[str, Any]) -> bool:
@@ -1838,6 +1874,7 @@ def scan_growth_candidates(
         "_adaptive_market_profile": market_profile,
         "_opportunity_v3_market_context": v3_market_context,
     }
+    v3_enabled = opportunity_v3_active(config, mode.get("mode"))
     try:
         funding_by_symbol = {item["symbol"]: item for item in client.premium_index(recalled_symbols)}
     except Exception:
@@ -1857,6 +1894,8 @@ def scan_growth_candidates(
         ),
         reverse=True,
     )
+    v31_bars_by_symbol = _v31_medium_bars(client, ranked_symbols, config) if v3_enabled else {}
+    v31_medium_context = build_v31_medium_context(v31_bars_by_symbol) if v31_bars_by_symbol else {}
     fee_pct = StrategyParams().taker_fee * 2 * 100
     slippage_pct = float(config.get("estimated_slippage_pct", 0.04))
     cost_pct = fee_pct + slippage_pct
@@ -1882,7 +1921,6 @@ def scan_growth_candidates(
     live_losses_by_direction: dict[str, dict[str, Any]] = {}
     processed_symbols: list[str] = []
     derivative_checks = 0
-    v3_enabled = opportunity_v3_active(config, mode.get("mode"))
     exchange_filters = None
     if config.get("min_order_filter_enabled", False):
         try:
@@ -2017,6 +2055,14 @@ def scan_growth_candidates(
                         cost_pct=observed_cost_pct,
                         config=config,
                     )
+                    challenger = build_v31_challenger(
+                        symbol=symbol,
+                        direction=direction,
+                        signal=signal,
+                        opportunity=opportunity,
+                        medium_context=v31_medium_context,
+                        config=config,
+                    )
                     tier = str(opportunity.get("tier") or "WATCH")
                     tier_multiplier = float(opportunity.get("risk_multiplier") or 0)
                     direction_multiplier = float(opportunity.get("direction_multiplier") or 0)
@@ -2064,6 +2110,7 @@ def scan_growth_candidates(
                         "entry_type": entry_type,
                         "entry_type_label": signal.get("entry_type_label", "V3 观察"),
                         "opportunity_v3": opportunity,
+                        "v31_challenger": challenger,
                         "v3_tier": tier,
                         "symbol_quality": quality,
                         "symbol_pool": quality["pool"],
@@ -2503,6 +2550,7 @@ def scan_growth_candidates(
         tier: sum(1 for candidate in candidates if candidate.get("v3_tier") == tier)
         for tier in ("A+", "A", "B", "WATCH")
     }
+    v31_ready = sum(1 for candidate in candidates if (candidate.get("v31_challenger") or {}).get("eligible"))
     blocked_reasons: dict[str, int] = {}
     for candidate in candidates:
         if candidate.get("passed"):
@@ -2561,6 +2609,14 @@ def scan_growth_candidates(
             "tiers": v3_tiers,
             "observed_cost_floor_pct": round(observed_cost_pct, 6),
             "label": "机会引擎 V3",
+        },
+        "opportunity_v31": {
+            "enabled": bool(v3_enabled and config.get("opportunity_v31_challenger_enabled", True)),
+            "strategy_family": V31_CHALLENGER_FAMILY,
+            "medium_symbols": len(v31_medium_context),
+            "shadow_ready": v31_ready,
+            "cache_seconds": int(config.get("opportunity_v31_bar_cache_seconds", 600)),
+            "label": "V3.1 中周期挑战者",
         },
         "opportunity_queue": {
             "enabled": bool(config.get("opportunity_queue_enabled", True)),

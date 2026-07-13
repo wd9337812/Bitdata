@@ -48,6 +48,7 @@ from app.telemetry import (
     record_event,
 )
 from app.user_stream import user_stream_status
+from app.v31_validation import compare_v31_to_plain_breakout
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
@@ -61,7 +62,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.4.1")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.5.0")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -426,6 +427,20 @@ def api_backtest(symbol: str | None = None) -> dict[str, Any]:
     return {"results": results}
 
 
+@app.get("/api/validation/v31", dependencies=[Depends(require_auth)])
+def api_validation_v31(symbol: str = "SOLUSDT", days: int = 180) -> dict[str, Any]:
+    """Manual-only validation. The runner and Dashboard polling never call this endpoint."""
+    safe_days = max(30, min(int(days), 365))
+    config = load_config()
+    client = client_from_config()
+    bars = client.klines_history(symbol.upper(), "1h", safe_days, warmup=200)
+    cost_pct = max(
+        float(config.get("shadow_round_trip_cost_pct", 0.12)),
+        float(config.get("taker_fee_pct_round_trip", 0.08)) + float(config.get("estimated_slippage_pct", 0.04)),
+    )
+    return {"symbol": symbol.upper(), "days": safe_days, "bars": len(bars), **compare_v31_to_plain_breakout(bars, cost_pct)}
+
+
 @app.get("/api/signals", dependencies=[Depends(require_auth)])
 def api_signals() -> dict[str, Any]:
     config = load_config()
@@ -471,6 +486,12 @@ def api_decisions() -> dict[str, Any]:
         "latest_run": {key: latest.get(key) for key in ["id", "ts", "action", "symbol", "reason"]} if latest else None,
         "binance_rate": rate_status(),
     }
+
+
+@app.get("/api/dashboard/live", dependencies=[Depends(require_auth)])
+def api_dashboard_live() -> dict[str, Any]:
+    """Single local-only payload for the 10-second Dashboard refresh."""
+    return {"status": status(), "decisions": api_decisions()}
 
 
 @app.get("/api/account", dependencies=[Depends(require_auth)])

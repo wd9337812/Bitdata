@@ -127,7 +127,12 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
         ensure_shadow_tables(conn)
         active_rows = conn.execute("SELECT * FROM shadow_trades WHERE status = 'OPEN'").fetchall()
         active_keys = {
-            (str(row["symbol"]).upper(), str(row["direction"]).upper(), str(row["signal_type"] or "watch"))
+            (
+                str(row["strategy_family"] or "legacy_mixed"),
+                str(row["symbol"]).upper(),
+                str(row["direction"]).upper(),
+                str(row["signal_type"] or "watch"),
+            )
             for row in active_rows
         }
         for row in active_rows:
@@ -167,7 +172,14 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 """,
                 (now_iso(), exit_price, high, low, gross, gross - cost, outcome, item["id"]),
             )
-            active_keys.discard((str(item["symbol"]).upper(), direction, str(item.get("signal_type") or "watch")))
+            active_keys.discard(
+                (
+                    str(item.get("strategy_family") or "legacy_mixed"),
+                    str(item["symbol"]).upper(),
+                    direction,
+                    str(item.get("signal_type") or "watch"),
+                )
+            )
             closed += 1
 
         min_score = float(config.get("shadow_min_candidate_score", 70.0))
@@ -179,13 +191,17 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
             direction = str(candidate.get("direction") or "LONG").upper()
             v3 = candidate.get("opportunity_v3") or {}
             is_v3 = candidate.get("strategy_family") == "extreme_v3_roll"
+            v31 = candidate.get("opportunity_v31") or candidate.get("v31_challenger") or {}
+            is_v31 = candidate.get("strategy_family") == "extreme_v31_challenger"
             entry = _candidate_price(candidate)
             stop = float(signal.get("stop") or 0)
             take = float(signal.get("take_profit") or 0)
             if (
-                float(candidate.get("score") or 0) < min_score
+                float(candidate.get("score") or 0) < (float(config.get("opportunity_v31_shadow_min_score", 68.0)) if is_v31 else min_score)
                 or (is_v3 and signal.get("signal") != direction)
                 or (is_v3 and not v3.get("eligible"))
+                or (is_v31 and signal.get("signal") != direction)
+                or (is_v31 and not v31.get("eligible"))
                 or entry <= 0
                 or stop <= 0
                 or take <= 0
@@ -194,6 +210,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 continue
             key = _dedupe_key(candidate, bucket_minutes)
             active_key = (
+                str(candidate.get("strategy_family") or "legacy_mixed"),
                 str(candidate.get("symbol") or "").upper(),
                 str(candidate.get("direction") or "LONG").upper(),
                 str(candidate.get("entry_type") or "watch"),
@@ -204,7 +221,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 strategy_family = str(candidate.get("strategy_family") or "legacy_mixed")
                 market_regime = str((candidate.get("market_state") or {}).get("state") or "unknown")
                 candidate_hold_minutes = hold_minutes
-                if strategy_family == "extreme_v3_roll":
+                if strategy_family in {"extreme_v3_roll", "extreme_v31_challenger"}:
                     protection = signal.get("protection_profile") or {}
                     candidate_hold_minutes = min(
                         hold_minutes,
@@ -237,7 +254,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         (now + timedelta(minutes=candidate_hold_minutes)).isoformat(),
                         strategy_family,
                         market_regime,
-                        float(v3.get("score") or candidate.get("score") or 0),
+                        float((v31 if is_v31 else v3).get("score") or candidate.get("score") or 0),
                         json.dumps(
                             {
                                 "score": candidate.get("score"),
@@ -276,12 +293,38 @@ def shadow_summary(limit: int = 100) -> dict[str, Any]:
             FROM shadow_trades
             """
         ).fetchone()
+        strategy_rows = conn.execute(
+            """
+            SELECT
+                COALESCE(strategy_family, 'legacy_mixed') AS strategy_family,
+                COUNT(*) AS total,
+                SUM(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) AS active,
+                SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) AS closed,
+                SUM(CASE WHEN status = 'CLOSED' AND net_pnl > 0 THEN 1 ELSE 0 END) AS wins,
+                SUM(CASE WHEN status = 'CLOSED' THEN net_pnl ELSE 0 END) AS net_pnl,
+                SUM(CASE WHEN status = 'CLOSED' THEN estimated_cost ELSE 0 END) AS cost,
+                SUM(CASE WHEN status = 'CLOSED' AND net_pnl > 0 THEN net_pnl ELSE 0 END) AS gross_wins,
+                -SUM(CASE WHEN status = 'CLOSED' AND net_pnl < 0 THEN net_pnl ELSE 0 END) AS gross_losses
+            FROM shadow_trades
+            GROUP BY COALESCE(strategy_family, 'legacy_mixed')
+            """
+        ).fetchall()
     stats = dict(aggregate) if aggregate else {}
     for key in ["total", "active", "closed", "wins", "net_pnl", "cost"]:
         stats[key] = stats.get(key) or 0
     closed = int(stats.get("closed") or 0)
     wins = int(stats.get("wins") or 0)
     stats["win_rate"] = wins / closed * 100 if closed else 0.0
+    by_strategy = []
+    for row in strategy_rows:
+        item = dict(row)
+        item_closed = int(item.get("closed") or 0)
+        item_wins = int(item.get("wins") or 0)
+        gross_wins = float(item.get("gross_wins") or 0)
+        gross_losses = float(item.get("gross_losses") or 0)
+        item["win_rate"] = item_wins / item_closed * 100 if item_closed else 0.0
+        item["profit_factor"] = gross_wins / gross_losses if gross_losses else (999.0 if gross_wins > 0 else 0.0)
+        by_strategy.append(item)
     trades = []
     for row in rows:
         item = dict(row)
@@ -290,4 +333,4 @@ def shadow_summary(limit: int = 100) -> dict[str, Any]:
         except json.JSONDecodeError:
             item["payload"] = {}
         trades.append(item)
-    return {"stats": stats, "trades": trades}
+    return {"stats": stats, "by_strategy": by_strategy, "trades": trades}

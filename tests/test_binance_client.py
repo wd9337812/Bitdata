@@ -52,6 +52,25 @@ def test_signed_request_adds_default_recv_window(monkeypatch):
     assert captured["headers"]["X-MBX-APIKEY"] == "key"
 
 
+def test_cancel_algo_order_uses_only_supported_identifier(monkeypatch):
+    captured = {}
+
+    def fake_signed_request(self, method, path, params=None):
+        captured.update({"method": method, "path": path, "params": params})
+        return {"algoId": params["algoId"]}
+
+    monkeypatch.setattr(BinanceFuturesClient, "signed_request", fake_signed_request)
+
+    result = BinanceFuturesClient().cancel_algo_order(12345)
+
+    assert result == {"algoId": 12345}
+    assert captured == {
+        "method": "DELETE",
+        "path": "/fapi/v1/algoOrder",
+        "params": {"algoId": 12345},
+    }
+
+
 def test_public_request_registers_rate_limit(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
 

@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import time
 
-from app.opportunity_engine import build_market_context, build_v3_signal, score_v3_opportunity
+from app.opportunity_engine import (
+    build_market_context,
+    build_v31_challenger,
+    build_v31_medium_context,
+    build_v3_signal,
+    score_v3_opportunity,
+)
 from app import scanner
 
 
@@ -370,3 +376,26 @@ def test_scanner_v3_uses_stream_depth_without_rest_depth_call(monkeypatch):
 
     assert result["candidates"][0]["depth_checked"] is True
     assert result["candidates"][0]["opportunity_v3"]["liquidity_safe"] is True
+
+
+def test_v31_challenger_requires_aligned_medium_horizon():
+    medium = build_v31_medium_context({"ALTUSDT": _trend_bars(200)})
+    signal = {
+        "signal": "LONG",
+        "entry_type": "v3_breakout",
+        "protection_profile": {"stop_atr": 0.9, "take_profit_atr": 2.2, "max_hold_bars": 18},
+    }
+    challenger = build_v31_challenger(
+        symbol="ALTUSDT",
+        direction="LONG",
+        signal=signal,
+        opportunity={"score": 82.0, "liquidity_safe": True},
+        medium_context=medium,
+        config={"opportunity_v31_shadow_min_score": 60.0},
+    )
+
+    assert challenger["enabled"] is True
+    assert challenger["eligible"] is True
+    assert challenger["shadow_only"] is True
+    assert challenger["protection_profile"]["take_profit_atr"] == 2.8
+    assert challenger["protection_profile"]["protection_version"] == "v5_dynamic"

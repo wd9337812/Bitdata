@@ -249,6 +249,9 @@ class TradingConfig(BaseModel):
     simulation_start_equity: float = Field(default=50.0, ge=1, le=10_000_000)
     dynamic_protection_enabled: bool = True
     dynamic_protection_runtime_enabled: bool = True
+    runtime_stop_management_enabled: bool = True
+    runtime_stop_management_min_interval_seconds: int = Field(default=30, ge=5, le=3600)
+    runtime_stop_management_min_improvement_atr: float = Field(default=0.10, ge=0, le=10)
     dynamic_protection_runtime_trade_enabled: bool = False
     protection_audit_enabled: bool = True
     protection_audit_auto_repair_enabled: bool = True
@@ -497,6 +500,14 @@ class TradingConfig(BaseModel):
     opportunity_v3_credit_min_multiplier: float = Field(default=0.80, ge=0.01, le=2)
     opportunity_v3_credit_cooldown_min_multiplier: float = Field(default=0.35, ge=0.01, le=1)
     opportunity_v3_credit_max_multiplier: float = Field(default=1.20, ge=0.1, le=2)
+    opportunity_v31_challenger_enabled: bool = True
+    opportunity_v31_medium_pool_limit: int = Field(default=12, ge=1, le=50)
+    opportunity_v31_bar_cache_seconds: int = Field(default=600, ge=60, le=3600)
+    opportunity_v31_min_path_efficiency: float = Field(default=0.18, ge=0, le=1)
+    opportunity_v31_shadow_min_score: float = Field(default=68.0, ge=0, le=100)
+    opportunity_v31_min_closed_trades: int = Field(default=100, ge=10, le=10000)
+    opportunity_v31_min_profit_factor: float = Field(default=1.15, ge=0, le=100)
+    opportunity_v31_live_enabled: bool = False
     v3_credit_score_weight: float = Field(default=0.15, ge=0, le=2)
     v3_credit_quick_stop_seconds: int = Field(default=300, ge=30, le=3600)
     v3_credit_win_reward: float = Field(default=4.0, ge=0, le=30)

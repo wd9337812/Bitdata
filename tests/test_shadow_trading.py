@@ -36,3 +36,38 @@ def test_shadow_trade_is_deduplicated_and_settled_without_exchange(monkeypatch, 
     assert summary["stats"]["total"] == 1
     assert summary["stats"]["wins"] == 1
     assert summary["trades"][0]["outcome"] == "TAKE_PROFIT"
+
+
+def test_v3_and_v31_shadow_trades_can_coexist(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    base = {
+        **_candidate(100),
+        "entry_type": "v3_breakout",
+        "signal": {"signal": "LONG", "last_price": 100, "stop": 95, "take_profit": 105},
+    }
+    v3 = {
+        **base,
+        "strategy_family": "extreme_v3_roll",
+        "opportunity_v3": {"eligible": True, "score": 80},
+    }
+    v31 = {
+        **base,
+        "strategy_family": "extreme_v31_challenger",
+        "opportunity_v31": {"eligible": True, "score": 82},
+    }
+    config = {
+        "shadow_trading_enabled": True,
+        "shadow_min_candidate_score": 70,
+        "opportunity_v31_shadow_min_score": 68,
+        "shadow_dedupe_minutes": 10,
+        "shadow_max_hold_minutes": 120,
+        "shadow_reference_notional_usdt": 20,
+        "shadow_round_trip_cost_pct": 0.12,
+    }
+
+    result = update_shadow_trades([v3, v31], config)
+    summary = shadow_summary()
+
+    assert result["opened"] == 2
+    assert {row["strategy_family"] for row in summary["trades"]} == {"extreme_v3_roll", "extreme_v31_challenger"}
+    assert {row["strategy_family"] for row in summary["by_strategy"]} == {"extreme_v3_roll", "extreme_v31_challenger"}
