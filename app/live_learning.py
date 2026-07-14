@@ -609,7 +609,13 @@ def _strategy_metadata_for_record(
     existing_family = str(record.get("strategy_family") or "")
     existing_version = str(record.get("strategy_version") or "")
     existing_role = str(record.get("strategy_role") or "")
-    if existing_family and existing_version and existing_role:
+    if (
+        existing_family
+        and existing_version
+        and existing_role
+        and existing_version != "legacy"
+        and existing_role != "legacy"
+    ):
         return {
             "strategy_family": existing_family,
             "strategy_version": existing_version,

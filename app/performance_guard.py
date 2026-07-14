@@ -154,7 +154,8 @@ def global_performance_guard(
             "shadow_scope": shadow_scope,
         }
 
-    raw = _cached("global", float(config.get("performance_guard_cache_seconds", 15)), load)
+    cache_key = f"global:{current_version}:{int(release_only)}:{live_limit}:{shadow_limit}:{recovery_shadow_limit}"
+    raw = _cached(cache_key, float(config.get("performance_guard_cache_seconds", 15)), load)
     live_rows = raw["live_rows"]
     shadow_rows = raw["shadow_rows"]
     live = _stats(live_rows)

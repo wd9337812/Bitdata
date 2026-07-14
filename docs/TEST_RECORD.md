@@ -2,6 +2,13 @@
 
 This file tracks local verification for the two-stage futures system.
 
+## 2026-07-14 v0.7.1 Live Release Backfill Hotfix
+
+- A `legacy` placeholder no longer prevents live records from being matched to their exact open decision and active strategy version.
+- Unmatched historical records remain in the conservative safety fallback; no evidence is guessed from symbol or outcome alone.
+- Performance-guard caches are isolated by active version and window sizes.
+- `python -m pytest -q`: `201 passed`.
+
 ## 2026-07-14 v0.7.0 V3.3 Paired Shadow
 
 - V3.2 remains the only active live release; V3.3 is registered as a shadow-only challenger and V3.1 is archived.
