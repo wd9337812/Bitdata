@@ -201,3 +201,26 @@ def test_extreme_equity_guard_uses_mode_high_watermark_not_global_history():
     assert guard["risk_multiplier"] == 1.0
     assert guard["baseline_mode"] == "extreme_sprint"
     assert guard["high_watermark"] == 62
+
+
+def test_extreme_equity_guard_prefers_current_release_baseline():
+    config = {
+        **base_config(),
+        "equity_guard_enabled": True,
+        "equity_guard_release_baseline_enabled": True,
+        "equity_guard_drawdown_1_pct": 10,
+        "equity_guard_multiplier_1": 0.75,
+        "extreme_equity_guard_pause_drawdown_pct": 40,
+    }
+    state = {
+        "equity_high_watermark": 100,
+        "extreme_sprint_equity_high_watermark": 60,
+        "strategy_release_equity_id": "extreme_v3_roll@v3.2",
+        "strategy_release_equity_high_watermark": 20,
+    }
+
+    guard = equity_guard_status(config, state, 19, "extreme_sprint")
+
+    assert guard["allowed"] is True
+    assert guard["risk_multiplier"] == 1.0
+    assert guard["baseline_mode"] == "extreme_v3_roll@v3.2"

@@ -65,7 +65,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.7.2")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.8.0")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"

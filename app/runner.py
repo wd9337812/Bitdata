@@ -17,6 +17,7 @@ from app.market_stream import start_market_stream_thread
 from app.opportunity_queue import read_opportunities
 from app.performance_guard import global_performance_guard
 from app.protection_audit import audit_account_protection
+from app.recovery_controller import consume_recovery_permit, revoke_recovery_permit
 from app.risk import direction_cooldown_key, live_trading_allowed
 from app.runtime_protection import manage_runtime_protection
 from app.shadow_trading import update_shadow_trades
@@ -494,7 +495,10 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             "Binance 拒绝了低于最小名义金额的订单，本轮信号已跳过，机器人继续运行。",
             {"decision": {"symbol": decision.get("symbol"), "action": decision.get("action")}, "error": str(exc)},
         )
+    if result.get("mode") in {"protection_failed_closed", "protection_confirm_failed_closed"}:
+        revoke_recovery_permit("exchange_protection_confirmation_failed")
     if result.get("mode") in {"live", "rotation_live"} and decision.get("symbol"):
+        consume_recovery_permit(decision, result)
         track_runtime_position(decision)
         cooldown_minutes = float(config.get("symbol_cooldown_minutes", 0))
         if config.get("directional_cooldown_enabled", True):

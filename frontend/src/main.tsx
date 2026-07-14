@@ -204,11 +204,21 @@ function App() {
   const opportunityQueue = status?.opportunity_queue || {};
   const runtime = status?.runtime || {};
   const performanceGuard = runtime?.risk_status?.performance_guard || {};
+  const recoveryPermit = performanceGuard.recovery_permit || {};
   const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v3_roll"}@${performanceGuard.active_strategy_version || "v3.2"}`;
   const liveEvidenceIsCurrent = performanceGuard.live_evidence_scope === currentPerformanceScope;
   const target = status?.target_progress || {};
   const stageProfile = status?.stage_profile || {};
   const rawStageRoute = status?.stage_route || {};
+  const recoveryStatusLabel: Record<string, string> = {
+    accumulating: "积累影子证据",
+    confirming: "确认恢复稳定性",
+    waiting_candidate: "持证等待候选",
+    probe_open: "恢复试单持仓中",
+    cooldown: "强制冷却中",
+    revoked: "恢复资格已撤销",
+    normal: "正常实盘",
+  };
   const stageRoute = Object.keys(rawStageRoute).length > 0 ? rawStageRoute : stageProfile;
   const stageProfiles = status?.stage_profiles || [];
   const completion = status?.product_completion || {};
@@ -372,6 +382,23 @@ function App() {
                 value={`影子 PF ${fmt(performanceGuard.shadow_tail?.profit_factor, 2)}`}
                 sub={`${fmt(performanceGuard.shadow_tail?.trades, 0)} / ${fmt(performanceGuard.recovery_requirements?.shadow_trades, 0)} 笔 · ${performanceGuard.reason || "只用于判断当前实盘版本是否恢复"}`}
                 tone={performanceGuard.shadow_bad ? "negative" : ""}
+              />
+              <MetricCard
+                title="实盘恢复流程"
+                value={recoveryStatusLabel[recoveryPermit.status] || recoveryPermit.status || "等待状态"}
+                sub={
+                  recoveryPermit.status === "waiting_candidate"
+                    ? `资格剩余 ${fmt(Number(recoveryPermit.seconds_remaining || 0) / 60, 0)} 分钟，遇到合格候选才会消耗`
+                    : recoveryPermit.status === "confirming"
+                      ? `稳定确认 ${fmt(recoveryPermit.qualified_closes, 0)} / ${fmt(performanceGuard.recovery_requirements?.confirm_closes, 0)} 次`
+                      : recoveryPermit.reason || "影子PF达标后会生成限时恢复资格"
+                }
+                tone={recoveryPermit.status === "waiting_candidate" ? "positive" : recoveryPermit.status === "normal" ? "positive" : "negative"}
+              />
+              <MetricCard
+                title="当日权益基准"
+                value={`${fmt(state.daily_start_equity, 4)} U`}
+                sub={`${state.daily_session_date || "等待初始化"}（UTC），跨日自动重置`}
               />
             </div>
             <ProtectionAuditPanel audit={runtime?.protection_audit} />
@@ -1397,6 +1424,15 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("performance_guard_enabled", "全局负期望保护", "推荐开启：实盘出现严重连续亏损或权益高点回撤时立即停止新仓；已有持仓保护仍继续运行")}
           {number("performance_guard_pause_minutes", "全局保护暂停分钟", "默认 120 分钟；到期后仍需表现恢复，不会自动重新放大")}
           {number("performance_guard_recovery_risk_multiplier", "恢复探路倍率", "仅在恢复证据达标后使用；严重负期望期间不会放行探路单")}
+          {toggle("performance_recovery_permit_enabled", "持久化恢复许可证", "推荐开启：影子证据达标后保留限时资格，等待合格币种出现时再消费")}
+          {number("performance_recovery_entry_profit_factor", "恢复影子 PF 门槛", "默认 0.90，并且最近20笔影子净收益必须为正")}
+          {number("performance_recovery_confirm_closes", "恢复连续确认次数", "默认 3 次影子平仓，避免 PF 短暂越线马上实盘")}
+          {number("performance_recovery_confirm_minutes", "恢复稳定确认分钟", "默认 5 分钟；满足次数或时间任一条件即可签发资格")}
+          {number("performance_recovery_permit_minutes", "恢复资格有效分钟", "默认 180 分钟；没有合格币种不会提前消费")}
+          {number("performance_recovery_revoke_profit_factor", "恢复资格撤销 PF", "默认 0.50；签发后至少新增3笔影子仍严重恶化才撤销")}
+          {number("performance_recovery_current_live_warmup_trades", "当前版本实盘热身样本", "默认 8 笔；不足时不会因为一笔盈利直接恢复满仓")}
+          {number("performance_recovery_normal_live_profit_factor", "恢复正常实盘 PF", "默认 1.05；当前版本实盘达到热身样本且净收益为正后才解除历史兜底")}
+          {toggle("equity_guard_release_baseline_enabled", "按策略版本计算回撤仓位", "推荐开启：旧策略回撤继续保留安全告警，但不永久压低新版本恢复试单")}
           {toggle("strategy_evidence_enabled", "影子/实盘双确认", "推荐开启：只有两边都盈利并满足样本量，信用分才允许提高仓位")}
           {number("strategy_evidence_loss_reentry_minutes", "亏损后同向等待分钟", "默认 30 分钟；避免同一币种同方向连续追假突破")}
           {toggle("adaptive_thresholds_enabled", "市场自适应阈值", "复用现有行情数据，按市场冷热和币种自身成交量动态调整放量与异动门槛")}

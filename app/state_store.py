@@ -15,7 +15,12 @@ DEFAULT_STATE: dict[str, Any] = {
     "equity_guard_mode": "",
     "extreme_sprint_start_equity": 0.0,
     "extreme_sprint_equity_high_watermark": 0.0,
+    "strategy_release_equity_id": None,
+    "strategy_release_start_equity": 0.0,
+    "strategy_release_equity_high_watermark": 0.0,
     "daily_start_equity": 0.0,
+    "daily_session_date": None,
+    "daily_session_started_at": None,
     "daily_realized_pnl": 0.0,
     "consecutive_losses": 0,
     "cooldown_until": None,
@@ -59,3 +64,24 @@ def save_state(payload: dict[str, Any]) -> dict[str, Any]:
             json.dump(state, file, ensure_ascii=False, indent=2)
         tmp.replace(path)
         return state
+
+
+def daily_session_state_updates(
+    state: dict[str, Any],
+    equity: float | None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return an idempotent UTC trading-day reset without touching lifetime safeguards."""
+    if equity is None:
+        return {}
+    now = now or datetime.now(timezone.utc)
+    session_date = now.astimezone(timezone.utc).date().isoformat()
+    if state.get("daily_session_date") == session_date and float(state.get("daily_start_equity") or 0) > 0:
+        return {}
+    return {
+        "daily_session_date": session_date,
+        "daily_session_started_at": now.isoformat(),
+        "daily_start_equity": float(equity),
+        "daily_realized_pnl": 0.0,
+    }

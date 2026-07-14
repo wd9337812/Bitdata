@@ -26,8 +26,16 @@ def equity_guard_status(
     baseline_mode = "global"
     high_watermark_key = "equity_high_watermark"
     if mode in {"extreme_sprint", "yolo_scalp"}:
-        baseline_mode = str(mode)
-        high_watermark_key = "extreme_sprint_equity_high_watermark"
+        if (
+            config.get("equity_guard_release_baseline_enabled", True)
+            and state.get("strategy_release_equity_id")
+            and float(state.get("strategy_release_equity_high_watermark") or 0) > 0
+        ):
+            baseline_mode = str(state.get("strategy_release_equity_id"))
+            high_watermark_key = "strategy_release_equity_high_watermark"
+        else:
+            baseline_mode = str(mode)
+            high_watermark_key = "extreme_sprint_equity_high_watermark"
     high_watermark = max(float(state.get(high_watermark_key) or equity), float(equity))
     drawdown_pct = max(0.0, (high_watermark - float(equity)) / high_watermark * 100) if high_watermark > 0 else 0.0
     pause_key = "yolo_scalp_equity_guard_pause_drawdown_pct" if mode == "yolo_scalp" else "extreme_equity_guard_pause_drawdown_pct" if mode == "extreme_sprint" else "equity_guard_pause_drawdown_pct"

@@ -20,8 +20,9 @@ from app.risk import assess_new_position, equity_guard_status, live_trading_allo
 from app.scalp_engine import ORDERBOOK_SCALP_ENTRY_TYPES
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates, strategy_params_for_mode
 from app.stage_modes import resolve_stage_route, stage_route_state_updates
-from app.state_store import save_state
+from app.state_store import daily_session_state_updates, save_state
 from app.strategy import StrategyParams
+from app.strategy_releases import V3_FAMILY, active_version
 from app.target import target_progress, target_state_updates
 
 
@@ -286,8 +287,7 @@ def sync_stage(config: dict[str, Any], state: dict[str, Any], account_summary: d
     updates: dict[str, Any] = {}
     if equity is not None:
         updates["equity_high_watermark"] = max(float(state.get("equity_high_watermark") or 0), float(equity))
-        if not state.get("daily_start_equity"):
-            updates["daily_start_equity"] = float(equity)
+        updates.update(daily_session_state_updates(state, float(equity)))
     positions = [
         item for item in account_summary.get("positions", [])
         if abs(float(item.get("positionAmt", item.get("amount", 0)) or 0)) > 0
@@ -297,6 +297,16 @@ def sync_stage(config: dict[str, Any], state: dict[str, Any], account_summary: d
     updates["stage"] = "grid" if route.get("mode") == "grid" else "growth"
     updates.update(target_state_updates(config, state, account_summary))
     active_mode = route.get("mode")
+    if equity is not None and active_mode in {"extreme_sprint", "yolo_scalp"}:
+        release_id = f"{V3_FAMILY}@{active_version(config)}"
+        current_release_id = str(state.get("strategy_release_equity_id") or "")
+        current_release_high = float(state.get("strategy_release_equity_high_watermark") or 0)
+        if current_release_id != release_id or current_release_high <= 0:
+            updates["strategy_release_equity_id"] = release_id
+            updates["strategy_release_start_equity"] = float(equity)
+            updates["strategy_release_equity_high_watermark"] = float(equity)
+        else:
+            updates["strategy_release_equity_high_watermark"] = max(current_release_high, float(equity))
     if equity is not None and active_mode in {"extreme_sprint", "yolo_scalp"}:
         existing_mode = state.get("equity_guard_mode")
         current_extreme_high = float(state.get("extreme_sprint_equity_high_watermark") or 0)
@@ -583,6 +593,7 @@ def build_stage1_decision(
         "quantity": quantity,
         "estimated_notional": quantity * float(signal["last_price"]),
         "effective_risk": effective_risk,
+        "performance_guard": performance_guard,
         "order_viability": order_viability,
         "mode": active_mode["mode"],
         "strategy": active_mode["strategy"],

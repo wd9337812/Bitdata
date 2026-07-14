@@ -212,7 +212,15 @@ def effective_position_risk(
         final_risk = min(final_risk, max_risk)
     performance = candidate.get("global_performance_guard") or {}
     performance_multiplier = max(0.0, min(1.0, float(performance.get("risk_multiplier", 1.0))))
-    final_risk *= performance_multiplier
+    performance_cap = raw_risk * performance_multiplier
+    performance_mode = "multiplier"
+    if str(performance.get("status") or "").startswith("recovery_"):
+        # Recovery and drawdown protection are independent absolute caps. Multiplying
+        # both can make a valid probe economically meaningless.
+        final_risk = min(final_risk, performance_cap)
+        performance_mode = "minimum_cap"
+    else:
+        final_risk *= performance_multiplier
     return {
         "tier": tier,
         "scalp_tier": scalp_tier,
@@ -225,6 +233,8 @@ def effective_position_risk(
         "max_risk_pct": round(max_risk, 6),
         "stage_risk_cap_pct": round(stage_risk_cap, 6),
         "performance_multiplier": round(performance_multiplier, 6),
+        "performance_cap_pct": round(performance_cap, 6),
+        "performance_mode": performance_mode,
         "final_risk_pct": round(final_risk, 8),
         "yolo_scalp_profile": yolo_profile,
     }

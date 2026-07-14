@@ -2,6 +2,21 @@
 
 This file tracks local verification for the two-stage futures system.
 
+## 2026-07-15 v0.8.0 Persistent Recovery Permit
+
+- Active V3.2 shadow evidence now issues a persistent, expiring recovery permit after stability confirmation, so recovery evidence and a valid candidate no longer need to occur in the same scan.
+- A permit authorizes only one protected live probe; it is consumed only after live entry and exchange protection succeed, and is revoked after a losing probe, hard shadow failure, emergency stop, or protection failure.
+- UTC daily-loss state resets once per trading day without resetting lifetime or release-level high-water marks.
+- V3.2 release-level equity protection no longer inherits the drawdown peak of a superseded strategy release.
+- Independent recovery and equity caps use the stricter absolute cap instead of multiplying into a non-economic order size.
+- Dashboard exposes the recovery state, confirmation progress, permit time remaining, and UTC daily baseline in Chinese.
+- No new Binance REST or WebSocket subscription is introduced; additional evidence uses the cached local SQLite window and state writes occur only on state transitions.
+- `python -m pytest -q`: `211 passed` (one existing local `requests` dependency compatibility warning).
+- `python -m compileall -q app`: passed.
+- `npm run build`: passed; business, React and chart chunks remain separated.
+- Local HTTP smoke on `127.0.0.1:8093`: `/`, `/api/status`, and `/api/config` returned `200`; OpenAPI reported `0.8.0`.
+- `git diff --check`: passed; Git reported only Windows LF/CRLF conversion notices.
+
 ## 2026-07-14 v0.7.2 Evidence Scope Label
 
 - Dashboard explicitly labels whether live guard evidence comes from the active release or the conservative historical fallback.

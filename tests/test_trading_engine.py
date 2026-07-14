@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from app.state_store import load_state, save_state
 from app.trading_engine import build_stage1_decision, close_rotation_position, sync_stage
 
@@ -89,6 +91,9 @@ def test_sync_stage_initializes_extreme_sprint_equity_guard(monkeypatch, tmp_pat
     assert updated["equity_guard_mode"] == "extreme_sprint"
     assert updated["extreme_sprint_start_equity"] == 60
     assert updated["extreme_sprint_equity_high_watermark"] == 60
+    assert updated["strategy_release_equity_id"] == "extreme_v3_roll@v3.2"
+    assert updated["strategy_release_start_equity"] == 60
+    assert updated["strategy_release_equity_high_watermark"] == 60
 
 
 def test_sync_stage_keeps_extreme_sprint_high_watermark(monkeypatch, tmp_path):
@@ -118,6 +123,68 @@ def test_sync_stage_keeps_extreme_sprint_high_watermark(monkeypatch, tmp_path):
 
     assert updated["extreme_sprint_start_equity"] == 60
     assert updated["extreme_sprint_equity_high_watermark"] == 66
+
+
+def test_sync_stage_resets_stale_daily_session_without_resetting_lifetime_high(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    today = datetime.now(timezone.utc).date().isoformat()
+    config = {
+        "growth_mode": "extreme_sprint",
+        "extreme_sprint_enabled": True,
+        "extreme_sprint_confirmation": "ENABLE_EXTREME_SPRINT",
+        "auto_risk_by_equity": False,
+        "stage1_target_equity": 10000,
+        "stage2_activation": "manual",
+        "extreme_sprint_interval": "5m",
+        "extreme_sprint_recent_days": 2,
+        "extreme_sprint_risk_per_trade_pct": 28,
+        "extreme_sprint_max_leverage": 8,
+        "extreme_sprint_max_symbol_margin_pct": 98,
+    }
+    state = {
+        **load_state(),
+        "equity_high_watermark": 100,
+        "daily_session_date": "2026-07-01",
+        "daily_start_equity": 30,
+        "daily_realized_pnl": -11,
+    }
+    save_state(state)
+
+    updated = sync_stage(config, state, {"equity": 19})
+
+    assert updated["daily_session_date"] == today
+    assert updated["daily_start_equity"] == 19
+    assert updated["daily_realized_pnl"] == 0
+    assert updated["equity_high_watermark"] == 100
+
+
+def test_sync_stage_keeps_current_release_high_watermark(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        "growth_mode": "extreme_sprint",
+        "extreme_sprint_enabled": True,
+        "extreme_sprint_confirmation": "ENABLE_EXTREME_SPRINT",
+        "auto_risk_by_equity": False,
+        "stage1_target_equity": 10000,
+        "stage2_activation": "manual",
+        "extreme_sprint_interval": "5m",
+        "extreme_sprint_recent_days": 2,
+        "extreme_sprint_risk_per_trade_pct": 28,
+        "extreme_sprint_max_leverage": 8,
+        "extreme_sprint_max_symbol_margin_pct": 98,
+    }
+    state = {
+        **load_state(),
+        "strategy_release_equity_id": "extreme_v3_roll@v3.2",
+        "strategy_release_start_equity": 19,
+        "strategy_release_equity_high_watermark": 24,
+    }
+    save_state(state)
+
+    updated = sync_stage(config, state, {"equity": 21})
+
+    assert updated["strategy_release_start_equity"] == 19
+    assert updated["strategy_release_equity_high_watermark"] == 24
 
 
 def test_yolo_scalp_rejects_non_orderbook_entry_before_live_execution():

@@ -1,4 +1,4 @@
-from app.position_sizing import effective_order_viability
+from app.position_sizing import effective_order_viability, effective_position_risk
 
 
 def test_effective_order_viability_explains_blockers_in_chinese():
@@ -16,3 +16,21 @@ def test_effective_order_viability_explains_blockers_in_chinese():
     assert "below_effective_min_notional" in result["reasons"]
     assert "低于系统有效下单额" in result["reason_labels"]
     assert "当前名义金额" in result["summary"]
+
+
+def test_recovery_uses_minimum_risk_cap_instead_of_multiplier_stack():
+    result = effective_position_risk(
+        candidate_risk_pct=10,
+        candidate={
+            "global_performance_guard": {"status": "recovery_2", "risk_multiplier": 0.4},
+            "score": 80,
+        },
+        guard={"allowed": True, "risk_multiplier": 0.2},
+        target={"effective_risk_multiplier": 1.0},
+        config={"effective_position_sizing_enabled": True, "effective_standard_min_risk_pct": 0},
+        mode="extreme_sprint",
+    )
+
+    assert result["performance_mode"] == "minimum_cap"
+    assert result["performance_cap_pct"] == 4.0
+    assert result["final_risk_pct"] == 2.0

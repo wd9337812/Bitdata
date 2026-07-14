@@ -5,6 +5,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.recovery_controller import recovery_permit_status
 from app.strategy_releases import (
     ACTIVE_ROLE,
     V3_FAMILY,
@@ -88,21 +89,32 @@ def global_performance_guard(
                         (V3_FAMILY, current_version, ACTIVE_ROLE, live_limit),
                     ).fetchall()
                 ]
+                scoped_live_total = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM live_trade_records WHERE strategy_family = ? "
+                        "AND strategy_version = ? AND strategy_role = ?",
+                        (V3_FAMILY, current_version, ACTIVE_ROLE),
+                    ).fetchone()[0]
+                )
+                fallback_live = [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT close_time, net_pnl, commission, funding_fee FROM live_trade_records "
+                        "ORDER BY close_time DESC LIMIT ?",
+                        (live_limit,),
+                    ).fetchall()
+                ]
                 if release_only and scoped_live:
                     live = scoped_live
                     live_scope = f"{V3_FAMILY}@{current_version}"
                 else:
-                    live = [
-                        dict(row)
-                        for row in conn.execute(
-                            "SELECT close_time, net_pnl, commission, funding_fee FROM live_trade_records "
-                            "ORDER BY close_time DESC LIMIT ?",
-                            (live_limit,),
-                        ).fetchall()
-                    ]
+                    live = fallback_live
                     live_scope = "legacy_safety_fallback" if release_only else "all_strategies"
             except sqlite3.OperationalError:
                 live = []
+                scoped_live = []
+                scoped_live_total = 0
+                fallback_live = []
                 live_scope = "unavailable"
             shadow_scope = "all_strategies"
             try:
@@ -111,12 +123,19 @@ def global_performance_guard(
                 scoped_shadow = [
                     dict(row)
                     for row in conn.execute(
-                        "SELECT closed_at, net_pnl, estimated_cost FROM shadow_trades "
+                        "SELECT id, closed_at, net_pnl, estimated_cost FROM shadow_trades "
                         "WHERE status = 'CLOSED' AND strategy_family = ? AND strategy_version = ? "
                         "AND strategy_role = ? ORDER BY id DESC LIMIT ?",
                         (V3_FAMILY, current_version, ACTIVE_ROLE, max(shadow_limit, recovery_shadow_limit)),
                     ).fetchall()
                 ]
+                scoped_shadow_total = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM shadow_trades WHERE status = 'CLOSED' AND strategy_family = ? "
+                        "AND strategy_version = ? AND strategy_role = ?",
+                        (V3_FAMILY, current_version, ACTIVE_ROLE),
+                    ).fetchone()[0]
+                )
                 if release_only and scoped_shadow:
                     shadow = scoped_shadow
                     shadow_scope = f"{V3_FAMILY}@{current_version}"
@@ -124,7 +143,7 @@ def global_performance_guard(
                     shadow = [
                         dict(row)
                         for row in conn.execute(
-                            "SELECT closed_at, net_pnl, estimated_cost FROM shadow_trades "
+                            "SELECT id, closed_at, net_pnl, estimated_cost FROM shadow_trades "
                             "WHERE status = 'CLOSED' ORDER BY id DESC LIMIT ?",
                             (max(shadow_limit, recovery_shadow_limit),),
                         ).fetchall()
@@ -132,6 +151,8 @@ def global_performance_guard(
                     shadow_scope = "legacy_safety_fallback" if release_only else "all_strategies"
             except sqlite3.OperationalError:
                 shadow = []
+                scoped_shadow = []
+                scoped_shadow_total = 0
                 shadow_scope = "unavailable"
             peak_equity = None
             try:
@@ -147,8 +168,12 @@ def global_performance_guard(
                 peak_equity = None
         return {
             "live_rows": live[:live_limit],
+            "current_live_rows": scoped_live[:live_limit],
+            "current_live_total": scoped_live_total,
+            "fallback_live_rows": fallback_live[:live_limit],
             "shadow_rows": shadow[:shadow_limit],
             "shadow_recovery_rows": shadow[:recovery_shadow_limit],
+            "shadow_closed_total": scoped_shadow_total if release_only else len(shadow),
             "peak_equity": peak_equity,
             "live_scope": live_scope,
             "shadow_scope": shadow_scope,
@@ -159,6 +184,12 @@ def global_performance_guard(
     live_rows = raw["live_rows"]
     shadow_rows = raw["shadow_rows"]
     live = _stats(live_rows)
+    current_live_rows = raw.get("current_live_rows") or []
+    current_live = _stats(current_live_rows)
+    current_live["latest_net_pnl"] = float(current_live_rows[0].get("net_pnl") or 0) if current_live_rows else 0.0
+    current_live["closed_total"] = int(raw.get("current_live_total") or 0)
+    fallback_live_rows = raw.get("fallback_live_rows") or []
+    fallback_live = _stats(fallback_live_rows)
     shadow = _stats(shadow_rows)
     min_live = int(config.get("performance_guard_min_live_trades", 10))
     min_shadow = int(config.get("performance_guard_min_shadow_trades", 50))
@@ -196,6 +227,26 @@ def global_performance_guard(
             or window_loss_pct >= float(config.get("performance_guard_severe_window_loss_equity_pct", 8.0))
         )
     )
+    fallback_tail_losses = 0
+    for row in fallback_live_rows:
+        if float(row.get("net_pnl") or 0) > 0:
+            break
+        fallback_tail_losses += 1
+    fallback_window_loss_pct = (
+        abs(min(0.0, float(fallback_live.get("net_pnl") or 0))) / max(float(equity or 0), 0.00000001) * 100
+        if equity
+        else 0.0
+    )
+    fallback_live_severe = bool(
+        fallback_live["trades"] >= min_live
+        and fallback_live["net_pnl"] < 0
+        and (
+            fallback_live["profit_factor"] < float(config.get("performance_guard_severe_profit_factor", 0.5))
+            or fallback_live["win_rate"] < float(config.get("performance_guard_severe_win_rate", 20.0))
+            or fallback_tail_losses >= int(config.get("performance_guard_severe_consecutive_losses", 4))
+            or fallback_window_loss_pct >= float(config.get("performance_guard_severe_window_loss_equity_pct", 8.0))
+        )
+    )
     peak_equity = float(raw.get("peak_equity") or 0)
     peak_drawdown_pct = (
         max(0.0, (peak_equity - float(equity)) / peak_equity * 100)
@@ -203,7 +254,15 @@ def global_performance_guard(
         else 0.0
     )
     peak_drawdown_severe = peak_drawdown_pct >= float(config.get("performance_guard_peak_drawdown_pct", 12.0))
-    risk_off = live_severe or peak_drawdown_severe or (live_bad and shadow_bad)
+    warmup_trades = int(config.get("performance_recovery_current_live_warmup_trades", 8))
+    normal_live_pf = float(config.get("performance_recovery_normal_live_profit_factor", 1.05))
+    current_live_ready = (
+        int(current_live.get("closed_total") or 0) >= warmup_trades
+        and current_live["net_pnl"] > 0
+        and current_live["profit_factor"] >= normal_live_pf
+    )
+    release_warmup = release_only and not current_live_ready and fallback_live_severe
+    risk_off = live_severe or release_warmup or peak_drawdown_severe or (live_bad and shadow_bad)
     latest_close_ms = int(live_rows[0].get("close_time") or 0) if live_rows else 0
     latest_close = datetime.fromtimestamp(latest_close_ms / 1000, timezone.utc) if latest_close_ms else None
     pause_minutes = float(config.get("performance_guard_pause_minutes", 60))
@@ -211,56 +270,75 @@ def global_performance_guard(
     cooldown_active = bool(pause_until and now < pause_until)
     live_tail = _stats(live_rows[: max(3, min_live // 2)])
     shadow_tail = _stats(raw.get("shadow_recovery_rows") or [])
-    recovery_level = 0
-    recovery_multiplier = float(config.get("performance_guard_recovery_risk_multiplier", 0.2))
-    if risk_off and not cooldown_active:
-        one_side_recovering = (
-            (live_tail["trades"] >= 3 and live_tail["net_pnl"] > 0 and live_tail["profit_factor"] >= 0.9)
-            or (
-                shadow_tail["trades"] >= recovery_shadow_limit
-                and shadow_tail["net_pnl"] > 0
-                and shadow_tail["profit_factor"] >= 0.9
-            )
-        )
-        both_recovering = (
-            live_tail["trades"] >= 3
-            and shadow_tail["trades"] >= recovery_shadow_limit
-            and live_tail["net_pnl"] > 0
-            and shadow_tail["net_pnl"] > 0
-            and live_tail["profit_factor"] >= 1.0
-            and shadow_tail["profit_factor"] >= 1.0
-        )
-        if both_recovering:
-            recovery_level = 3
-            recovery_multiplier = float(config.get("performance_guard_recovery_level_3_multiplier", 0.70))
-        elif one_side_recovering:
-            recovery_level = 2
-            recovery_multiplier = float(config.get("performance_guard_recovery_level_2_multiplier", 0.40))
-        else:
-            recovery_level = 1
-            recovery_multiplier = float(config.get("performance_guard_recovery_level_1_multiplier", recovery_multiplier))
+    shadow_recovery_rows = raw.get("shadow_recovery_rows") or []
+    shadow_token = None
+    if shadow_recovery_rows:
+        newest_shadow = shadow_recovery_rows[0]
+        shadow_token = f"{newest_shadow.get('id')}:{newest_shadow.get('closed_at')}"
+    hard_stop = float(config.get("hard_stop_equity", config.get("tournament_stop_equity", 5.0)))
+    permit = recovery_permit_status(
+        config,
+        strategy_version=current_version,
+        risk_off=risk_off,
+        cooldown_active=cooldown_active,
+        emergency_stop=peak_drawdown_severe or (equity is not None and float(equity) <= hard_stop),
+        shadow_tail=shadow_tail,
+        shadow_token=shadow_token,
+        shadow_closed_total=int(raw.get("shadow_closed_total") or 0),
+        current_live=current_live,
+        now=now,
+    )
+    allowed = bool(permit.get("allowed"))
+    recovery_level = int(permit.get("recovery_level") or 0)
+    recovery_multiplier = float(permit.get("risk_multiplier") or 0.0)
+    both_recovering = (
+        allowed
+        and current_live["trades"] >= 3
+        and shadow_tail["trades"] >= recovery_shadow_limit
+        and current_live["net_pnl"] > 0
+        and shadow_tail["net_pnl"] > 0
+        and current_live["profit_factor"] >= 1.0
+        and shadow_tail["profit_factor"] >= 1.0
+    )
+    if both_recovering:
+        recovery_level = 3
+        recovery_multiplier = float(config.get("performance_guard_recovery_level_3_multiplier", 0.70))
+    permit_state = str(permit.get("status") or "accumulating")
     status = (
-        "cooldown"
-        if cooldown_active
-        else f"recovery_{recovery_level}"
-        if risk_off and recovery_level >= 2
+        "normal"
+        if not risk_off
+        else "recovery_3"
+        if recovery_level >= 3
+        else "recovery_2"
+        if allowed
+        else "cooldown"
+        if permit_state == "cooldown"
+        else "confirming"
+        if permit_state == "confirming"
+        else "probe_open"
+        if permit_state == "probe_open"
         else "risk_off"
-        if risk_off
-        else "normal"
     )
     labels = {
-        "normal": "正常",
-        "cooldown": "暂停新开仓",
+        "normal": "正常实盘",
+        "cooldown": "强制冷却中",
         "risk_off": "等待影子验证恢复",
-        "recovery_2": "二级小仓恢复",
+        "confirming": "恢复条件确认中",
+        "probe_open": "恢复试单持仓中",
+        "recovery_2": "已取得恢复试单资格",
         "recovery_3": "三级受限恢复",
     }
-    allowed = not cooldown_active and (not risk_off or recovery_level >= 2)
-    reason = "滚动表现正常"
-    if live_severe:
-        reason = "实盘短窗口发生严重恶化，影子交易不得否决紧急暂停"
+    reason = "当前版本滚动表现正常"
+    if allowed and risk_off:
+        reason = "影子恢复证据已锁定，等待首个满足成本和质量要求的候选"
+    elif permit_state == "confirming":
+        reason = "影子数据已达门槛，正在确认其稳定性"
+    elif permit_state == "probe_open":
+        reason = "恢复许可证已用于当前受保护试单，等待平仓结果"
+    elif live_severe or release_warmup:
+        reason = "历史实盘严重恶化，影子交易不得否决紧急暂停；冷却后可签发限时恢复许可证"
     elif peak_drawdown_severe:
-        reason = f"权益高点回撤 {peak_drawdown_pct:.2f}% 已触发保护"
+        reason = f"24小时权益高点回撤 {peak_drawdown_pct:.2f}% 已触发保护"
     elif live_bad and shadow_bad:
         reason = "实盘与影子交易同时处于负期望"
     elif risk_off:
@@ -275,11 +353,15 @@ def global_performance_guard(
         "live": live,
         "shadow": shadow,
         "live_tail": live_tail,
+        "current_live": current_live,
+        "fallback_live": fallback_live,
         "shadow_tail": shadow_tail,
         "recovery_level": recovery_level,
         "live_bad": live_bad,
         "shadow_bad": shadow_bad,
         "live_severe": live_severe,
+        "release_warmup": release_warmup,
+        "current_live_ready": current_live_ready,
         "window_loss_equity_pct": round(window_loss_pct, 4),
         "peak_equity": round(peak_equity, 8) if peak_equity else None,
         "peak_drawdown_pct": round(peak_drawdown_pct, 4),
@@ -291,12 +373,16 @@ def global_performance_guard(
         "active_strategy_version": current_version,
         "live_evidence_scope": raw.get("live_scope"),
         "shadow_evidence_scope": raw.get("shadow_scope"),
+        "recovery_permit": permit,
         "recovery_requirements": {
             "shadow_trades": recovery_shadow_limit,
             "shadow_net_positive": True,
-            "shadow_profit_factor": 0.9,
-            "live_tail_trades": max(3, min_live // 2),
-            "live_profit_factor": 0.9,
+            "shadow_profit_factor": float(config.get("performance_recovery_entry_profit_factor", 0.9)),
+            "confirm_closes": int(config.get("performance_recovery_confirm_closes", 3)),
+            "confirm_minutes": float(config.get("performance_recovery_confirm_minutes", 5)),
+            "permit_minutes": float(config.get("performance_recovery_permit_minutes", 180)),
+            "current_live_warmup_trades": warmup_trades,
+            "normal_live_profit_factor": normal_live_pf,
         },
         "reason": reason,
     }

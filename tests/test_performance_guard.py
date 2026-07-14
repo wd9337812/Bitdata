@@ -218,3 +218,25 @@ def test_global_guard_ignores_archived_profit_when_current_release_is_bad(monkey
     assert status["shadow_evidence_scope"] == "extreme_v3_roll@v3.2"
     assert status["live"]["net_pnl"] < 0
     assert status["shadow"]["net_pnl"] < 0
+
+
+def test_one_current_release_trade_cannot_clear_legacy_safety_fallback(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _seed_live("OLDUSDT", "LONG", [-0.4] * 10)
+    _seed_live("NEWUSDT", "LONG", [0.2], version="v3.2", role="active")
+    _seed_shadow("NEWUSDT", "LONG", [0.1] * 50, version="v3.2", role="active")
+    clear_performance_cache()
+
+    status = global_performance_guard(
+        {
+            "opportunity_v3_strategy_version": "v3.2",
+            "performance_guard_current_release_only": True,
+            "performance_recovery_current_live_warmup_trades": 8,
+        },
+        25,
+        now=datetime.now(timezone.utc) + timedelta(hours=3),
+    )
+
+    assert status["release_warmup"] is True
+    assert status["current_live"]["trades"] == 1
+    assert status["allowed"] is False

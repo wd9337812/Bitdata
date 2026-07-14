@@ -76,6 +76,16 @@ class TradingConfig(BaseModel):
     performance_guard_recovery_level_3_multiplier: float = Field(default=0.70, ge=0.01, le=1)
     performance_guard_current_release_only: bool = True
     performance_guard_recovery_shadow_trades: int = Field(default=20, ge=10, le=500)
+    performance_recovery_permit_enabled: bool = True
+    performance_recovery_entry_profit_factor: float = Field(default=0.90, ge=0, le=10)
+    performance_recovery_confirm_closes: int = Field(default=3, ge=1, le=50)
+    performance_recovery_confirm_minutes: int = Field(default=5, ge=0, le=1440)
+    performance_recovery_permit_minutes: int = Field(default=180, ge=5, le=1440)
+    performance_recovery_revoke_profit_factor: float = Field(default=0.50, ge=0, le=10)
+    performance_recovery_revoke_new_shadow_trades: int = Field(default=3, ge=1, le=100)
+    performance_recovery_current_live_warmup_trades: int = Field(default=8, ge=1, le=100)
+    performance_recovery_normal_live_profit_factor: float = Field(default=1.05, ge=0, le=10)
+    equity_guard_release_baseline_enabled: bool = True
     strategy_evidence_enabled: bool = True
     strategy_evidence_window_hours: int = Field(default=24, ge=1, le=720)
     strategy_evidence_live_confirm_trades: int = Field(default=8, ge=1, le=200)
