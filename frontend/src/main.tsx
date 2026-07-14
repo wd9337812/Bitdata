@@ -204,6 +204,8 @@ function App() {
   const opportunityQueue = status?.opportunity_queue || {};
   const runtime = status?.runtime || {};
   const performanceGuard = runtime?.risk_status?.performance_guard || {};
+  const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v3_roll"}@${performanceGuard.active_strategy_version || "v3.2"}`;
+  const liveEvidenceIsCurrent = performanceGuard.live_evidence_scope === currentPerformanceScope;
   const target = status?.target_progress || {};
   const stageProfile = status?.stage_profile || {};
   const rawStageRoute = status?.stage_route || {};
@@ -362,7 +364,7 @@ function App() {
               <MetricCard
                 title={`${performanceGuard.active_strategy_version || "当前版本"} 实盘保护`}
                 value={performanceGuard.status_label || "等待统计"}
-                sub={`仅看当前版本 · 实盘 PF ${fmt(performanceGuard.live?.profit_factor, 2)} · 最近亏损 ${fmt(performanceGuard.rolling_losses, 0)} 笔`}
+                sub={`${liveEvidenceIsCurrent ? "当前版本实盘证据" : "历史安全兜底（当前版本实盘待积累）"} · PF ${fmt(performanceGuard.live?.profit_factor, 2)} · 最近亏损 ${fmt(performanceGuard.rolling_losses, 0)} 笔`}
                 tone={performanceGuard.status === "normal" ? "positive" : "negative"}
               />
               <MetricCard

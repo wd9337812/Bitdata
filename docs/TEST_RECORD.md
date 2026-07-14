@@ -2,6 +2,11 @@
 
 This file tracks local verification for the two-stage futures system.
 
+## 2026-07-14 v0.7.2 Evidence Scope Label
+
+- Dashboard explicitly labels whether live guard evidence comes from the active release or the conservative historical fallback.
+- `npm run build`: passed.
+
 ## 2026-07-14 v0.7.1 Live Release Backfill Hotfix
 
 - A `legacy` placeholder no longer prevents live records from being matched to their exact open decision and active strategy version.
