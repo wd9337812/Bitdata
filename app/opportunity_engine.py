@@ -11,6 +11,7 @@ from app.strategy import atr, ema
 
 V3_STRATEGY_FAMILY = "extreme_v3_roll"
 V31_CHALLENGER_FAMILY = "extreme_v31_challenger"
+V33_CHALLENGER_VERSION = "v3.3-candidate"
 V3_ENTRY_TYPES = {"v3_breakout", "v3_pullback", "v3_momentum", "v3_prebreakout"}
 
 
@@ -274,6 +275,8 @@ def build_v3_signal(
         "enabled": True,
         "engine": "opportunity_v3",
         "strategy_family": V3_STRATEGY_FAMILY,
+        "strategy_version": str(config.get("opportunity_v3_strategy_version") or "v3.2"),
+        "strategy_role": "active",
         "symbol": symbol,
         "signal": direction if signal_ready else "WAIT",
         "direction": direction,
@@ -527,6 +530,8 @@ def score_v3_opportunity(
         "enabled": True,
         "engine": "opportunity_v3",
         "strategy_family": V3_STRATEGY_FAMILY,
+        "strategy_version": str(config.get("opportunity_v3_strategy_version") or "v3.2"),
+        "strategy_role": "active",
         "score": round(score, 4),
         "tier": tier,
         "tier_label": label,
@@ -653,5 +658,129 @@ def build_v31_challenger(
         "blockers": blockers,
         "components": {key: round(value, 4) for key, value in components.items()},
         "medium": {key: round(value, 6) if isinstance(value, float) else value for key, value in medium.items()},
+        "protection_profile": profile,
+    }
+
+
+def build_v33_challenger(
+    *,
+    symbol: str,
+    direction: str,
+    signal: dict[str, Any],
+    opportunity: dict[str, Any],
+    medium_context: dict[str, dict[str, float | bool]],
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the paired, shadow-only V3.3 policy from the shared V3 market snapshot."""
+    version = str(config.get("opportunity_v33_strategy_version") or V33_CHALLENGER_VERSION)
+    if not config.get("opportunity_v33_challenger_enabled", True):
+        return {
+            "enabled": False,
+            "strategy_family": V3_STRATEGY_FAMILY,
+            "strategy_version": version,
+            "strategy_role": "challenger",
+            "reason": "v33_disabled",
+        }
+
+    direction = direction.upper()
+    entry_type = str(signal.get("entry_type") or "watch")
+    regime = str(opportunity.get("market_regime") or "mixed")
+    medium = medium_context.get(symbol.upper()) or {}
+    is_short = direction == "SHORT"
+    medium_aligned = bool(medium.get("trend_short" if is_short else "trend_long"))
+    path_efficiency = float(medium.get("path_efficiency") or 0)
+    flow = float(signal.get("directed_trade_flow") or 0)
+    volume = float(signal.get("volume_acceleration") or 0)
+    cost_ratio = float(opportunity.get("cost_ratio") or 0)
+    score = float(opportunity.get("score") or 0)
+    signal_ready = signal.get("signal") == direction and entry_type in V3_ENTRY_TYPES
+
+    blockers: list[str] = []
+    if not signal_ready:
+        blockers.append("短周期结构尚未触发")
+    if not opportunity.get("liquidity_safe"):
+        blockers.append("盘口执行质量不足")
+    if opportunity.get("overextended"):
+        blockers.append("价格偏离触发位过远")
+    if opportunity.get("countertrend_blocked"):
+        blockers.append("方向与全市场趋势相反")
+
+    min_score = float(config.get("opportunity_v33_min_score", 68.0))
+    min_cost_ratio = float(config.get("opportunity_v33_min_cost_ratio", 2.5))
+    min_path = float(config.get("opportunity_v33_min_medium_path_efficiency", 0.18))
+    profile = dict(signal.get("protection_profile") or {})
+    components: dict[str, float] = {
+        "v32_base_score": score,
+        "cost_quality": min(cost_ratio, 5.0) * 1.5,
+    }
+
+    if entry_type == "v3_breakout":
+        min_score = max(min_score, float(config.get("opportunity_v33_breakout_min_score", 70.0)))
+        components["entry_evidence"] = 3.0
+        if medium and not medium_aligned:
+            blockers.append("中周期趋势未同向")
+        if medium and path_efficiency < min_path:
+            blockers.append("中周期路径反复")
+    elif entry_type == "v3_prebreakout":
+        min_score = max(min_score, float(config.get("opportunity_v33_prebreakout_min_score", 68.0)))
+        components["entry_evidence"] = 2.0
+        if not medium_aligned:
+            blockers.append("预突破缺少中周期确认")
+        if path_efficiency < min_path:
+            blockers.append("预突破路径质量不足")
+    elif entry_type == "v3_pullback":
+        components["entry_evidence"] = 6.0
+        if not medium_aligned:
+            blockers.append("回踩与中周期趋势未同向")
+        if path_efficiency < min_path:
+            blockers.append("回踩趋势路径过于反复")
+        if flow < float(config.get("opportunity_v33_pullback_min_flow", 0.50)):
+            blockers.append("回踩后的主动成交尚未重新同向")
+        if volume < float(config.get("opportunity_v33_pullback_min_volume_acceleration", 0.90)):
+            blockers.append("回踩确认量能不足")
+        profile.update(
+            {
+                "take_profit_atr": float(config.get("opportunity_v33_pullback_take_profit_atr", 2.4)),
+                "max_hold_bars": int(config.get("opportunity_v33_pullback_max_hold_bars", 18)),
+            }
+        )
+    elif entry_type == "v3_momentum":
+        components["entry_evidence"] = -3.0
+        min_score = max(min_score, 75.0)
+        min_cost_ratio = max(min_cost_ratio, 3.0)
+        if not config.get("opportunity_v33_momentum_shadow_enabled", True):
+            blockers.append("动量实验已关闭")
+        if not medium_aligned or path_efficiency < min_path:
+            blockers.append("动量缺少中周期趋势确认")
+    else:
+        blockers.append("不属于 V3.3 实验入场类型")
+
+    if regime == "panic" and entry_type != "v3_pullback" and config.get("opportunity_v33_panic_pullback_only", True):
+        blockers.append("恐慌行情只验证回踩确认，不追涨杀跌")
+    if score < min_score:
+        blockers.append(f"候选评分 {score:.2f} 低于 {min_score:.2f}")
+    if cost_ratio < min_cost_ratio:
+        blockers.append(f"预期收益成本比 {cost_ratio:.2f} 低于 {min_cost_ratio:.2f}")
+
+    adjusted_score = _clamp(score + sum(value for key, value in components.items() if key != "v32_base_score"), 0, 100)
+    eligible = not blockers
+    profile["protection_version"] = "v33-shadow"
+    return {
+        "enabled": True,
+        "strategy_family": V3_STRATEGY_FAMILY,
+        "strategy_version": version,
+        "strategy_role": "challenger",
+        "score": round(adjusted_score, 4),
+        "eligible": eligible,
+        "shadow_only": True,
+        "entry_type": entry_type,
+        "market_regime": regime,
+        "cost_ratio": round(cost_ratio, 6),
+        "medium_ready": bool(medium),
+        "medium_trend_aligned": medium_aligned,
+        "medium_path_efficiency": round(path_efficiency, 6),
+        "reason": "V3.3 配对影子候选通过" if eligible else "；".join(blockers),
+        "blockers": blockers,
+        "components": {key: round(value, 4) for key, value in components.items()},
         "protection_profile": profile,
     }

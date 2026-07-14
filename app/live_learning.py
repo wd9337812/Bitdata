@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.binance_client import BinanceFuturesClient
+from app.strategy_releases import ACTIVE_ROLE, ensure_live_release_columns, release_id
 from app.telemetry import connect, now_iso, record_event
 
 
@@ -109,6 +110,7 @@ def init_live_learning_schema() -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_live_trade_close_time ON live_trade_records(close_time)")
+        ensure_live_release_columns(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_live_trade_symbol_direction_close ON live_trade_records(symbol, direction, close_time)"
         )
@@ -434,8 +436,21 @@ def rebuild_symbol_scores(config: dict[str, Any], lookback_hours: float | None =
         for row in rows:
             item = dict(row)
             grouped.setdefault((item["symbol"], item["direction"]), []).append(item)
-            family = _strategy_family_for_record(conn, item, config)
-            item["strategy_family"] = family
+            metadata = _strategy_metadata_for_record(conn, item, config)
+            family = metadata["strategy_family"]
+            item.update(metadata)
+            expected_release = release_id(family, metadata["strategy_version"])
+            if (
+                str(row["strategy_family"] or "") != family
+                or str(row["strategy_version"] or "") != metadata["strategy_version"]
+                or str(row["strategy_role"] or "") != metadata["strategy_role"]
+                or str(row["release_id"] or "") != expected_release
+            ):
+                conn.execute(
+                    "UPDATE live_trade_records SET strategy_family = ?, strategy_version = ?, "
+                    "strategy_role = ?, release_id = ? WHERE id = ?",
+                    (family, metadata["strategy_version"], metadata["strategy_role"], expected_release, item["id"]),
+                )
             grouped_strategy.setdefault((item["symbol"], item["direction"], family), []).append(item)
         results = []
         for (symbol, direction), records in grouped.items():
@@ -554,34 +569,57 @@ def _strategy_score_config(config: dict[str, Any], family: str) -> dict[str, Any
 
 
 def _strategy_family_from_payload(payload: dict[str, Any]) -> str:
+    return _strategy_metadata_from_payload(payload)["strategy_family"]
+
+
+def _strategy_metadata_from_payload(payload: dict[str, Any]) -> dict[str, str]:
     decision = payload.get("decision") if isinstance(payload, dict) else {}
     if not isinstance(decision, dict):
-        return LEGACY_STRATEGY_FAMILY
+        return {"strategy_family": LEGACY_STRATEGY_FAMILY, "strategy_version": "legacy", "strategy_role": "legacy"}
     candidate = decision.get("candidate") or {}
     explicit = str(decision.get("strategy_family") or candidate.get("strategy_family") or "")
+    version = str(decision.get("strategy_version") or candidate.get("strategy_version") or "legacy")
+    role = str(decision.get("strategy_role") or candidate.get("strategy_role") or (ACTIVE_ROLE if version != "legacy" else "legacy"))
     if explicit in {ORDERBOOK_SCALP_FAMILY, EXTREME_V2_FAMILY, EXTREME_V3_FAMILY, GRID_STRATEGY_FAMILY}:
-        return explicit
+        return {"strategy_family": explicit, "strategy_version": version, "strategy_role": role}
     if str(decision.get("strategy_generation") or candidate.get("strategy_generation") or "").lower() == "v3":
-        return EXTREME_V3_FAMILY
+        return {"strategy_family": EXTREME_V3_FAMILY, "strategy_version": version, "strategy_role": role}
     entry_type = str(decision.get("entry_type") or candidate.get("entry_type") or "")
     mode = str(decision.get("mode") or ((decision.get("scan") or {}).get("mode") or {}).get("mode") or "")
     if mode == "yolo_scalp" and entry_type in ORDERBOOK_SCALP_ENTRY_TYPES:
-        return ORDERBOOK_SCALP_FAMILY
+        return {"strategy_family": ORDERBOOK_SCALP_FAMILY, "strategy_version": version, "strategy_role": role}
     if mode == "extreme_sprint":
-        return EXTREME_V2_FAMILY
+        return {"strategy_family": EXTREME_V2_FAMILY, "strategy_version": version, "strategy_role": role}
     if mode == "grid":
-        return GRID_STRATEGY_FAMILY
-    return LEGACY_STRATEGY_FAMILY
+        return {"strategy_family": GRID_STRATEGY_FAMILY, "strategy_version": version, "strategy_role": role}
+    return {"strategy_family": LEGACY_STRATEGY_FAMILY, "strategy_version": "legacy", "strategy_role": "legacy"}
 
 
 def _strategy_family_for_record(conn: sqlite3.Connection, record: dict[str, Any], config: dict[str, Any]) -> str:
+    return _strategy_metadata_for_record(conn, record, config)["strategy_family"]
+
+
+def _strategy_metadata_for_record(
+    conn: sqlite3.Connection,
+    record: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, str]:
     if not config.get("strategy_family_credit_enabled", True):
-        return LEGACY_STRATEGY_FAMILY
+        return {"strategy_family": LEGACY_STRATEGY_FAMILY, "strategy_version": "legacy", "strategy_role": "legacy"}
+    existing_family = str(record.get("strategy_family") or "")
+    existing_version = str(record.get("strategy_version") or "")
+    existing_role = str(record.get("strategy_role") or "")
+    if existing_family and existing_version and existing_role:
+        return {
+            "strategy_family": existing_family,
+            "strategy_version": existing_version,
+            "strategy_role": existing_role,
+        }
     symbol = str(record.get("symbol") or "").upper()
     direction = str(record.get("direction") or "").upper()
     open_time = int(record.get("open_time") or 0)
     if not symbol or direction not in {"LONG", "SHORT"} or open_time <= 0:
-        return LEGACY_STRATEGY_FAMILY
+        return {"strategy_family": LEGACY_STRATEGY_FAMILY, "strategy_version": "legacy", "strategy_role": "legacy"}
     window_ms = int(float(config.get("strategy_credit_match_window_minutes", 30)) * 60_000)
     rows = conn.execute(
         """
@@ -592,7 +630,7 @@ def _strategy_family_for_record(conn: sqlite3.Connection, record: dict[str, Any]
         """,
         (symbol, f"OPEN_{direction}"),
     ).fetchall()
-    best_family = LEGACY_STRATEGY_FAMILY
+    best = {"strategy_family": LEGACY_STRATEGY_FAMILY, "strategy_version": "legacy", "strategy_role": "legacy"}
     best_distance = window_ms + 1
     for row in rows:
         ts_ms = _parse_iso_ms(row["ts"])
@@ -605,10 +643,9 @@ def _strategy_family_for_record(conn: sqlite3.Connection, record: dict[str, Any]
             payload = json.loads(row["payload"] or "{}")
         except json.JSONDecodeError:
             payload = {}
-        family = _strategy_family_from_payload(payload)
-        best_family = family
+        best = _strategy_metadata_from_payload(payload)
         best_distance = distance
-    return best_family
+    return best
 
 
 def enrich_live_score(item: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:

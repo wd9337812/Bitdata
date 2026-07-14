@@ -229,7 +229,7 @@ def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
     compact = dict(decision)
     def compact_candidate(candidate: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
         keys = {
-            "symbol", "direction", "mode", "strategy", "strategy_family", "strategy_version",
+            "symbol", "direction", "mode", "strategy", "strategy_family", "strategy_version", "strategy_role",
             "score", "passed", "reason", "decision_reason", "entry_type", "entry_type_label",
             "v3_tier", "symbol_pool", "cost_ratio", "estimated_cost_pct", "expected_profit_pct",
             "risk_pct", "base_risk_pct", "leverage", "margin_pct", "current_score",
@@ -266,7 +266,7 @@ def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
     raw_scan = dict(compact.get("scan") or {})
     scan = {
         key: raw_scan.get(key)
-        for key in ("mode", "funnel", "market_context", "opportunity_v3", "opportunity_v31", "elapsed_seconds")
+        for key in ("mode", "funnel", "market_context", "opportunity_v3", "opportunity_v33", "elapsed_seconds")
         if key in raw_scan
     }
     if isinstance(raw_scan.get("best"), dict):

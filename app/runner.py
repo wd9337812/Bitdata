@@ -413,11 +413,19 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     )
     scan = decision.get("scan") or {}
     shadow_candidates = [item for item in scan.get("candidates", []) if not item.get("passed")]
-    if config.get("opportunity_v31_challenger_enabled", True):
+    paired_active_candidates: list[dict[str, Any]] = []
+    if config.get("opportunity_v33_challenger_enabled", True):
         for item in scan.get("candidates", []):
-            challenger = item.get("v31_challenger") or {}
+            challenger = item.get("v33_challenger") or {}
             if not challenger.get("eligible"):
                 continue
+            paired_active_candidates.append(
+                {
+                    **item,
+                    "passed": False,
+                    "decision_reason": "V3.3 配对实验的 V3.2 同场基线",
+                }
+            )
             signal = dict(item.get("signal") or {})
             profile = dict(challenger.get("protection_profile") or signal.get("protection_profile") or {})
             atr_value = float(signal.get("atr") or 0)
@@ -430,16 +438,19 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             shadow_candidates.append(
                 {
                     **item,
-                    "strategy": "opportunity_v31_trend",
-                    "strategy_family": "extreme_v31_challenger",
-                    "strategy_generation": "v3.1-shadow",
+                    "strategy": "opportunity_v33_candidate",
+                    "strategy_family": "extreme_v3_roll",
+                    "strategy_version": challenger.get("strategy_version") or config.get("opportunity_v33_strategy_version"),
+                    "strategy_role": "challenger",
+                    "strategy_generation": "v3.3-shadow",
                     "score": challenger.get("score"),
                     "passed": False,
                     "decision_reason": challenger.get("reason"),
                     "signal": signal,
-                    "opportunity_v31": challenger,
+                    "opportunity_v33": challenger,
                 }
             )
+    shadow_candidates.extend(paired_active_candidates)
     if decision.get("action") == "WAIT" and (decision.get("candidate") or {}).get("passed"):
         shadow_candidates.append(
             {

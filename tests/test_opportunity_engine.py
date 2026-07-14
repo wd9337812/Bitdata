@@ -6,6 +6,7 @@ from app.opportunity_engine import (
     build_market_context,
     build_v31_challenger,
     build_v31_medium_context,
+    build_v33_challenger,
     build_v3_signal,
     score_v3_opportunity,
 )
@@ -475,3 +476,52 @@ def test_v31_challenger_requires_aligned_medium_horizon():
     assert challenger["shadow_only"] is True
     assert challenger["protection_profile"]["take_profit_atr"] == 2.8
     assert challenger["protection_profile"]["protection_version"] == "v5_dynamic"
+
+
+def test_v33_pullback_uses_medium_flow_and_cost_confirmation():
+    medium = build_v31_medium_context({"ALTUSDT": _trend_bars(200)})
+    signal = {
+        "signal": "LONG",
+        "entry_type": "v3_pullback",
+        "directed_trade_flow": 0.72,
+        "volume_acceleration": 1.25,
+        "protection_profile": {"stop_atr": 0.9, "take_profit_atr": 2.2, "max_hold_bars": 12},
+    }
+    challenger = build_v33_challenger(
+        symbol="ALTUSDT",
+        direction="LONG",
+        signal=signal,
+        opportunity={
+            "score": 76.0,
+            "cost_ratio": 3.2,
+            "liquidity_safe": True,
+            "market_regime": "quiet",
+        },
+        medium_context=medium,
+        config={"opportunity_v33_min_score": 68.0},
+    )
+
+    assert challenger["eligible"] is True
+    assert challenger["shadow_only"] is True
+    assert challenger["strategy_version"] == "v3.3-candidate"
+    assert challenger["protection_profile"]["take_profit_atr"] == 2.4
+
+
+def test_v33_does_not_chase_breakout_in_panic_regime():
+    medium = build_v31_medium_context({"ALTUSDT": _trend_bars(200)})
+    challenger = build_v33_challenger(
+        symbol="ALTUSDT",
+        direction="LONG",
+        signal={"signal": "LONG", "entry_type": "v3_breakout"},
+        opportunity={
+            "score": 90.0,
+            "cost_ratio": 4.0,
+            "liquidity_safe": True,
+            "market_regime": "panic",
+        },
+        medium_context=medium,
+        config={},
+    )
+
+    assert challenger["eligible"] is False
+    assert "恐慌行情只验证回踩" in challenger["reason"]

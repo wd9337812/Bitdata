@@ -14,7 +14,15 @@ from app.shadow_trading import ensure_shadow_tables
 from app.telemetry import connect
 
 
-def _seed_live(symbol: str, direction: str, values: list[float], *, commission: float = 0.01) -> None:
+def _seed_live(
+    symbol: str,
+    direction: str,
+    values: list[float],
+    *,
+    commission: float = 0.01,
+    version: str | None = None,
+    role: str | None = None,
+) -> None:
     now = datetime.now(timezone.utc)
     with connect() as conn:
         for index, net in enumerate(values):
@@ -28,10 +36,24 @@ def _seed_live(symbol: str, direction: str, values: list[float], *, commission: 
                 """,
                 (symbol, direction, close_time - 60_000, close_time, net + commission, commission, net, now.isoformat()),
             )
+            if version:
+                conn.execute(
+                    "UPDATE live_trade_records SET strategy_family = 'extreme_v3_roll', strategy_version = ?, "
+                    "strategy_role = ?, release_id = ? WHERE id = last_insert_rowid()",
+                    (version, role or "active", f"extreme_v3_roll@{version}"),
+                )
         conn.commit()
 
 
-def _seed_shadow(symbol: str, direction: str, values: list[float], signal: str = "watch") -> None:
+def _seed_shadow(
+    symbol: str,
+    direction: str,
+    values: list[float],
+    signal: str = "watch",
+    *,
+    version: str | None = None,
+    role: str | None = None,
+) -> None:
     now = datetime.now(timezone.utc)
     with connect() as conn:
         for index, net in enumerate(values):
@@ -58,6 +80,12 @@ def _seed_shadow(symbol: str, direction: str, values: list[float], signal: str =
                     closed.isoformat(),
                 ),
             )
+            if version:
+                conn.execute(
+                    "UPDATE shadow_trades SET strategy_family = 'extreme_v3_roll', strategy_version = ?, "
+                    "strategy_role = ?, release_id = ? WHERE dedupe_key = ?",
+                    (version, role or "active", f"extreme_v3_roll@{version}", f"{symbol}:{direction}:{index}:{now.timestamp()}"),
+                )
         conn.commit()
 
 
@@ -170,3 +198,23 @@ def test_observed_cost_uses_recent_live_fee_floor(monkeypatch, tmp_path):
     cost = observed_round_trip_cost_pct({"observed_cost_safety_multiplier": 1.0})
 
     assert cost == 0.2
+
+
+def test_global_guard_ignores_archived_profit_when_current_release_is_bad(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _seed_live("OLDUSDT", "LONG", [1.0] * 10, version="v3.1", role="archived")
+    _seed_live("NEWUSDT", "LONG", [-0.3] * 10, version="v3.2", role="active")
+    _seed_shadow("OLDUSDT", "LONG", [0.5] * 50, version="v3.1", role="archived")
+    _seed_shadow("NEWUSDT", "LONG", [-0.1] * 50, version="v3.2", role="active")
+    clear_performance_cache()
+
+    status = global_performance_guard(
+        {"opportunity_v3_strategy_version": "v3.2", "performance_guard_current_release_only": True},
+        25,
+    )
+
+    assert status["allowed"] is False
+    assert status["live_evidence_scope"] == "extreme_v3_roll@v3.2"
+    assert status["shadow_evidence_scope"] == "extreme_v3_roll@v3.2"
+    assert status["live"]["net_pnl"] < 0
+    assert status["shadow"]["net_pnl"] < 0

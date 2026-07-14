@@ -5,6 +5,14 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.strategy_releases import (
+    ACTIVE_ROLE,
+    V3_FAMILY,
+    active_version,
+    ensure_live_release_columns,
+    ensure_shadow_release_columns,
+    migrate_shadow_release_metadata,
+)
 from app.telemetry import connect, db_path
 
 
@@ -62,29 +70,69 @@ def global_performance_guard(
     now = now or datetime.now(timezone.utc)
     live_limit = int(config.get("performance_guard_live_window_trades", 10))
     shadow_limit = int(config.get("performance_guard_shadow_window_trades", 100))
+    recovery_shadow_limit = int(config.get("performance_guard_recovery_shadow_trades", 20))
+    current_version = active_version(config)
+    release_only = bool(config.get("performance_guard_current_release_only", True))
 
     def load() -> dict[str, Any]:
         with connect() as conn:
+            live_scope = "all_strategies"
             try:
-                live = [
+                ensure_live_release_columns(conn)
+                scoped_live = [
                     dict(row)
                     for row in conn.execute(
-                        "SELECT close_time, net_pnl, commission, funding_fee FROM live_trade_records ORDER BY close_time DESC LIMIT ?",
-                        (live_limit,),
+                        "SELECT close_time, net_pnl, commission, funding_fee FROM live_trade_records "
+                        "WHERE strategy_family = ? AND strategy_version = ? AND strategy_role = ? "
+                        "ORDER BY close_time DESC LIMIT ?",
+                        (V3_FAMILY, current_version, ACTIVE_ROLE, live_limit),
                     ).fetchall()
                 ]
+                if release_only and scoped_live:
+                    live = scoped_live
+                    live_scope = f"{V3_FAMILY}@{current_version}"
+                else:
+                    live = [
+                        dict(row)
+                        for row in conn.execute(
+                            "SELECT close_time, net_pnl, commission, funding_fee FROM live_trade_records "
+                            "ORDER BY close_time DESC LIMIT ?",
+                            (live_limit,),
+                        ).fetchall()
+                    ]
+                    live_scope = "legacy_safety_fallback" if release_only else "all_strategies"
             except sqlite3.OperationalError:
                 live = []
+                live_scope = "unavailable"
+            shadow_scope = "all_strategies"
             try:
-                shadow = [
+                ensure_shadow_release_columns(conn)
+                migrate_shadow_release_metadata(conn, config)
+                scoped_shadow = [
                     dict(row)
                     for row in conn.execute(
-                        "SELECT closed_at, net_pnl, estimated_cost FROM shadow_trades WHERE status = 'CLOSED' ORDER BY id DESC LIMIT ?",
-                        (shadow_limit,),
+                        "SELECT closed_at, net_pnl, estimated_cost FROM shadow_trades "
+                        "WHERE status = 'CLOSED' AND strategy_family = ? AND strategy_version = ? "
+                        "AND strategy_role = ? ORDER BY id DESC LIMIT ?",
+                        (V3_FAMILY, current_version, ACTIVE_ROLE, max(shadow_limit, recovery_shadow_limit)),
                     ).fetchall()
                 ]
+                if release_only and scoped_shadow:
+                    shadow = scoped_shadow
+                    shadow_scope = f"{V3_FAMILY}@{current_version}"
+                else:
+                    shadow = [
+                        dict(row)
+                        for row in conn.execute(
+                            "SELECT closed_at, net_pnl, estimated_cost FROM shadow_trades "
+                            "WHERE status = 'CLOSED' ORDER BY id DESC LIMIT ?",
+                            (max(shadow_limit, recovery_shadow_limit),),
+                        ).fetchall()
+                    ]
+                    shadow_scope = "legacy_safety_fallback" if release_only else "all_strategies"
             except sqlite3.OperationalError:
                 shadow = []
+                shadow_scope = "unavailable"
             peak_equity = None
             try:
                 peak_cutoff = (
@@ -97,7 +145,14 @@ def global_performance_guard(
                 peak_equity = float(row["peak_equity"] or 0) if row else None
             except sqlite3.OperationalError:
                 peak_equity = None
-        return {"live_rows": live, "shadow_rows": shadow, "peak_equity": peak_equity}
+        return {
+            "live_rows": live[:live_limit],
+            "shadow_rows": shadow[:shadow_limit],
+            "shadow_recovery_rows": shadow[:recovery_shadow_limit],
+            "peak_equity": peak_equity,
+            "live_scope": live_scope,
+            "shadow_scope": shadow_scope,
+        }
 
     raw = _cached("global", float(config.get("performance_guard_cache_seconds", 15)), load)
     live_rows = raw["live_rows"]
@@ -154,17 +209,21 @@ def global_performance_guard(
     pause_until = (latest_close or now) + timedelta(minutes=pause_minutes) if risk_off else None
     cooldown_active = bool(pause_until and now < pause_until)
     live_tail = _stats(live_rows[: max(3, min_live // 2)])
-    shadow_tail = _stats(shadow_rows[: max(10, min_shadow // 3)])
+    shadow_tail = _stats(raw.get("shadow_recovery_rows") or [])
     recovery_level = 0
     recovery_multiplier = float(config.get("performance_guard_recovery_risk_multiplier", 0.2))
     if risk_off and not cooldown_active:
         one_side_recovering = (
             (live_tail["trades"] >= 3 and live_tail["net_pnl"] > 0 and live_tail["profit_factor"] >= 0.9)
-            or (shadow_tail["trades"] >= 10 and shadow_tail["net_pnl"] > 0 and shadow_tail["profit_factor"] >= 0.9)
+            or (
+                shadow_tail["trades"] >= recovery_shadow_limit
+                and shadow_tail["net_pnl"] > 0
+                and shadow_tail["profit_factor"] >= 0.9
+            )
         )
         both_recovering = (
             live_tail["trades"] >= 3
-            and shadow_tail["trades"] >= 10
+            and shadow_tail["trades"] >= recovery_shadow_limit
             and live_tail["net_pnl"] > 0
             and shadow_tail["net_pnl"] > 0
             and live_tail["profit_factor"] >= 1.0
@@ -227,6 +286,17 @@ def global_performance_guard(
         "rolling_losses": rolling_losses,
         "tail_losses": tail_losses,
         "equity": equity,
+        "active_strategy_family": V3_FAMILY,
+        "active_strategy_version": current_version,
+        "live_evidence_scope": raw.get("live_scope"),
+        "shadow_evidence_scope": raw.get("shadow_scope"),
+        "recovery_requirements": {
+            "shadow_trades": recovery_shadow_limit,
+            "shadow_net_positive": True,
+            "shadow_profit_factor": 0.9,
+            "live_tail_trades": max(3, min_live // 2),
+            "live_profit_factor": 0.9,
+        },
         "reason": reason,
     }
 

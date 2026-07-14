@@ -74,6 +74,8 @@ class TradingConfig(BaseModel):
     performance_guard_recovery_level_1_multiplier: float = Field(default=0.20, ge=0.01, le=1)
     performance_guard_recovery_level_2_multiplier: float = Field(default=0.40, ge=0.01, le=1)
     performance_guard_recovery_level_3_multiplier: float = Field(default=0.70, ge=0.01, le=1)
+    performance_guard_current_release_only: bool = True
+    performance_guard_recovery_shadow_trades: int = Field(default=20, ge=10, le=500)
     strategy_evidence_enabled: bool = True
     strategy_evidence_window_hours: int = Field(default=24, ge=1, le=720)
     strategy_evidence_live_confirm_trades: int = Field(default=8, ge=1, le=200)
@@ -529,7 +531,7 @@ class TradingConfig(BaseModel):
     opportunity_v3_credit_min_multiplier: float = Field(default=0.80, ge=0.01, le=2)
     opportunity_v3_credit_cooldown_min_multiplier: float = Field(default=0.35, ge=0.01, le=1)
     opportunity_v3_credit_max_multiplier: float = Field(default=1.20, ge=0.1, le=2)
-    opportunity_v31_challenger_enabled: bool = True
+    opportunity_v31_challenger_enabled: bool = False
     opportunity_v31_medium_pool_limit: int = Field(default=12, ge=1, le=50)
     opportunity_v31_bar_cache_seconds: int = Field(default=600, ge=60, le=3600)
     opportunity_v31_min_path_efficiency: float = Field(default=0.18, ge=0, le=1)
@@ -537,6 +539,23 @@ class TradingConfig(BaseModel):
     opportunity_v31_min_closed_trades: int = Field(default=100, ge=10, le=10000)
     opportunity_v31_min_profit_factor: float = Field(default=1.15, ge=0, le=100)
     opportunity_v31_live_enabled: bool = False
+    opportunity_v33_challenger_enabled: bool = True
+    opportunity_v33_strategy_version: str = "v3.3-candidate"
+    opportunity_v33_min_score: float = Field(default=68.0, ge=0, le=100)
+    opportunity_v33_min_cost_ratio: float = Field(default=2.5, ge=0, le=100)
+    opportunity_v33_min_medium_path_efficiency: float = Field(default=0.18, ge=0, le=1)
+    opportunity_v33_pullback_min_flow: float = Field(default=0.50, ge=0, le=1)
+    opportunity_v33_pullback_min_volume_acceleration: float = Field(default=0.90, ge=0, le=100)
+    opportunity_v33_breakout_min_score: float = Field(default=70.0, ge=0, le=100)
+    opportunity_v33_prebreakout_min_score: float = Field(default=68.0, ge=0, le=100)
+    opportunity_v33_panic_pullback_only: bool = True
+    opportunity_v33_momentum_shadow_enabled: bool = True
+    opportunity_v33_pullback_take_profit_atr: float = Field(default=2.4, ge=0.1, le=20)
+    opportunity_v33_pullback_max_hold_bars: int = Field(default=18, ge=1, le=200)
+    opportunity_v33_validation_min_trades: int = Field(default=300, ge=10, le=100000)
+    opportunity_v33_validation_min_hours: float = Field(default=72, ge=1, le=8760)
+    opportunity_v33_validation_min_profit_factor: float = Field(default=1.15, ge=0, le=100)
+    opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     v3_credit_score_weight: float = Field(default=0.15, ge=0, le=2)
     v3_credit_quick_stop_seconds: int = Field(default=300, ge=30, le=3600)
     v3_credit_win_reward: float = Field(default=4.0, ge=0, le=30)

@@ -2,6 +2,18 @@
 
 This file tracks local verification for the two-stage futures system.
 
+## 2026-07-14 v0.7.0 V3.3 Paired Shadow
+
+- V3.2 remains the only active live release; V3.3 is registered as a shadow-only challenger and V3.1 is archived.
+- Active and challenger policies can record the same symbol, direction, entry type and time bucket with one shared opportunity ID.
+- The global performance guard reads only the active V3.2 release when versioned evidence exists; archived profits cannot hide a bad current release.
+- V3.3 reuses the existing scan snapshot and cached 1h shortlist, so it adds no order calls and no full-universe REST fan-out.
+- Dashboard review now separates current recovery evidence, candidate validation and archived history in Chinese.
+- `python -m compileall -q app`: passed.
+- `python -m pytest -q`: `200 passed` (one existing local `requests` dependency compatibility warning).
+- `npm run build`: passed; output remains split into business, React and chart chunks.
+- `git diff --check`: passed; Git reported only Windows LF/CRLF conversion notices.
+
 ## 2026-07-13 v0.6.0 V3.2 Evidence Guard
 
 - Severe live losses and peak-equity drawdown independently close new-entry admission; A+ can no longer bypass the global guard.

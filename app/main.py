@@ -33,6 +33,7 @@ from app.runtime_snapshot import read_runtime_snapshot
 from app.scanner import mode_config
 from app.shadow_trading import shadow_summary
 from app.strategy_calibration import calibration_snapshot
+from app.strategy_releases import list_strategy_releases
 from app.stage_modes import all_stage_profiles, stage_profile_for_equity
 from app.stage_simulation import simulate_stage_path
 from app.state_store import load_state, save_state
@@ -64,7 +65,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.6.0")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.7.0")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -245,7 +246,12 @@ def strategy_runs(limit: int = 200) -> dict[str, Any]:
 
 @app.get("/api/shadow-trades", dependencies=[Depends(require_auth)])
 def shadow_trades(limit: int = 100) -> dict[str, Any]:
-    return shadow_summary(limit)
+    return shadow_summary(limit, load_config())
+
+
+@app.get("/api/strategy-releases", dependencies=[Depends(require_auth)])
+def strategy_releases() -> dict[str, Any]:
+    return {"releases": list_strategy_releases(load_config())}
 
 
 @app.get("/api/live-learning", dependencies=[Depends(require_auth)])

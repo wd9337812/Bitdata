@@ -14,11 +14,10 @@ from app.performance_guard import apply_strategy_evidence_to_candidate, observed
 from app.strategy_calibration import calibrate_v3_opportunity
 from app.market_stream import stream_depth, stream_triggers, write_stream_intent
 from app.opportunity_engine import (
-    V31_CHALLENGER_FAMILY,
     V3_STRATEGY_FAMILY,
     build_market_context,
-    build_v31_challenger,
     build_v31_medium_context,
+    build_v33_challenger,
     build_v3_signal,
     score_v3_opportunity,
 )
@@ -129,7 +128,10 @@ def _v31_medium_bars(
     config: dict[str, Any],
 ) -> dict[str, list[list[Any]]]:
     """Load a small cached 1h shortlist; never fan out across the recall universe."""
-    if not config.get("opportunity_v31_challenger_enabled", True):
+    if not (
+        config.get("opportunity_v33_challenger_enabled", True)
+        or config.get("opportunity_v31_challenger_enabled", False)
+    ):
         return {}
     ttl = max(60, int(config.get("opportunity_v31_bar_cache_seconds", 600)))
     limit = max(1, int(config.get("opportunity_v31_medium_pool_limit", 12)))
@@ -2058,7 +2060,7 @@ def scan_growth_candidates(
                         config=config,
                     )
                     opportunity = calibrate_v3_opportunity(opportunity, signal, direction, config)
-                    challenger = build_v31_challenger(
+                    challenger = build_v33_challenger(
                         symbol=symbol,
                         direction=direction,
                         signal=signal,
@@ -2105,7 +2107,8 @@ def scan_growth_candidates(
                         "mode": mode["mode"],
                         "strategy": "opportunity_v3_trend",
                         "strategy_family": V3_STRATEGY_FAMILY,
-                        "strategy_version": opportunity.get("strategy_version"),
+                        "strategy_version": str(config.get("opportunity_v3_strategy_version") or "v3.2"),
+                        "strategy_role": "active",
                         "strategy_generation": "v3",
                         "score": round(float(opportunity.get("score") or 0), 4),
                         "passed": passed,
@@ -2114,7 +2117,7 @@ def scan_growth_candidates(
                         "entry_type": entry_type,
                         "entry_type_label": signal.get("entry_type_label", "V3 观察"),
                         "opportunity_v3": opportunity,
-                        "v31_challenger": challenger,
+                        "v33_challenger": challenger,
                         "v3_tier": tier,
                         "symbol_quality": quality,
                         "symbol_pool": quality["pool"],
@@ -2554,7 +2557,7 @@ def scan_growth_candidates(
         tier: sum(1 for candidate in candidates if candidate.get("v3_tier") == tier)
         for tier in ("A+", "A", "B", "WATCH")
     }
-    v31_ready = sum(1 for candidate in candidates if (candidate.get("v31_challenger") or {}).get("eligible"))
+    v33_ready = sum(1 for candidate in candidates if (candidate.get("v33_challenger") or {}).get("eligible"))
     blocked_reasons: dict[str, int] = {}
     for candidate in candidates:
         if candidate.get("passed"):
@@ -2614,13 +2617,14 @@ def scan_growth_candidates(
             "observed_cost_floor_pct": round(observed_cost_pct, 6),
             "label": "机会引擎 V3",
         },
-        "opportunity_v31": {
-            "enabled": bool(v3_enabled and config.get("opportunity_v31_challenger_enabled", True)),
-            "strategy_family": V31_CHALLENGER_FAMILY,
+        "opportunity_v33": {
+            "enabled": bool(v3_enabled and config.get("opportunity_v33_challenger_enabled", True)),
+            "strategy_family": V3_STRATEGY_FAMILY,
+            "strategy_version": str(config.get("opportunity_v33_strategy_version") or "v3.3-candidate"),
             "medium_symbols": len(v31_medium_context),
-            "shadow_ready": v31_ready,
+            "shadow_ready": v33_ready,
             "cache_seconds": int(config.get("opportunity_v31_bar_cache_seconds", 600)),
-            "label": "V3.1 中周期挑战者",
+            "label": "V3.3 配对影子挑战者",
         },
         "opportunity_queue": {
             "enabled": bool(config.get("opportunity_queue_enabled", True)),
