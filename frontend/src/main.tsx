@@ -1434,6 +1434,8 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("performance_recovery_normal_live_profit_factor", "恢复正常实盘 PF", "默认 1.05；当前版本实盘达到热身样本且净收益为正后才解除历史兜底")}
           {toggle("equity_guard_release_baseline_enabled", "按策略版本计算回撤仓位", "推荐开启：旧策略回撤继续保留安全告警，但不永久压低新版本恢复试单")}
           {toggle("strategy_evidence_enabled", "影子/实盘双确认", "推荐开启：只有两边都盈利并满足样本量，信用分才允许提高仓位")}
+          {number("strategy_evidence_signal_negative_trades", "信号负向判定样本", "默认 10 笔；只统计当前实盘版本，不混入旧策略")}
+          {toggle("strategy_evidence_recovery_block_negative", "恢复期跳过负向候选", "推荐开启：币种方向或信号类型已有明确负证据时，保留许可证等待下一个机会")}
           {number("strategy_evidence_loss_reentry_minutes", "亏损后同向等待分钟", "默认 30 分钟；避免同一币种同方向连续追假突破")}
           {toggle("adaptive_thresholds_enabled", "市场自适应阈值", "复用现有行情数据，按市场冷热和币种自身成交量动态调整放量与异动门槛")}
           {number("adaptive_volume_spike_floor", "自适应放量下限", "默认 1.2 倍，系统不能无限降低门槛")}

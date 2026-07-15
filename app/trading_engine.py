@@ -403,6 +403,37 @@ def build_stage1_decision(
         }
     if scan_candidate is not None:
         scan_candidate = {**scan_candidate, "global_performance_guard": performance_guard}
+        evidence = scan_candidate.get("strategy_evidence") or {}
+        recovery_status = str(performance_guard.get("status") or "")
+        if (
+            config.get("strategy_evidence_recovery_block_negative", True)
+            and recovery_status.startswith("recovery_")
+            and evidence.get("enabled")
+            and evidence.get("recovery_compatible") is False
+        ):
+            symbol_negative = bool(evidence.get("symbol_negative"))
+            signal_negative = bool((evidence.get("signal") or {}).get("negative"))
+            blockers = []
+            if symbol_negative:
+                blockers.append("该币种/方向的当前版本样本为负")
+            if signal_negative:
+                blockers.append("该信号类型的当前版本样本为负")
+            return {
+                "symbol": symbol,
+                "action": "WAIT",
+                "direction": direction,
+                "signal": signal,
+                "risk": {"allowed": False, "reason": "recovery_candidate_negative_evidence"},
+                "mode": active_mode["mode"],
+                "strategy": active_mode["strategy"],
+                "entry_type": entry_type,
+                "decision_reason": f"恢复许可证继续保留：{'，'.join(blockers) or '当前版本负向证据未通过'}",
+                "primary_block_reason": "recovery_candidate_negative_evidence",
+                "performance_guard": performance_guard,
+                "strategy_evidence": evidence,
+                "protection_plan": protection_plan,
+                "equity": equity,
+            }
     guard = equity_guard_status(config, state, equity, active_mode["mode"])
     target = target_progress(config, state, account_summary)
     if not guard.get("allowed", True):

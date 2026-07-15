@@ -429,13 +429,82 @@ def _evidence_rows(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
-def strategy_evidence_for(symbol: str, direction: str, config: dict[str, Any]) -> dict[str, Any]:
+def _release_evidence_rows(
+    config: dict[str, Any],
+    strategy_family: str,
+    strategy_version: str,
+) -> dict[str, dict[str, Any]]:
+    """Load evidence for one release without mixing superseded strategy results."""
+    hours = float(config.get("strategy_evidence_window_hours", 24))
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff_ms = int(cutoff.timestamp() * 1000)
+    cutoff_iso = cutoff.isoformat()
+    result: dict[str, dict[str, Any]] = {}
+    with connect() as conn:
+        try:
+            ensure_live_release_columns(conn)
+            live_rows = conn.execute(
+                "SELECT symbol, direction, close_time, net_pnl, commission, funding_fee "
+                "FROM live_trade_records WHERE close_time >= ? AND strategy_family = ? "
+                "AND strategy_version = ? AND strategy_role = ?",
+                (cutoff_ms, strategy_family, strategy_version, ACTIVE_ROLE),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            live_rows = []
+        try:
+            ensure_shadow_release_columns(conn)
+            shadow_rows = conn.execute(
+                "SELECT symbol, direction, signal_type, closed_at, net_pnl, estimated_cost "
+                "FROM shadow_trades WHERE status = 'CLOSED' AND closed_at >= ? "
+                "AND strategy_family = ? AND strategy_version = ? AND strategy_role = ?",
+                (cutoff_iso, strategy_family, strategy_version, ACTIVE_ROLE),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            shadow_rows = []
+    for source, rows in (("live", live_rows), ("shadow", shadow_rows)):
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        direction_grouped: dict[str, list[dict[str, Any]]] = {}
+        signal_grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            item = dict(row)
+            direction = str(item.get("direction") or "").upper()
+            grouped.setdefault(f"{str(item.get('symbol') or '').upper()}:{direction}", []).append(item)
+            direction_grouped.setdefault(f"*:{direction}", []).append(item)
+            signal_type = str(item.get("signal_type") or "").lower()
+            if source == "shadow" and signal_type:
+                signal_grouped.setdefault(f"@signal:{signal_type}:{direction}", []).append(item)
+        for key, items in grouped.items():
+            result.setdefault(key, {})[source] = _stats(items)
+            if source == "live":
+                latest = max(items, key=lambda item: int(item.get("close_time") or 0))
+                result[key]["latest_live_close_time"] = int(latest.get("close_time") or 0)
+                result[key]["latest_live_net_pnl"] = float(latest.get("net_pnl") or 0)
+        for key, items in direction_grouped.items():
+            result.setdefault(key, {})[source] = _stats(items)
+        for key, items in signal_grouped.items():
+            result.setdefault(key, {})[source] = _stats(items)
+    return result
+
+
+def strategy_evidence_for(
+    symbol: str,
+    direction: str,
+    config: dict[str, Any],
+    *,
+    strategy_family: str | None = None,
+    strategy_version: str | None = None,
+    signal_type: str | None = None,
+) -> dict[str, Any]:
     if not config.get("strategy_evidence_enabled", True):
         return {"enabled": False, "agreement": "disabled", "risk_cap": 1.0, "boost_allowed": True}
+    release_scoped = bool(strategy_family and strategy_version)
+    cache_key = f"evidence_release:{strategy_family}:{strategy_version}" if release_scoped else "evidence"
     evidence_map = _cached(
-        "evidence",
+        cache_key,
         float(config.get("performance_guard_cache_seconds", 15)),
-        lambda: _evidence_rows(config),
+        lambda: _release_evidence_rows(config, str(strategy_family), str(strategy_version))
+        if release_scoped
+        else _evidence_rows(config),
     )
     item = evidence_map.get(f"{symbol.upper()}:{direction.upper()}", {})
     direction_item = evidence_map.get(f"*:{direction.upper()}", {})
@@ -483,6 +552,17 @@ def strategy_evidence_for(symbol: str, direction: str, config: dict[str, Any]) -
     reentry_blocked = bool(reentry_until and datetime.now(timezone.utc) < reentry_until)
     direction_live = direction_item.get("live") or _stats([])
     direction_shadow = direction_item.get("shadow") or _stats([])
+    signal_item = evidence_map.get(f"@signal:{str(signal_type or '').lower()}:{direction.upper()}", {})
+    signal_shadow = signal_item.get("shadow") or _stats([])
+    signal_negative = (
+        bool(signal_type)
+        and signal_shadow["trades"] >= int(config.get("strategy_evidence_signal_negative_trades", 10))
+        and signal_shadow["net_pnl"] < 0
+        and signal_shadow["profit_factor"] < float(config.get("strategy_evidence_negative_pf", 0.8))
+    )
+    if signal_negative and agreement not in {"negative", "weak"}:
+        agreement = "weak"
+        risk_cap = min(risk_cap, float(config.get("strategy_evidence_weak_risk_cap", 0.5)))
     direction_negative = (
         direction_live["trades"] >= max(5, int(config.get("strategy_evidence_live_negative_trades", 2)))
         and direction_shadow["trades"] >= max(30, int(config.get("strategy_evidence_shadow_negative_trades", 10)))
@@ -503,7 +583,14 @@ def strategy_evidence_for(symbol: str, direction: str, config: dict[str, Any]) -
             "insufficient": "样本不足，禁止信用加仓",
         }[agreement],
         "risk_cap": round(risk_cap, 4),
-        "boost_allowed": live_positive and shadow_positive,
+        "boost_allowed": live_positive and shadow_positive and not signal_negative,
+        "release_scoped": release_scoped,
+        "strategy_family": strategy_family,
+        "strategy_version": strategy_version,
+        "signal_type": signal_type,
+        "signal": {"negative": signal_negative, "shadow": signal_shadow},
+        "symbol_negative": bool(live_negative or shadow_negative),
+        "recovery_compatible": not (live_negative or shadow_negative or signal_negative),
         "reentry_blocked": reentry_blocked,
         "reentry_until": reentry_until.isoformat() if reentry_until else None,
         "live": live,
@@ -521,19 +608,18 @@ def apply_strategy_evidence_to_candidate(candidate: dict[str, Any], config: dict
     direction = str(candidate.get("direction") or "").upper()
     if not symbol or direction not in {"LONG", "SHORT"}:
         return candidate
-    if str(candidate.get("strategy_family") or "") == "extreme_v3_roll":
-        candidate = dict(candidate)
-        candidate["strategy_evidence"] = {
-            "enabled": True,
-            "agreement": "isolated_warmup",
-            "agreement_label": "V3 独立样本积累中",
-            "risk_cap": 1.0,
-            "boost_allowed": False,
-        }
-        message = "证据校验：V3 与旧策略样本隔离，当前只积累本策略实盘与影子结果"
-        candidate["decision_reason"] = f"{candidate.get('decision_reason')}；{message}" if candidate.get("decision_reason") else message
-        return candidate
-    evidence = strategy_evidence_for(symbol, direction, config)
+    strategy_family = str(candidate.get("strategy_family") or "")
+    strategy_version = str(candidate.get("strategy_version") or active_version(config)) if strategy_family == V3_FAMILY else None
+    signal = candidate.get("signal") or {}
+    signal_type = str(candidate.get("entry_type") or signal.get("entry_type") or signal.get("reason") or "") or None
+    evidence = strategy_evidence_for(
+        symbol,
+        direction,
+        config,
+        strategy_family=strategy_family or None,
+        strategy_version=strategy_version,
+        signal_type=signal_type,
+    )
     if not evidence.get("enabled"):
         return candidate
     candidate = dict(candidate)

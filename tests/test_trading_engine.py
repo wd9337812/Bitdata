@@ -223,6 +223,61 @@ def test_yolo_scalp_rejects_non_orderbook_entry_before_live_execution():
     assert decision["risk"]["reason"] == "yolo_orderbook_only"
 
 
+def test_recovery_permit_skips_candidate_with_current_release_negative_evidence(monkeypatch):
+    monkeypatch.setattr(
+        "app.trading_engine.global_performance_guard",
+        lambda config, equity: {
+            "enabled": True,
+            "allowed": True,
+            "status": "recovery_2",
+            "risk_multiplier": 0.4,
+            "reason": "recovery permit active",
+        },
+    )
+    decision = build_stage1_decision(
+        "PUMPUSDT",
+        [],
+        {
+            "growth_mode": "extreme_sprint",
+            "extreme_sprint_enabled": True,
+            "extreme_sprint_confirmation": "ENABLE_EXTREME_SPRINT",
+            "strategy_evidence_recovery_block_negative": True,
+        },
+        {},
+        {"equity": 20, "positions": []},
+        scan_candidate={
+            "symbol": "PUMPUSDT",
+            "mode": "extreme_sprint",
+            "strategy": "opportunity_v3_trend",
+            "strategy_family": "extreme_v3_roll",
+            "strategy_version": "v3.2",
+            "direction": "LONG",
+            "risk_pct": 7,
+            "leverage": 5,
+            "margin_pct": 90,
+            "entry_type": "v3_pullback",
+            "strategy_evidence": {
+                "enabled": True,
+                "agreement": "weak",
+                "recovery_compatible": False,
+                "signal": {"negative": True},
+            },
+            "signal": {
+                "signal": "LONG",
+                "last_price": 1.0,
+                "entry": 1.0,
+                "stop": 0.98,
+                "take_profit": 1.03,
+                "atr": 0.01,
+            },
+        },
+    )
+
+    assert decision["action"] == "WAIT"
+    assert decision["risk"]["reason"] == "recovery_candidate_negative_evidence"
+    assert "许可证继续保留" in decision["decision_reason"]
+
+
 def test_primary_risk_reason_is_not_overwritten_by_order_viability():
     decision = build_stage1_decision(
         "SOLUSDT",

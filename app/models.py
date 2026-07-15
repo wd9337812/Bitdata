@@ -94,7 +94,9 @@ class TradingConfig(BaseModel):
     strategy_evidence_shadow_confirm_pf: float = Field(default=1.2, ge=0, le=20)
     strategy_evidence_live_negative_trades: int = Field(default=2, ge=1, le=200)
     strategy_evidence_shadow_negative_trades: int = Field(default=10, ge=1, le=2000)
+    strategy_evidence_signal_negative_trades: int = Field(default=10, ge=1, le=2000)
     strategy_evidence_negative_pf: float = Field(default=0.8, ge=0, le=20)
+    strategy_evidence_recovery_block_negative: bool = True
     strategy_evidence_positive_risk_cap: float = Field(default=1.15, ge=0, le=2)
     strategy_evidence_weak_risk_cap: float = Field(default=0.50, ge=0, le=1)
     strategy_evidence_negative_risk_cap: float = Field(default=0.25, ge=0, le=1)

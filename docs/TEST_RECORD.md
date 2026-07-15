@@ -2,6 +2,18 @@
 
 This file tracks local verification for the two-stage futures system.
 
+## 2026-07-15 v0.8.1 Release-Scoped Recovery Evidence
+
+- V3 evidence now reads only the active strategy family/version/role instead of disabling symbol evidence to avoid legacy contamination.
+- Current-release signal-type shadow evidence is tracked separately from symbol/direction evidence.
+- During recovery, a candidate with established negative symbol/direction or signal-type evidence is skipped without consuming the recovery permit.
+- The production PUMPUSDT counterfactual was checked: before the live entry, 19 current-release LONG shadow samples had net PnL -1.1015U and PF 0.599, which would have blocked the later losing live recovery probe.
+- No Binance REST request or WebSocket subscription was added; the new evidence query uses the existing 15-second local SQLite cache.
+- `python -m pytest -q`: `213 passed` (one existing local `requests` dependency compatibility warning).
+- `python -m compileall -q app`: passed.
+- `npm run build`: passed.
+
+
 ## 2026-07-15 v0.8.0 Persistent Recovery Permit
 
 - Active V3.2 shadow evidence now issues a persistent, expiring recovery permit after stability confirmation, so recovery evidence and a valid candidate no longer need to occur in the same scan.

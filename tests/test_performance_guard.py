@@ -190,6 +190,35 @@ def test_positive_evidence_is_required_before_credit_boost(monkeypatch, tmp_path
     assert candidate["risk_pct"] == 11.5
 
 
+def test_v3_evidence_uses_only_current_release_and_flags_bad_signal(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _seed_shadow("PUMPUSDT", "LONG", [0.4] * 20, "v3_pullback", version="v3.1", role="archived")
+    _seed_shadow("PUMPUSDT", "LONG", [-0.1] * 10, "v3_pullback", version="v3.2", role="active")
+    clear_performance_cache()
+
+    candidate = apply_strategy_evidence_to_candidate(
+        {
+            "symbol": "PUMPUSDT",
+            "direction": "LONG",
+            "strategy_family": "extreme_v3_roll",
+            "strategy_version": "v3.2",
+            "entry_type": "v3_pullback",
+            "passed": True,
+            "risk_pct": 10,
+        },
+        {"opportunity_v3_strategy_version": "v3.2"},
+    )
+
+    evidence = candidate["strategy_evidence"]
+    assert evidence["release_scoped"] is True
+    assert evidence["shadow"]["trades"] == 10
+    assert evidence["shadow"]["net_pnl"] < 0
+    assert evidence["signal"]["negative"] is True
+    assert evidence["symbol_negative"] is True
+    assert evidence["recovery_compatible"] is False
+    assert candidate["risk_pct"] == 5.0
+
+
 def test_observed_cost_uses_recent_live_fee_floor(monkeypatch, tmp_path):
     _prepare(monkeypatch, tmp_path)
     _seed_live("COSTUSDT", "LONG", [0.1] * 4, commission=0.04)
