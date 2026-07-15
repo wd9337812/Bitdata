@@ -79,4 +79,41 @@ def test_v32_and_v33_paired_shadow_trades_can_coexist(monkeypatch, tmp_path):
     assert {row["strategy_role"] for row in summary["trades"]} == {"active", "challenger"}
     assert len({row["opportunity_id"] for row in summary["trades"]}) == 1
     assert summary["active_release"]["strategy_version"] == "v3.2"
-    assert summary["challenger_release"]["strategy_version"] == "v3.3-candidate"
+    assert summary["challenger_release"]["strategy_version"] == "v4.0-candidate"
+
+
+def test_v4_decision_exploration_and_control_are_separate(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    base = {
+        **_candidate(100),
+        "entry_type": "v3_breakout",
+        "signal": {"signal": "LONG", "last_price": 100, "stop": 95, "take_profit": 105},
+        "strategy_role": "challenger",
+        "opportunity_v4": {"shadow_eligible": True, "score": 80, "feature_schema_version": "v4.0"},
+    }
+    rows = [
+        {**base, "strategy_family": "extreme_v4_roll", "strategy_version": "v4.0-candidate", "evidence_type": "decision"},
+        {**base, "strategy_family": "extreme_v4_roll", "strategy_version": "v4.0-candidate", "evidence_type": "exploration"},
+        {
+            **base,
+            "strategy_family": "extreme_v4_control",
+            "strategy_version": "simple-breakout-v1",
+            "evidence_type": "paired_control",
+            "shadow_force_eligible": True,
+        },
+    ]
+    config = {
+        "shadow_trading_enabled": True,
+        "opportunity_v4_strategy_version": "v4.0-candidate",
+        "shadow_dedupe_minutes": 10,
+        "shadow_max_hold_minutes": 120,
+        "shadow_reference_notional_usdt": 20,
+        "shadow_round_trip_cost_pct": 0.12,
+    }
+
+    result = update_shadow_trades(rows, config)
+    summary = shadow_summary(config=config)
+
+    assert result["opened"] == 3
+    assert {row["evidence_type"] for row in summary["trades"]} == {"decision", "exploration", "paired_control"}
+    assert len({row["opportunity_id"] for row in summary["trades"]}) == 1

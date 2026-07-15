@@ -20,6 +20,7 @@ from app.strategy_releases import (
     parameter_fingerprint,
     release_id,
 )
+from app.opportunity_v4 import V4_CONTROL_FAMILY, V4_STRATEGY_FAMILY
 from app.telemetry import connect, now_iso
 
 
@@ -68,6 +69,12 @@ def ensure_shadow_tables(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN market_regime TEXT")
     if "opportunity_score" not in columns:
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN opportunity_score REAL")
+    if "evidence_type" not in columns:
+        conn.execute("ALTER TABLE shadow_trades ADD COLUMN evidence_type TEXT")
+    if "estimated_fee" not in columns:
+        conn.execute("ALTER TABLE shadow_trades ADD COLUMN estimated_fee REAL DEFAULT 0")
+    if "estimated_slippage" not in columns:
+        conn.execute("ALTER TABLE shadow_trades ADD COLUMN estimated_slippage REAL DEFAULT 0")
     ensure_release_schema(conn)
     ensure_shadow_release_columns(conn)
 
@@ -87,6 +94,7 @@ def _dedupe_key(candidate: dict[str, Any], bucket_minutes: int) -> str:
             str(candidate.get("strategy_family") or "legacy_mixed"),
             str(candidate.get("strategy_version") or "legacy"),
             str(candidate.get("strategy_role") or "legacy"),
+            str(candidate.get("evidence_type") or "decision"),
             str(candidate.get("symbol") or "").upper(),
             str(candidate.get("direction") or "LONG").upper(),
             str(candidate.get("entry_type") or "watch"),
@@ -163,6 +171,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 str(row["strategy_family"] or "legacy_mixed"),
                 str(row["strategy_version"] or "legacy"),
                 str(row["strategy_role"] or "legacy"),
+                str(row["evidence_type"] or "decision"),
                 str(row["symbol"]).upper(),
                 str(row["direction"]).upper(),
                 str(row["signal_type"] or "watch"),
@@ -211,6 +220,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                     str(item.get("strategy_family") or "legacy_mixed"),
                     str(item.get("strategy_version") or "legacy"),
                     str(item.get("strategy_role") or "legacy"),
+                    str(item.get("evidence_type") or "decision"),
                     str(item["symbol"]).upper(),
                     direction,
                     str(item.get("signal_type") or "watch"),
@@ -227,28 +237,34 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
             direction = str(candidate.get("direction") or "LONG").upper()
             v3 = candidate.get("opportunity_v3") or {}
             v33 = candidate.get("opportunity_v33") or {}
+            v4 = candidate.get("opportunity_v4") or {}
             strategy_version = str(candidate.get("strategy_version") or "legacy")
             strategy_role = str(candidate.get("strategy_role") or "legacy")
+            evidence_type = str(candidate.get("evidence_type") or "decision")
             is_v3 = candidate.get("strategy_family") == V3_FAMILY and strategy_role == ACTIVE_ROLE
             is_v33 = candidate.get("strategy_family") == V3_FAMILY and strategy_role == CHALLENGER_ROLE
+            is_v4 = candidate.get("strategy_family") == V4_STRATEGY_FAMILY
+            is_v4_control = candidate.get("strategy_family") == V4_CONTROL_FAMILY
             v31 = candidate.get("opportunity_v31") or candidate.get("v31_challenger") or {}
             is_v31 = candidate.get("strategy_family") == "extreme_v31_challenger"
             entry = _candidate_price(candidate)
             stop = float(signal.get("stop") or 0)
             take = float(signal.get("take_profit") or 0)
             if (
-                float(candidate.get("score") or 0)
+                (not (is_v4 or is_v4_control) and float(candidate.get("score") or 0)
                 < (
                     float(config.get("opportunity_v33_min_score", 68.0))
                     if is_v33
                     else float(config.get("opportunity_v31_shadow_min_score", 68.0))
                     if is_v31
                     else min_score
-                )
+                ))
                 or (is_v3 and signal.get("signal") != direction)
                 or (is_v3 and not v3.get("eligible"))
                 or (is_v33 and signal.get("signal") != direction)
                 or (is_v33 and not v33.get("eligible"))
+                or (is_v4 and not v4.get("shadow_eligible"))
+                or (is_v4_control and not candidate.get("shadow_force_eligible"))
                 or (is_v31 and signal.get("signal") != direction)
                 or (is_v31 and not v31.get("eligible"))
                 or entry <= 0
@@ -262,6 +278,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 str(candidate.get("strategy_family") or "legacy_mixed"),
                 strategy_version,
                 strategy_role,
+                evidence_type,
                 str(candidate.get("symbol") or "").upper(),
                 str(candidate.get("direction") or "LONG").upper(),
                 str(candidate.get("entry_type") or "watch"),
@@ -272,7 +289,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 strategy_family = str(candidate.get("strategy_family") or "legacy_mixed")
                 market_regime = str((candidate.get("market_state") or {}).get("state") or "unknown")
                 candidate_hold_minutes = hold_minutes
-                if strategy_family in {V3_FAMILY, "extreme_v31_challenger"}:
+                if strategy_family in {V3_FAMILY, V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY, "extreme_v31_challenger"}:
                     protection = signal.get("protection_profile") or {}
                     candidate_hold_minutes = min(
                         hold_minutes,
@@ -283,10 +300,10 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                     INSERT INTO shadow_trades (
                         dedupe_key, opened_at, symbol, direction, signal_type, mode, status,
                         blocked_reason, entry, stop, take_profit, last_price, high_price, low_price, notional,
-                        estimated_cost, expires_at, strategy_family, strategy_version, strategy_role,
+                        estimated_cost, estimated_fee, estimated_slippage, expires_at, strategy_family, strategy_version, strategy_role,
                         release_id, opportunity_id, parameter_fingerprint, feature_schema_version,
-                        market_regime, opportunity_score, payload
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        evidence_type, market_regime, opportunity_score, payload
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         key,
@@ -304,6 +321,8 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         entry,
                         notional,
                         notional * cost_pct,
+                        notional * float(config.get("taker_fee_pct_round_trip", 0.08)) / 100,
+                        max(0.0, notional * cost_pct - notional * float(config.get("taker_fee_pct_round_trip", 0.08)) / 100),
                         (now + timedelta(minutes=candidate_hold_minutes)).isoformat(),
                         strategy_family,
                         strategy_version,
@@ -311,9 +330,10 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         release_id(strategy_family, strategy_version),
                         str(candidate.get("opportunity_id") or _opportunity_id(candidate, bucket_minutes)),
                         str(candidate.get("parameter_fingerprint") or parameter_fingerprint(config, strategy_role)),
-                        "v2",
+                        str((v4 or {}).get("feature_schema_version") or "v2"),
+                        evidence_type,
                         market_regime,
-                        float((v33 if is_v33 else v31 if is_v31 else v3).get("score") or candidate.get("score") or 0),
+                        float((v4 if is_v4 else v33 if is_v33 else v31 if is_v31 else v3).get("score") or candidate.get("score") or 0),
                         json.dumps(
                             {
                                 "score": candidate.get("score"),
@@ -325,6 +345,10 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                                 "strategy_role": strategy_role,
                                 "tier": candidate.get("v3_tier") or v3.get("tier"),
                                 "entry_type": candidate.get("entry_type"),
+                                "evidence_type": evidence_type,
+                                "rank_bucket": v4.get("rank_bucket"),
+                                "expected_net_pct": v4.get("expected_net_pct"),
+                                "lower_expected_net_pct": v4.get("lower_expected_net_pct"),
                                 "features": {
                                     "spread_pct": (candidate.get("depth") or {}).get("spread_pct"),
                                     "depth_notional": (candidate.get("depth") or {}).get("depth_notional"),
@@ -442,6 +466,21 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             ORDER BY MAX(id) DESC
             """
         ).fetchall()
+        evidence_rows = conn.execute(
+            """
+            SELECT COALESCE(evidence_type, 'decision') AS evidence_type,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) AS closed,
+                   SUM(CASE WHEN status = 'CLOSED' AND net_pnl > 0 THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN status = 'CLOSED' THEN net_pnl ELSE 0 END) AS net_pnl,
+                   SUM(CASE WHEN status = 'CLOSED' THEN estimated_cost ELSE 0 END) AS cost,
+                   SUM(CASE WHEN status = 'CLOSED' AND net_pnl > 0 THEN net_pnl ELSE 0 END) AS gross_wins,
+                   -SUM(CASE WHEN status = 'CLOSED' AND net_pnl < 0 THEN net_pnl ELSE 0 END) AS gross_losses
+            FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ?
+            GROUP BY COALESCE(evidence_type, 'decision')
+            """,
+            (V4_STRATEGY_FAMILY, candidate_version),
+        ).fetchall()
         active_rows = [
             dict(row)
             for row in conn.execute(
@@ -455,7 +494,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             for row in conn.execute(
                 "SELECT * FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ? "
                 "AND strategy_role = 'challenger' ORDER BY id DESC LIMIT ?",
-                (V3_FAMILY, candidate_version, max(500, int(config.get("opportunity_v33_validation_min_trades", 300)) * 3)),
+                (V4_STRATEGY_FAMILY, candidate_version, max(500, int(config.get("opportunity_v4_admission_min_trades", 40)) * 10)),
             ).fetchall()
         ]
     stats = dict(aggregate) if aggregate else {}
@@ -485,6 +524,16 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         item["profit_factor"] = gross_wins / gross_losses if gross_losses else (999.0 if gross_wins > 0 else 0.0)
         item["release_id"] = release_id(str(item["strategy_family"]), str(item["strategy_version"]))
         by_release.append(item)
+    by_evidence_type = []
+    for row in evidence_rows:
+        item = dict(row)
+        item_closed = int(item.get("closed") or 0)
+        item_wins = int(item.get("wins") or 0)
+        gross_wins = float(item.get("gross_wins") or 0)
+        gross_losses = float(item.get("gross_losses") or 0)
+        item["win_rate"] = item_wins / item_closed * 100 if item_closed else 0.0
+        item["profit_factor"] = gross_wins / gross_losses if gross_losses else (999.0 if gross_wins > 0 else 0.0)
+        by_evidence_type.append(item)
     trades = []
     for row in rows:
         item = dict(row)
@@ -498,10 +547,10 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
     shadow_window = int(config.get("performance_guard_shadow_window_trades", 100))
     recovery_window = int(config.get("performance_guard_recovery_shadow_trades", 20))
     candidate_stats = _shadow_stats(candidate_rows)
-    min_trades = int(config.get("opportunity_v33_validation_min_trades", 300))
-    min_hours = float(config.get("opportunity_v33_validation_min_hours", 72))
-    min_pf = float(config.get("opportunity_v33_validation_min_profit_factor", 1.15))
-    min_regimes = int(config.get("opportunity_v33_validation_min_regimes", 2))
+    min_trades = int(config.get("opportunity_v4_admission_min_trades", 40))
+    min_hours = 24.0
+    min_pf = float(config.get("opportunity_v4_admission_min_profit_factor", 1.10))
+    min_regimes = 2
     candidate_validation = {
         "min_trades": min_trades,
         "min_hours": min_hours,
@@ -520,6 +569,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         "stats": stats,
         "by_strategy": by_strategy,
         "by_release": by_release,
+        "by_evidence_type": by_evidence_type,
         "active_release": {
             "strategy_family": V3_FAMILY,
             "strategy_version": current_version,
@@ -529,7 +579,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             "recovery": _shadow_stats(active_closed[:recovery_window]),
         },
         "challenger_release": {
-            "strategy_family": V3_FAMILY,
+            "strategy_family": V4_STRATEGY_FAMILY,
             "strategy_version": candidate_version,
             "strategy_role": CHALLENGER_ROLE,
             "all": candidate_stats,

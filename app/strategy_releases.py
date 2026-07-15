@@ -11,6 +11,7 @@ from app.telemetry import connect, now_iso
 
 V3_FAMILY = "extreme_v3_roll"
 V31_ARCHIVE_FAMILY = "extreme_v31_challenger"
+V4_FAMILY = "extreme_v4_roll"
 ACTIVE_ROLE = "active"
 CHALLENGER_ROLE = "challenger"
 ARCHIVED_ROLE = "archived"
@@ -33,10 +34,11 @@ _ACTIVE_FINGERPRINT_KEYS = (
 )
 
 _CHALLENGER_FINGERPRINT_KEYS = _ACTIVE_FINGERPRINT_KEYS + (
-    "opportunity_v33_min_cost_ratio",
-    "opportunity_v33_min_medium_path_efficiency",
-    "opportunity_v33_pullback_min_flow",
-    "opportunity_v33_pullback_min_volume_acceleration",
+    "opportunity_v4_decision_min_rank_percentile",
+    "opportunity_v4_admission_min_trades",
+    "opportunity_v4_admission_min_profit_factor",
+    "opportunity_v4_admission_min_lower_expectancy_pct",
+    "opportunity_v4_evidence_lookback_hours",
 )
 
 
@@ -45,7 +47,7 @@ def active_version(config: dict[str, Any]) -> str:
 
 
 def challenger_version(config: dict[str, Any]) -> str:
-    return str(config.get("opportunity_v33_strategy_version") or "v3.3-candidate")
+    return str(config.get("opportunity_v4_strategy_version") or "v4.0-candidate")
 
 
 def release_id(family: str, version: str) -> str:
@@ -98,6 +100,7 @@ def ensure_shadow_release_columns(conn: sqlite3.Connection) -> None:
     _add_column(conn, "shadow_trades", "opportunity_id TEXT")
     _add_column(conn, "shadow_trades", "parameter_fingerprint TEXT")
     _add_column(conn, "shadow_trades", "feature_schema_version TEXT")
+    _add_column(conn, "shadow_trades", "evidence_type TEXT")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_shadow_release_status "
         "ON shadow_trades(strategy_family, strategy_version, strategy_role, status, id DESC)"
@@ -189,7 +192,7 @@ def initialize_strategy_releases(config: dict[str, Any]) -> dict[str, Any]:
         )
         _register(
             conn,
-            family=V3_FAMILY,
+            family=V4_FAMILY,
             version=challenger,
             role=CHALLENGER_ROLE,
             status="shadow",
@@ -205,10 +208,19 @@ def initialize_strategy_releases(config: dict[str, Any]) -> dict[str, Any]:
             fingerprint="legacy",
             config={},
         )
+        _register(
+            conn,
+            family=V3_FAMILY,
+            version=str(config.get("opportunity_v33_strategy_version") or "v3.3-candidate"),
+            role=ARCHIVED_ROLE,
+            status="retired",
+            fingerprint="legacy-v33",
+            config={},
+        )
         conn.commit()
     return {
         "active_release": release_id(V3_FAMILY, active),
-        "challenger_release": release_id(V3_FAMILY, challenger),
+        "challenger_release": release_id(V4_FAMILY, challenger),
         "active_parameter_fingerprint": active_fingerprint,
         "challenger_parameter_fingerprint": challenger_fingerprint,
     }
@@ -241,7 +253,7 @@ def migrate_shadow_release_metadata(conn: sqlite3.Connection, config: dict[str, 
         WHERE strategy_version IS NULL OR strategy_version = ''
            OR strategy_role IS NULL OR strategy_role = ''
         """,
-        (V31_ARCHIVE_FAMILY, V3_FAMILY, active, V3_FAMILY, challenger),
+        (V31_ARCHIVE_FAMILY, V3_FAMILY, active, V4_FAMILY, challenger),
     )
     conn.execute(
         """
@@ -257,7 +269,7 @@ def migrate_shadow_release_metadata(conn: sqlite3.Connection, config: dict[str, 
            OR parameter_fingerprint IS NULL OR parameter_fingerprint = ''
            OR feature_schema_version IS NULL OR feature_schema_version = ''
         """,
-        (V3_FAMILY, active, active_fingerprint, V3_FAMILY, challenger, challenger_fingerprint),
+        (V3_FAMILY, active, active_fingerprint, V4_FAMILY, challenger, challenger_fingerprint),
     )
     return conn.total_changes - before
 

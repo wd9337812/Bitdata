@@ -34,7 +34,7 @@ type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
 type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[]; v3_scores?: any[]; v3_calibration?: Record<string, any> };
 type LiveReactionData = { reactions: any[]; recent_trades: any[] };
-type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; by_release?: any[]; active_release?: Record<string, any>; challenger_release?: Record<string, any>; trades: any[] };
+type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; by_release?: any[]; by_evidence_type?: any[]; active_release?: Record<string, any>; challenger_release?: Record<string, any>; trades: any[] };
 type SimulationData = Record<string, any>;
 type ReportData = Record<string, any>;
 
@@ -575,6 +575,7 @@ function SignalExplain({ best }: { best?: any }) {
   const protectionTakeAtr = protection.take_profit_atr ?? profile.take_profit_atr;
   const scalp = best.scalp_signal || {};
   const opportunity = best.opportunity_v3 || {};
+  const v4 = best.opportunity_v4 || {};
   return (
     <div className="panel signal-explain">
       <h2>当前策略解释</h2>
@@ -586,6 +587,9 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>离触发价</span><strong>{fmt(signal.distance_to_trigger_pct, 3)}%</strong></div>
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
         <div><span>V3 机会档位</span><strong>{best.v3_tier || "-"}</strong></div>
+        <div><span>V4 本轮排名</span><strong>{v4.enabled ? `前 ${fmt((1 - Number(v4.rank_percentile || 0)) * 100, 0)}%` : "-"}</strong></div>
+        <div><span>V4 保守净期望</span><strong>{v4.enabled ? `${fmt(v4.lower_expected_net_pct, 3)}%` : "-"}</strong></div>
+        <div><span>V4 同类证据</span><strong>{v4.enabled ? `${fmt(v4.evidence?.selected?.trades, 0)} 笔 · ${pfLabel(v4.evidence?.selected?.profit_factor, v4.evidence?.selected?.trades)}` : "-"}</strong></div>
         <div><span>市场状态</span><strong>{opportunity.market_regime_label || best.market_state?.label || "-"}</strong></div>
         <div><span>真实收益/成本</span><strong>{opportunity.enabled ? `${fmt(opportunity.cost_ratio, 2)}x` : fmt(best.cost_ratio, 2)}</strong></div>
         <div><span>{"\u4fdd\u62a4\u6863\u6848"}</span><strong>{protectionLabel}</strong></div>
@@ -648,15 +652,15 @@ function FunnelPanel({ funnel }: { funnel: any }) {
 
 function OpportunityV3Panel({ funnel }: { funnel: any }) {
   const v3 = funnel?.opportunity_v3 || {};
-  const v33 = funnel?.opportunity_v33 || {};
+  const v4 = funnel?.opportunity_v4 || {};
   if (!v3.enabled) return null;
   const tiers = v3.tiers || {};
   return (
     <div className="panel">
       <div className="panel-head">
         <div>
-          <h2>机会引擎 V3</h2>
-          <p>A+ 只有中周期同向且当前版本证据达标后才会放大；A 可折扣实盘，B 只做影子验证，旧 V2 结果不会混入。</p>
+          <h2>V3 实盘基线 + V4 候选实验</h2>
+          <p>V3 暂时保持实盘基线；V4 按扣费后净期望和同类证据重新排序，并分别记录决策、探索和对照样本，不再用混合影子 PF 一票否决所有币。</p>
         </div>
       </div>
       <div className="metrics">
@@ -666,7 +670,8 @@ function OpportunityV3Panel({ funnel }: { funnel: any }) {
         <MetricCard title="B 影子机会" value={`${fmt(tiers.B, 0)} 个`} sub="不下实单，先累计真实行情结果" />
         <MetricCard title="继续观察" value={`${fmt(tiers.WATCH, 0)} 个`} sub="结构或成本尚未达到准入" />
         <MetricCard title="真实成本线" value={`${fmt(v3.observed_cost_floor_pct, 3)}%`} sub="手续费、资金费和历史滑点的保守估计" />
-        <MetricCard title="V3.3 配对影子" value={`${fmt(v33.shadow_ready, 0)} 个候选`} sub={`中周期覆盖 ${fmt(v33.medium_symbols, 0)} 个精排币；与 V3.2 共用行情，不会实盘`} tone={Number(v33.shadow_ready || 0) > 0 ? "positive" : ""} />
+        <MetricCard title="V4 可观察候选" value={`${fmt(v4.shadow_ready, 0)} 个`} sub="会进入公平影子实验，不要求先通过旧 V3 分数" tone={Number(v4.shadow_ready || 0) > 0 ? "positive" : ""} />
+        <MetricCard title="V4 候选级准入" value={`${fmt(v4.admitted, 0)} 个`} sub={v4.live_enabled ? "只有同类扣费后证据达标的趋势突破可晋级" : "当前只积累证据，不会自动接管实盘"} tone={Number(v4.admitted || 0) > 0 ? "positive" : ""} />
       </div>
     </div>
   );
@@ -695,23 +700,12 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
             <th>币种</th>
             <th>方向</th>
             <th>信号类型</th>
-            {!compact && <th>机会档位</th>}
-            <th>评分</th>
-            <th>实盘信用</th>
-            <th>实时风控</th>
+            <th>V4排名</th>
+            <th>保守净期望</th>
+            <th>同类证据</th>
             {!compact && <th>不开仓原因</th>}
             {!compact && <th>距离触发</th>}
-            {!compact && <th>胜率</th>}
-            {!compact && <th>净收益</th>}
-            {!compact && <th>质量池</th>}
-            {!compact && <th>质量分</th>}
-            {!compact && <th>质量倍率</th>}
-            {!compact && <th>质量拆分</th>}
-            {!compact && <th>V3 评分拆分</th>}
             {!compact && <th>市场状态</th>}
-            {!compact && <th>盘口</th>}
-            {!compact && <th>扣费后</th>}
-            <th>PF</th>
             <th>成本比</th>
             <th>风险%</th>
           </tr>
@@ -723,26 +717,12 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               <td className="symbol">{row.symbol}</td>
               <td>{signalLabel(row.direction || row.signal?.signal)}</td>
               <td>{entryTypeLabel(row, "-")}</td>
-              {!compact && <td>{row.v3_tier || "-"}<small>{row.opportunity_v3?.calibration?.label || row.opportunity_v3?.entry_phase || ""}</small></td>}
-              <td>{fmt(row.score, 2)}</td>
-              <td>
-                {row.live_credit ? `${fmt(row.live_credit.score, 1)} · ${row.live_credit.status_label || "-"}` : "-"}
-                {row.legacy_live_credit ? <small>旧信用 {fmt(row.legacy_live_credit.score, 1)}</small> : null}
-              </td>
-              <td>{row.live_reaction ? `${row.live_reaction.status_label || "-"} · ${fmt(row.live_reaction.risk_multiplier, 2)}x` : "-"}</td>
+              <td>{row.opportunity_v4?.enabled ? `前 ${fmt((1 - Number(row.opportunity_v4.rank_percentile || 0)) * 100, 0)}%` : "-"}<small>{row.opportunity_v4?.rank_bucket || ""}</small></td>
+              <td className={Number(row.opportunity_v4?.lower_expected_net_pct || 0) >= 0 ? "positive-text" : "negative-text"}>{row.opportunity_v4?.enabled ? `${fmt(row.opportunity_v4.lower_expected_net_pct, 3)}%` : "-"}</td>
+              <td>{row.opportunity_v4?.enabled ? `${fmt(row.opportunity_v4.evidence?.selected?.trades, 0)} 笔` : "-"}<small>{row.opportunity_v4?.enabled ? pfLabel(row.opportunity_v4.evidence?.selected?.profit_factor, row.opportunity_v4.evidence?.selected?.trades) : ""}</small></td>
               {!compact && <td className="reason-cell">{row.decision_reason || row.reason}</td>}
               {!compact && <td>{fmt(row.signal?.distance_to_trigger_pct, 3)}%</td>}
-              {!compact && <td>{row.strategy_generation === "v3" ? "离线验证" : `${fmt(row.recent?.win_rate, 1)}%`}</td>}
-              {!compact && <td>{row.strategy_generation === "v3" ? "离线验证" : `${fmt(row.recent?.net_pct, 2)}%`}</td>}
-              {!compact && <td>{qualityPoolLabel(row.symbol_quality?.pool)}</td>}
-              {!compact && <td>{fmt(row.symbol_quality?.score, 2)}</td>}
-              {!compact && <td>{fmt(row.quality_risk_multiplier ?? row.symbol_quality?.quality_risk_multiplier, 2)}x</td>}
-              {!compact && <td className="reason-cell">{qualitySummary(row.symbol_quality)}</td>}
-              {!compact && <td className="reason-cell">{v3ScoreSummary(row)}</td>}
               {!compact && <td>{row.opportunity_v3?.market_regime_label || row.market_state?.label || "-"}</td>}
-              {!compact && <td>{row.scalp_signal?.enabled ? `点差 ${fmt(row.scalp_signal.spread_pct, 3)}% / 失衡 ${fmt(row.scalp_signal.directed_imbalance, 2)}` : "-"}</td>}
-              {!compact && <td>{row.scalp_signal?.enabled ? `${fmt(row.scalp_signal.net_profit_pct, 3)}%` : "-"}</td>}
-              <td>{row.strategy_generation === "v3" ? "离线" : fmt(row.recent?.profit_factor, 2)}</td>
               <td>{fmt(row.cost_ratio, 2)}</td>
               <td>{fmt(row.risk_pct, 2)}%</td>
             </tr>
@@ -884,8 +864,8 @@ function ReviewPanel({ chartData, snapshots, learning, shadow, reaction, onSync 
     <section className="stack">
       <div className="metrics">
         <MetricCard title="最新权益" value={`${fmt(snapshots.at(-1)?.equity, 4)} U`} />
-        <MetricCard title={`${active.strategy_version || "V3.2"} 当前影子`} value={`${fmt(activeRecent.closed, 0)} 笔 · PF ${fmt(activeRecent.profit_factor, 2)}`} sub={`近期净收益 ${fmt(activeRecent.net_pnl, 4)} U，只对应正在执行的版本`} tone={Number(activeRecent.net_pnl || 0) >= 0 ? "positive" : "negative"} />
-        <MetricCard title={`${challenger.strategy_version || "V3.3"} 候选影子`} value={`${fmt(challengerAll.closed, 0)} 笔 · PF ${fmt(challengerAll.profit_factor, 2)}`} sub="只做同场模拟，不会自动接管实盘" tone={Number(challengerAll.net_pnl || 0) >= 0 ? "positive" : "negative"} />
+        <MetricCard title={`${active.strategy_version || "V3.2"} 当前影子`} value={`${fmt(activeRecent.closed, 0)} 笔 · ${pfLabel(activeRecent.profit_factor, activeRecent.closed)}`} sub={`近期净收益 ${fmt(activeRecent.net_pnl, 4)} U，只对应正在执行的版本`} tone={Number(activeRecent.net_pnl || 0) >= 0 ? "positive" : "negative"} />
+        <MetricCard title={`${challenger.strategy_version || "V4"} 候选影子`} value={`${fmt(challengerAll.closed, 0)} 笔 · ${pfLabel(challengerAll.profit_factor, challengerAll.closed)}`} sub="包含决策、探索与同机会对照；不会自动接管实盘" tone={Number(challengerAll.net_pnl || 0) >= 0 ? "positive" : "negative"} />
       </div>
       <div className="panel">
         <div className="review-tabs">
@@ -975,6 +955,8 @@ function StageRoutePanel({ route, profiles, stream, userStream, rate, equity, st
 function strategyFamilyLabel(value?: string) {
   const labels: Record<string, string> = {
     extreme_v3_roll: "机会引擎 V3 滚仓",
+    extreme_v4_roll: "机会引擎 V4 候选",
+    extreme_v4_control: "V4 简单突破对照",
     extreme_v31_challenger: "V3.1 历史归档",
     extreme_v2_roll: "Extreme V2 滚仓",
     orderbook_scalp: "盘口剥头皮",
@@ -982,6 +964,10 @@ function strategyFamilyLabel(value?: string) {
     legacy_mixed: "旧混合策略",
   };
   return labels[value || ""] || value || "旧混合策略";
+}
+
+function pfLabel(value: any, trades: any) {
+  return Number(value) >= 999 ? `暂无亏损样本（${fmt(trades, 0)}笔）` : `PF ${fmt(value, 2)}`;
 }
 
 function strategyRoleLabel(value?: string) {
@@ -1001,6 +987,7 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
   const recovery = active.recovery || {};
   const candidate = challenger.all || {};
   const validation = challenger.validation || {};
+  const evidenceTypes = data.by_evidence_type || [];
   const checks = [
     ["样本数量", candidate.closed, validation.min_trades, validation.trades_ready],
     ["观察时长", candidate.span_hours, validation.min_hours, validation.hours_ready],
@@ -1012,19 +999,19 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
         <div className="panel-head">
           <div>
             <h2>策略版本一眼看懂</h2>
-            <p>{active.strategy_version || "V3.2"} 是当前实盘基线；{challenger.strategy_version || "V3.3"} 只在同一批机会里模拟开平仓。旧版本只留档，不参与首页风控，也不会自己升级。</p>
+            <p>{active.strategy_version || "V3.2"} 是当前实盘基线；{challenger.strategy_version || "V4"} 独立评估扣费后净期望。它会主动抽样部分旧门槛拒绝的机会，因此能回答“我们究竟错过了什么”。</p>
           </div>
           <span className={validation.ready_for_review ? "pill ok" : "pill"}>{validation.ready_for_review ? "可以人工复核" : "继续积累样本"}</span>
         </div>
         <div className="metrics">
-          <MetricCard title={`${active.strategy_version || "V3.2"} 近期基线`} value={`${fmt(activeRecent.closed, 0)} 笔`} sub={`PF ${fmt(activeRecent.profit_factor, 2)} · 净收益 ${fmt(activeRecent.net_pnl, 4)} U`} tone={Number(activeRecent.net_pnl || 0) >= 0 ? "positive" : "negative"} />
-          <MetricCard title="恢复观察窗" value={`${fmt(recovery.closed, 0)} / 20 笔`} sub={`PF ${fmt(recovery.profit_factor, 2)} · 净收益 ${fmt(recovery.net_pnl, 4)} U`} tone={Number(recovery.net_pnl || 0) >= 0 ? "positive" : "negative"} />
-          <MetricCard title={`${challenger.strategy_version || "V3.3"} 候选`} value={`${fmt(candidate.closed, 0)} 笔`} sub={`PF ${fmt(candidate.profit_factor, 2)} · 净收益 ${fmt(candidate.net_pnl, 4)} U`} tone={Number(candidate.net_pnl || 0) >= 0 ? "positive" : "negative"} />
+          <MetricCard title={`${active.strategy_version || "V3.2"} 近期基线`} value={`${fmt(activeRecent.closed, 0)} 笔`} sub={`${pfLabel(activeRecent.profit_factor, activeRecent.closed)} · 净收益 ${fmt(activeRecent.net_pnl, 4)} U`} tone={Number(activeRecent.net_pnl || 0) >= 0 ? "positive" : "negative"} />
+          <MetricCard title="历史安全观察窗" value={`${fmt(recovery.closed, 0)} / 20 笔`} sub={`${pfLabel(recovery.profit_factor, recovery.closed)} · 仅保护当前 V3 实盘`} tone={Number(recovery.net_pnl || 0) >= 0 ? "positive" : "negative"} />
+          <MetricCard title={`${challenger.strategy_version || "V4"} 候选`} value={`${fmt(candidate.closed, 0)} 笔`} sub={`${pfLabel(candidate.profit_factor, candidate.closed)} · 净收益 ${fmt(candidate.net_pnl, 4)} U`} tone={Number(candidate.net_pnl || 0) >= 0 ? "positive" : "negative"} />
           <MetricCard title="晋级结论" value={validation.ready_for_review ? "具备复核资格" : "尚不能替换实盘"} sub="即使全部达标，也必须经过回测、人工确认和新版本发布" tone={validation.ready_for_review ? "positive" : ""} />
         </div>
       </div>
       <div className="panel table-wrap">
-        <h2>V3.3 晋级清单</h2>
+        <h2>V4 候选晋级清单</h2>
         <table>
           <thead><tr><th>检查项</th><th>当前</th><th>最低要求</th><th>状态</th></tr></thead>
           <tbody>
@@ -1033,7 +1020,14 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
           </tbody>
         </table>
       </div>
-      <div className="notice">配对影子的意思：同一个币、同一方向、同一时刻，把 V3.2 和 V3.3 都“假装做一遍”，然后分别扣手续费和滑点。这样比较才公平，也不会额外发送 Binance 下单请求。</div>
+      <div className="panel table-wrap">
+        <h2>V4 三类证据</h2>
+        <table><thead><tr><th>类型</th><th>含义</th><th>已结束</th><th>胜率</th><th>PF</th><th>净收益</th><th>成本</th></tr></thead><tbody>
+          {evidenceTypes.map((row: any) => <tr key={row.evidence_type}><td>{row.evidence_type === "decision" ? "决策样本" : row.evidence_type === "exploration" ? "探索样本" : "同机会对照"}</td><td>{row.evidence_type === "decision" ? "V4 当时最想做的机会" : row.evidence_type === "exploration" ? "从被拒机会中分层抽样，检查漏判" : "同一时刻用简单突破规则做基线"}</td><td>{fmt(row.closed, 0)}</td><td>{fmt(row.win_rate, 1)}%</td><td>{pfLabel(row.profit_factor, row.closed)}</td><td>{fmt(row.net_pnl, 4)} U</td><td>{fmt(row.cost, 4)} U</td></tr>)}
+          {!evidenceTypes.length && <tr><td colSpan={7}>V4 刚启用，等待第一批决策、探索和对照样本结束。</td></tr>}
+        </tbody></table>
+      </div>
+      <div className="notice">“探索样本”说白了就是：系统会从以前直接淘汰的机会里挑少量代表，假装交易并扣掉成本。只有这样才能知道旧筛选是真的避开亏损，还是把赢家也一起挡掉。</div>
     </section>
   );
 }
@@ -1123,19 +1117,19 @@ function ShadowTradingPanel({ data }: { data: ShadowData }) {
         <h2>按策略版本对比</h2>
         <table>
           <thead><tr><th>策略</th><th>版本</th><th>用途</th><th>已结束</th><th>胜率</th><th>PF</th><th>净收益</th><th>成本</th></tr></thead>
-          <tbody>{releases.map((item: any) => <tr key={item.release_id}><td>{strategyFamilyLabel(item.strategy_family)}</td><td>{item.strategy_version}</td><td><span className={item.strategy_role === "active" ? "pill ok" : "pill"}>{strategyRoleLabel(item.strategy_role)}</span></td><td>{fmt(item.closed, 0)}</td><td>{fmt(item.win_rate, 1)}%</td><td>{fmt(item.profit_factor, 2)}</td><td className={Number(item.net_pnl || 0) >= 0 ? "positive-text" : "negative-text"}>{fmt(item.net_pnl, 4)} U</td><td>{fmt(item.cost, 4)} U</td></tr>)}</tbody>
+          <tbody>{releases.map((item: any) => <tr key={item.release_id}><td>{strategyFamilyLabel(item.strategy_family)}</td><td>{item.strategy_version}</td><td><span className={item.strategy_role === "active" ? "pill ok" : "pill"}>{strategyRoleLabel(item.strategy_role)}</span></td><td>{fmt(item.closed, 0)}</td><td>{fmt(item.win_rate, 1)}%</td><td>{pfLabel(item.profit_factor, item.closed)}</td><td className={Number(item.net_pnl || 0) >= 0 ? "positive-text" : "negative-text"}>{fmt(item.net_pnl, 4)} U</td><td>{fmt(item.cost, 4)} U</td></tr>)}</tbody>
         </table>
       </div>
       <div className="panel table-wrap">
         <h2>最近影子交易</h2>
         <table>
-          <thead><tr><th>状态</th><th>版本</th><th>用途</th><th>币种</th><th>方向</th><th>信号</th><th>说明</th><th>假设开仓</th><th>模拟止损</th><th>模拟止盈</th><th>结果</th><th>净盈亏</th></tr></thead>
+          <thead><tr><th>状态</th><th>版本</th><th>证据类型</th><th>币种</th><th>方向</th><th>信号</th><th>说明</th><th>假设开仓</th><th>模拟止损</th><th>模拟止盈</th><th>结果</th><th>净盈亏</th></tr></thead>
           <tbody>
             {rows.map((item: any) => (
               <tr key={item.id}>
                 <td>{item.status === "OPEN" ? "观察中" : "已结束"}</td>
                 <td>{item.strategy_version || "legacy"}</td>
-                <td>{strategyRoleLabel(item.strategy_role)}</td>
+                <td>{item.evidence_type === "decision" ? "决策" : item.evidence_type === "exploration" ? "探索" : item.evidence_type === "paired_control" ? "对照" : strategyRoleLabel(item.strategy_role)}</td>
                 <td className="symbol">{item.symbol}</td>
                 <td>{item.direction === "SHORT" ? "做空" : "做多"}</td>
                 <td>{item.signal_type || "-"}</td>
@@ -1608,18 +1602,16 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("opportunity_v3_credit_min_multiplier", "V3 中性信用最低倍率", "默认 0.8；旧策略亏损不会把 V3 压到小仓")}
           {number("opportunity_v3_credit_max_multiplier", "V3 信用最高倍率", "默认 1.2；只有 V3 自己盈利后才逐步提高")}
           {number("opportunity_v3_canary_risk_multiplier", "V3 A+ 受限验证倍率", "默认 0.35")}
-          {toggle("opportunity_v33_challenger_enabled", "V3.3 配对影子候选", "只复用当前扫描数据做模拟，不额外下单；不会自动切换实盘版本")}
-          {text("opportunity_v33_strategy_version", "V3.3 候选版本号", "用于隔离样本；修改参数发布新候选时应同时更换版本号")}
-          {number("opportunity_v33_min_score", "V3.3 最低候选分", "默认 68；候选仍需通过对应入场类型的专用门槛")}
-          {number("opportunity_v33_min_cost_ratio", "V3.3 最低收益成本比", "默认 2.5；模拟结果会继续扣手续费和滑点")}
-          {number("opportunity_v33_min_medium_path_efficiency", "V3.3 中周期路径效率", "默认 0.18；用于过滤反复震荡，不额外增加实时 REST 请求")}
-          {number("opportunity_v33_pullback_min_flow", "V3.3 回踩主动成交确认", "默认 0.50；回踩后需恢复同向主动成交")}
-          {number("opportunity_v33_pullback_min_volume_acceleration", "V3.3 回踩量能确认", "默认 0.90；避免无量反弹或下跌")}
-          {toggle("opportunity_v33_panic_pullback_only", "恐慌行情只验证回踩", "避免在全市场恐慌时追涨杀跌")}
-          {number("opportunity_v33_validation_min_trades", "V3.3 最低验证样本", "默认 300 笔；达到后也只进入人工复核")}
-          {number("opportunity_v33_validation_min_hours", "V3.3 最低观察小时", "默认 72 小时，防止只在单一短行情里碰巧盈利")}
-          {number("opportunity_v33_validation_min_profit_factor", "V3.3 最低 PF", "默认 1.15，且扣费后净收益必须为正")}
-          {number("opportunity_v33_validation_min_regimes", "V3.3 最低市场状态数", "默认 2；至少跨两种行情状态")}
+          {toggle("opportunity_v4_enabled", "启用 V4 候选实验", "推荐开启：对旧门槛通过和拒绝的机会做公平影子实验，不增加 Binance 下单请求")}
+          {toggle("opportunity_v4_live_enabled", "允许 V4 候选级实盘", "默认关闭；只有同市场、同方向、同结构的扣费后证据达标后才可能准入")}
+          {text("opportunity_v4_strategy_version", "V4 候选版本号", "当前 v4.0-candidate；改变模型后必须换版本，避免混用历史证据")}
+          {number("opportunity_v4_decision_min_rank_percentile", "V4 决策排名分位", "默认 0.75；只把本轮前 25% 作为决策样本")}
+          {number("opportunity_v4_decision_shadow_limit", "每轮决策样本上限", "默认 3；控制数据库与行情跟踪开销")}
+          {number("opportunity_v4_exploration_shadow_limit", "每轮探索样本上限", "默认 6；从被拒机会中取代表样本，检查旧模型漏判")}
+          {number("opportunity_v4_control_shadow_limit", "每轮对照样本上限", "默认 3；同机会运行简单突破基线")}
+          {number("opportunity_v4_admission_min_trades", "V4 同类最低样本", "默认 40 笔；按市场状态、方向和信号类型分组")}
+          {number("opportunity_v4_admission_min_profit_factor", "V4 同类最低 PF", "默认 1.10，且必须是扣费后结果")}
+          {number("opportunity_v4_admission_min_lower_expectancy_pct", "V4 保守净期望下限%", "默认 0.02%；不是平均值，而是考虑样本不确定性后的下界")}
           {toggle("extreme_sprint_enabled", "开启 V3 极限滚仓", "必须配合确认短语 ENABLE_EXTREME_SPRINT 才会生效")}
           {text("extreme_sprint_confirmation", "V3 滚仓确认短语", "填写 ENABLE_EXTREME_SPRINT 后，增长模式选择机会引擎 V3 才会启用")}
           {select("extreme_sprint_interval", "极限冲刺周期", intervalOptions)}

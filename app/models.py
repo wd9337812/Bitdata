@@ -551,7 +551,7 @@ class TradingConfig(BaseModel):
     opportunity_v31_min_closed_trades: int = Field(default=100, ge=10, le=10000)
     opportunity_v31_min_profit_factor: float = Field(default=1.15, ge=0, le=100)
     opportunity_v31_live_enabled: bool = False
-    opportunity_v33_challenger_enabled: bool = True
+    opportunity_v33_challenger_enabled: bool = False
     opportunity_v33_strategy_version: str = "v3.3-candidate"
     opportunity_v33_min_score: float = Field(default=68.0, ge=0, le=100)
     opportunity_v33_min_cost_ratio: float = Field(default=2.5, ge=0, le=100)
@@ -568,6 +568,19 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_hours: float = Field(default=72, ge=1, le=8760)
     opportunity_v33_validation_min_profit_factor: float = Field(default=1.15, ge=0, le=100)
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
+    opportunity_v4_enabled: bool = True
+    opportunity_v4_live_enabled: bool = False
+    opportunity_v4_strategy_version: str = "v4.0-candidate"
+    opportunity_v4_decision_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
+    opportunity_v4_decision_shadow_limit: int = Field(default=3, ge=1, le=50)
+    opportunity_v4_exploration_shadow_limit: int = Field(default=6, ge=0, le=100)
+    opportunity_v4_control_shadow_limit: int = Field(default=3, ge=0, le=50)
+    opportunity_v4_admission_min_trades: int = Field(default=40, ge=10, le=10000)
+    opportunity_v4_admission_min_profit_factor: float = Field(default=1.10, ge=0, le=100)
+    opportunity_v4_admission_min_lower_expectancy_pct: float = Field(default=0.02, ge=-100, le=100)
+    opportunity_v4_evidence_lookback_hours: float = Field(default=168, ge=1, le=8760)
+    opportunity_v4_evidence_max_trades: int = Field(default=2500, ge=100, le=100000)
+    opportunity_v4_evidence_cache_seconds: int = Field(default=60, ge=1, le=3600)
     v3_credit_score_weight: float = Field(default=0.15, ge=0, le=2)
     v3_credit_quick_stop_seconds: int = Field(default=300, ge=30, le=3600)
     v3_credit_win_reward: float = Field(default=4.0, ge=0, le=30)

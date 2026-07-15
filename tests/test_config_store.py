@@ -42,6 +42,8 @@ def test_v32_safety_defaults_match_api_model():
         "performance_guard_pause_minutes",
         "opportunity_v3_canary_bypass_enabled",
         "opportunity_v3_strategy_version",
+        "opportunity_v4_strategy_version",
+        "opportunity_v4_live_enabled",
         "position_rotation_enabled",
         "position_rotation_shadow_enabled",
     ):

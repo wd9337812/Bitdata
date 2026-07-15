@@ -2,6 +2,21 @@
 
 This file tracks local verification for the two-stage futures system.
 
+## 2026-07-16 v0.9.0 V4 Opportunity Evidence
+
+- Added an independent V4 challenger that ranks triggered opportunities by modeled post-cost expectancy, conservative lower bound and cross-sectional percentile instead of reusing V3 A+/A/B score thresholds.
+- V4 evidence is release-scoped and cohort-scoped by market regime, direction and setup, with bounded SQLite reads cached for 60 seconds.
+- Shadow trades now distinguish decision, exploration and paired-control evidence. Exploration samples selected V3 rejections, reducing the prior selective-label blind spot.
+- Fee and slippage estimates are persisted separately while net PnL continues to deduct the conservative observed round-trip cost floor.
+- V3.3 is archived. V3.2 remains the active live baseline; V4 live admission defaults off and cannot silently replace the active strategy.
+- Dashboard candidate tables now prioritize V4 rank, conservative net expectancy and cohort sample evidence. PF without any losing denominator is displayed as “no loss sample” instead of 999.
+- No Binance REST endpoint, request frequency, WebSocket subscription or order path was added. Hard stop, exchange protection orders and minimum-notional checks are unchanged.
+- `python -m pytest -q`: `216 passed` (one existing local `requests` dependency compatibility warning).
+- `python -m py_compile ...`: passed.
+- `npm run build`: passed.
+- Local HTTP smoke on `127.0.0.1:8094`: `/`, `/openapi.json`, `/api/status` and `/api/shadow-trades` returned `200`; OpenAPI reported `0.9.0`.
+- `git diff --check`: passed; Git reported only Windows LF/CRLF conversion notices.
+
 ## 2026-07-15 v0.8.1 Release-Scoped Recovery Evidence
 
 - V3 evidence now reads only the active strategy family/version/role instead of disabling symbol evidence to avoid legacy contamination.

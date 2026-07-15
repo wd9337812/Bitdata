@@ -22,6 +22,7 @@ from app.opportunity_engine import (
     score_v3_opportunity,
 )
 from app.opportunity_queue import read_opportunities
+from app.opportunity_v4 import V4_STRATEGY_FAMILY, attach_v4_rankings
 from app.position_sizing import effective_position_risk
 from app.scalp_engine import build_scalp_signal
 from app.shadow_trading import active_shadow_symbols
@@ -131,6 +132,7 @@ def _v31_medium_bars(
     if not (
         config.get("opportunity_v33_challenger_enabled", True)
         or config.get("opportunity_v31_challenger_enabled", False)
+        or config.get("opportunity_v4_enabled", True)
     ):
         return {}
     ttl = max(60, int(config.get("opportunity_v31_bar_cache_seconds", 600)))
@@ -2527,6 +2529,7 @@ def scan_growth_candidates(
         except Exception as exc:
             candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})
 
+    candidates = attach_v4_rankings(candidates, config)
     candidates.sort(
         key=lambda item: (
             item.get("passed", False),
@@ -2538,6 +2541,14 @@ def scan_growth_candidates(
     )
     candidates = [_json_safe(candidate) for candidate in candidates]
     max_candidates = int(config.get("max_scan_symbols", 30))
+    v4_candidates = sorted(
+        [candidate for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("shadow_eligible")],
+        key=lambda item: (
+            bool((item.get("opportunity_v4") or {}).get("decision_candidate")),
+            float((item.get("opportunity_v4") or {}).get("lower_expected_net_pct") or -999),
+        ),
+        reverse=True,
+    )[: max(max_candidates, int(config.get("opportunity_v4_decision_shadow_limit", 3)) + int(config.get("opportunity_v4_exploration_shadow_limit", 6)) + 6)]
     trade_pool = [
         candidate
         for candidate in candidates
@@ -2558,6 +2569,8 @@ def scan_growth_candidates(
         for tier in ("A+", "A", "B", "WATCH")
     }
     v33_ready = sum(1 for candidate in candidates if (candidate.get("v33_challenger") or {}).get("eligible"))
+    v4_shadow_ready = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("shadow_eligible"))
+    v4_admitted = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("admitted"))
     blocked_reasons: dict[str, int] = {}
     for candidate in candidates:
         if candidate.get("passed"):
@@ -2618,13 +2631,22 @@ def scan_growth_candidates(
             "label": "机会引擎 V3",
         },
         "opportunity_v33": {
-            "enabled": bool(v3_enabled and config.get("opportunity_v33_challenger_enabled", True)),
+            "enabled": bool(v3_enabled and config.get("opportunity_v33_challenger_enabled", False) and not config.get("opportunity_v4_enabled", True)),
             "strategy_family": V3_STRATEGY_FAMILY,
             "strategy_version": str(config.get("opportunity_v33_strategy_version") or "v3.3-candidate"),
             "medium_symbols": len(v31_medium_context),
             "shadow_ready": v33_ready,
             "cache_seconds": int(config.get("opportunity_v31_bar_cache_seconds", 600)),
             "label": "V3.3 配对影子挑战者",
+        },
+        "opportunity_v4": {
+            "enabled": bool(config.get("opportunity_v4_enabled", True)),
+            "strategy_family": V4_STRATEGY_FAMILY,
+            "strategy_version": str(config.get("opportunity_v4_strategy_version") or "v4.0-candidate"),
+            "shadow_ready": v4_shadow_ready,
+            "admitted": v4_admitted,
+            "live_enabled": bool(config.get("opportunity_v4_live_enabled", False)),
+            "label": "V4 候选级净期望实验",
         },
         "opportunity_queue": {
             "enabled": bool(config.get("opportunity_queue_enabled", True)),
@@ -2648,6 +2670,7 @@ def scan_growth_candidates(
         "trade_pool": trade_pool,
         "observe_pool": observe_pool,
         "candidates": candidates[:max_candidates],
+        "v4_candidates": v4_candidates,
         "best": candidates[0] if candidates else None,
     }
 

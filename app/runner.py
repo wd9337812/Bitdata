@@ -15,6 +15,7 @@ from app.live_learning import sync_live_learning_from_binance
 from app.live_reaction import sync_live_reaction_from_binance
 from app.market_stream import start_market_stream_thread
 from app.opportunity_queue import read_opportunities
+from app.opportunity_v4 import V4_CONTROL_FAMILY, V4_STRATEGY_FAMILY
 from app.performance_guard import global_performance_guard
 from app.protection_audit import audit_account_protection
 from app.recovery_controller import consume_recovery_permit, revoke_recovery_permit
@@ -415,7 +416,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     scan = decision.get("scan") or {}
     shadow_candidates = [item for item in scan.get("candidates", []) if not item.get("passed")]
     paired_active_candidates: list[dict[str, Any]] = []
-    if config.get("opportunity_v33_challenger_enabled", True):
+    if config.get("opportunity_v33_challenger_enabled", False) and not config.get("opportunity_v4_enabled", True):
         for item in scan.get("candidates", []):
             challenger = item.get("v33_challenger") or {}
             if not challenger.get("eligible"):
@@ -452,6 +453,89 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
                 }
             )
     shadow_candidates.extend(paired_active_candidates)
+    if config.get("opportunity_v4_enabled", True):
+        decision_limit = int(config.get("opportunity_v4_decision_shadow_limit", 3))
+        exploration_limit = int(config.get("opportunity_v4_exploration_shadow_limit", 6))
+        control_limit = int(config.get("opportunity_v4_control_shadow_limit", 3))
+        decision_count = 0
+        exploration_count = 0
+        control_count = 0
+        v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.0-candidate")
+        v4_rows = list(scan.get("v4_candidates") or scan.get("candidates", []))
+        decision_rows = [item for item in v4_rows if (item.get("opportunity_v4") or {}).get("decision_candidate")]
+        exploration_pool = [item for item in v4_rows if not (item.get("opportunity_v4") or {}).get("decision_candidate")]
+        exploration_rows: list[dict] = []
+        seen_groups: set[tuple[str, str]] = set()
+        for item in exploration_pool:
+            v4 = item.get("opportunity_v4") or {}
+            group = (str(v4.get("rank_bucket") or "unknown"), str(item.get("entry_type") or "unknown"))
+            if group in seen_groups:
+                continue
+            seen_groups.add(group)
+            exploration_rows.append(item)
+        for item in exploration_pool:
+            if item not in exploration_rows:
+                exploration_rows.append(item)
+        for item in decision_rows + exploration_rows:
+            v4 = item.get("opportunity_v4") or {}
+            if not v4.get("shadow_eligible"):
+                continue
+            is_decision = bool(v4.get("decision_candidate")) and decision_count < decision_limit
+            if not is_decision and exploration_count >= exploration_limit:
+                continue
+            evidence_type = "decision" if is_decision else "exploration"
+            if is_decision:
+                decision_count += 1
+            else:
+                exploration_count += 1
+            shadow_candidates.append(
+                {
+                    **item,
+                    "strategy": "opportunity_v4_candidate",
+                    "strategy_family": V4_STRATEGY_FAMILY,
+                    "strategy_version": v4_version,
+                    "strategy_role": "challenger",
+                    "strategy_generation": "v4-shadow",
+                    "evidence_type": evidence_type,
+                    "score": float(v4.get("score") or item.get("score") or 0),
+                    "passed": False,
+                    "decision_reason": v4.get("reason"),
+                    "opportunity_v4": v4,
+                }
+            )
+            if not is_decision or control_count >= control_limit or str(item.get("entry_type")) != "v3_breakout":
+                continue
+            signal = dict(item.get("signal") or {})
+            entry = float(signal.get("last_price") or 0)
+            atr_value = float(signal.get("atr") or 0)
+            direction = str(item.get("direction") or signal.get("signal") or "LONG").upper()
+            if entry <= 0 or atr_value <= 0:
+                continue
+            signal["stop"] = entry + atr_value if direction == "SHORT" else entry - atr_value
+            signal["take_profit"] = entry - atr_value * 2 if direction == "SHORT" else entry + atr_value * 2
+            signal["protection_profile"] = {
+                "stop_atr": 1.0,
+                "take_profit_atr": 2.0,
+                "max_hold_bars": 18,
+            }
+            shadow_candidates.append(
+                {
+                    **item,
+                    "strategy": "v4_simple_breakout_control",
+                    "strategy_family": V4_CONTROL_FAMILY,
+                    "strategy_version": "simple-breakout-v1",
+                    "strategy_role": "challenger",
+                    "strategy_generation": "v4-control-shadow",
+                    "evidence_type": "paired_control",
+                    "shadow_force_eligible": True,
+                    "score": float(v4.get("score") or item.get("score") or 0),
+                    "passed": False,
+                    "decision_reason": "V4 同机会简单趋势突破对照组",
+                    "signal": signal,
+                    "opportunity_v4": v4,
+                }
+            )
+            control_count += 1
     if decision.get("action") == "WAIT" and (decision.get("candidate") or {}).get("passed"):
         shadow_candidates.append(
             {
