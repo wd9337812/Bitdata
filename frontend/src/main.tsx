@@ -379,9 +379,9 @@ function App() {
                 tone={performanceGuard.status === "normal" ? "positive" : "negative"}
               />
               <MetricCard
-                title={`${performanceGuard.active_strategy_version || "当前版本"} 恢复证据`}
-                value={`影子 PF ${fmt(performanceGuard.shadow_tail?.profit_factor, 2)}`}
-                sub={`${fmt(performanceGuard.shadow_tail?.trades, 0)} / ${fmt(performanceGuard.recovery_requirements?.shadow_trades, 0)} 笔 · ${performanceGuard.reason || "只用于判断当前实盘版本是否恢复"}`}
+                title={`${performanceGuard.active_strategy_version || "当前版本"} 决策影子恢复证据`}
+                value={`决策影子 PF ${fmt(performanceGuard.shadow_tail?.profit_factor, 2)}`}
+                sub={`${fmt(performanceGuard.shadow_tail?.trades, 0)} / ${fmt(performanceGuard.recovery_requirements?.shadow_trades, 0)} 笔 · 探索影子只用于研究，不参与恢复放行 · ${performanceGuard.reason || "只用于判断当前实盘版本是否恢复"}`}
                 tone={performanceGuard.shadow_bad ? "negative" : ""}
               />
               <MetricCard

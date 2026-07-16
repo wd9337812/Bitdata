@@ -122,25 +122,38 @@ def global_performance_guard(
             try:
                 ensure_shadow_release_columns(conn)
                 migrate_shadow_release_metadata(conn, config)
+                # V4 records broad exploration shadows to audit missed opportunities.
+                # Those samples are intentionally outside the live decision policy and
+                # must not decide whether a paused live release has recovered.
+                decision_only = current_family == V4_FAMILY
+                shadow_evidence_clause = (
+                    " AND COALESCE(evidence_type, 'decision') = 'decision'"
+                    if decision_only
+                    else ""
+                )
                 scoped_shadow = [
                     dict(row)
                     for row in conn.execute(
                         "SELECT id, closed_at, net_pnl, estimated_cost FROM shadow_trades "
                         "WHERE status = 'CLOSED' AND strategy_family = ? AND strategy_version = ? "
-                        "AND strategy_role = ? ORDER BY id DESC LIMIT ?",
+                        f"AND strategy_role = ?{shadow_evidence_clause} ORDER BY id DESC LIMIT ?",
                         (current_family, current_version, ACTIVE_ROLE, max(shadow_limit, recovery_shadow_limit)),
                     ).fetchall()
                 ]
                 scoped_shadow_total = int(
                     conn.execute(
                         "SELECT COUNT(*) FROM shadow_trades WHERE status = 'CLOSED' AND strategy_family = ? "
-                        "AND strategy_version = ? AND strategy_role = ?",
+                        f"AND strategy_version = ? AND strategy_role = ?{shadow_evidence_clause}",
                         (current_family, current_version, ACTIVE_ROLE),
                     ).fetchone()[0]
                 )
                 if release_only and (current_family == V4_FAMILY or scoped_shadow):
                     shadow = scoped_shadow
-                    shadow_scope = f"{current_family}@{current_version}"
+                    shadow_scope = (
+                        f"{current_family}@{current_version}:decision"
+                        if decision_only
+                        else f"{current_family}@{current_version}"
+                    )
                 else:
                     shadow = [
                         dict(row)

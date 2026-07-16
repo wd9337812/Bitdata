@@ -55,6 +55,7 @@ def _seed_shadow(
     version: str | None = None,
     role: str | None = None,
     family: str = "extreme_v3_roll",
+    evidence_type: str = "decision",
 ) -> None:
     now = datetime.now(timezone.utc)
     with connect() as conn:
@@ -67,9 +68,9 @@ def _seed_shadow(
                 INSERT INTO shadow_trades (
                     dedupe_key, opened_at, closed_at, symbol, direction, signal_type, mode,
                     status, entry, stop, take_profit, last_price, notional, estimated_cost,
-                    gross_pnl, net_pnl, outcome, expires_at, payload
+                    gross_pnl, net_pnl, outcome, expires_at, payload, evidence_type
                 ) VALUES (?, ?, ?, ?, ?, ?, 'extreme_sprint', 'CLOSED', 1, 0.99, 1.01, 1,
-                          20, 0.024, ?, ?, 'TIME_EXIT', ?, '{}')
+                          20, 0.024, ?, ?, 'TIME_EXIT', ?, '{}', ?)
                 """,
                 (
                     dedupe_key,
@@ -81,6 +82,7 @@ def _seed_shadow(
                     net + 0.024,
                     net,
                     closed.isoformat(),
+                    evidence_type,
                 ),
             )
             if version:
@@ -306,8 +308,47 @@ def test_v4_live_release_does_not_inherit_v3_negative_gate(monkeypatch, tmp_path
 
     assert status["active_strategy_family"] == "extreme_v4_roll"
     assert status["live_evidence_scope"] == "extreme_v4_roll@v4.0"
-    assert status["shadow_evidence_scope"] == "extreme_v4_roll@v4.0"
+    assert status["shadow_evidence_scope"] == "extreme_v4_roll@v4.0:decision"
     assert status["fallback_live"]["trades"] == 10
     assert status["fallback_live"]["net_pnl"] < 0
     assert status["release_warmup"] is False
     assert status["allowed"] is True
+
+
+def test_v4_guard_uses_decision_shadows_and_excludes_exploration(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _seed_shadow(
+        "GOODUSDT",
+        "SHORT",
+        [0.1] * 20,
+        "v3_breakout",
+        version="v4.0",
+        role="active",
+        family="extreme_v4_roll",
+        evidence_type="decision",
+    )
+    _seed_shadow(
+        "RESEARCHUSDT",
+        "LONG",
+        [-0.2] * 100,
+        "v3_pullback",
+        version="v4.0",
+        role="active",
+        family="extreme_v4_roll",
+        evidence_type="exploration",
+    )
+    clear_performance_cache()
+
+    status = global_performance_guard(
+        {
+            "opportunity_v4_live_enabled": True,
+            "opportunity_v4_strategy_version": "v4.0",
+            "performance_guard_current_release_only": True,
+        },
+        25,
+    )
+
+    assert status["shadow_evidence_scope"] == "extreme_v4_roll@v4.0:decision"
+    assert status["shadow"]["trades"] == 20
+    assert status["shadow"]["net_pnl"] > 0
+    assert status["shadow_bad"] is False

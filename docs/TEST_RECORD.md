@@ -190,3 +190,13 @@ This file tracks local verification for the two-stage futures system.
 - `python -m pytest -q`: `182 passed` (one existing local `requests` dependency compatibility warning).
 - `npm run build`: passed; Vite reported only the existing large-chunk advisory.
 - Local HTTP smoke on `127.0.0.1:8091`: `/` returned 200 and `/api/live-learning` exposed the isolated `v3_scores` collection.
+# v0.9.3 V4 决策影子证据口径修复（2026-07-17）
+
+- 假设：用于研究漏判的 `exploration` 影子不属于当前实盘决策策略，不能参与 `risk_off` 的恢复 PF 和恢复许可证判断。
+- 代码：V4 风险保护仅查询当前版本、`active` 角色、`decision` 证据；探索影子继续保留在数据库和复盘统计中。
+- 定向回归：`python -m pytest tests/test_performance_guard.py -q`，12 passed。
+- 完整后端：`python -m pytest -q`，226 passed。
+- Python 编译：`python -m compileall -q app tests`，通过。
+- 前端：`npm run build`，通过。
+- 本地静态冒烟：首页、主脚本、React、图表和 CSS 资源均返回 HTTP 200。
+- VPS 部署结果在本次发布完成后补充。
