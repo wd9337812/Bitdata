@@ -2,6 +2,18 @@
 
 This file tracks local verification for the two-stage futures system.
 
+## 2026-07-17 v0.9.2 V4 Protection Hotfix
+
+- A release-scoped streak of four consecutive losing live trades now triggers performance protection even when earlier winners leave aggregate release PnL positive.
+- Runtime position protection owns `critical` Binance REST priority, so price fallback, stop inspection and emergency exits do not inherit the background scanner budget.
+- Existing Binance `closePosition` stops are retained when an atomic tighten is unavailable; the system no longer retries a rejected second stop or cancels the confirmed hard stop first.
+- Shadow test fixtures include version and role in their dedupe keys, matching production evidence isolation.
+- V4 ranking, admission, leverage and sizing parameters are unchanged.
+- `python -m pytest -q`: `225 passed`.
+- `python -m compileall -q app`: passed.
+- `npm run build`: passed; production asset names and chunk split remained stable.
+- Local HTTP smoke on `127.0.0.1:8095`: `/`, `/openapi.json` and all five referenced static assets returned `200`; OpenAPI reported `0.9.2`.
+
 ## 2026-07-16 v0.9.0 V4 Opportunity Evidence
 
 - Added an independent V4 challenger that ranks triggered opportunities by modeled post-cost expectancy, conservative lower bound and cross-sectional percentile instead of reusing V3 A+/A/B score thresholds.

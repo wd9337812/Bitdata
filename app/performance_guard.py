@@ -219,14 +219,17 @@ def global_performance_guard(
         if equity
         else 0.0
     )
+    severe_loss_streak = tail_losses >= int(config.get("performance_guard_severe_consecutive_losses", 4))
     live_severe = bool(
-        live["trades"] >= min_live
-        and live["net_pnl"] < 0
-        and (
-            live["profit_factor"] < float(config.get("performance_guard_severe_profit_factor", 0.5))
-            or live["win_rate"] < float(config.get("performance_guard_severe_win_rate", 20.0))
-            or tail_losses >= int(config.get("performance_guard_severe_consecutive_losses", 4))
-            or window_loss_pct >= float(config.get("performance_guard_severe_window_loss_equity_pct", 8.0))
+        severe_loss_streak
+        or (
+            live["trades"] >= min_live
+            and live["net_pnl"] < 0
+            and (
+                live["profit_factor"] < float(config.get("performance_guard_severe_profit_factor", 0.5))
+                or live["win_rate"] < float(config.get("performance_guard_severe_win_rate", 20.0))
+                or window_loss_pct >= float(config.get("performance_guard_severe_window_loss_equity_pct", 8.0))
+            )
         )
     )
     fallback_tail_losses = 0
@@ -377,6 +380,7 @@ def global_performance_guard(
         "peak_drawdown_severe": peak_drawdown_severe,
         "rolling_losses": rolling_losses,
         "tail_losses": tail_losses,
+        "severe_loss_streak": severe_loss_streak,
         "equity": equity,
         "active_strategy_family": current_family,
         "active_strategy_version": current_version,

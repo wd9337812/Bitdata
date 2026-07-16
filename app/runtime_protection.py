@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.binance_client import BinanceFuturesClient
+from app.binance_rate import request_priority
 from app.exchange_filters import ExchangeFilters
 from app.market_stream import stream_depth
 from app.protection_audit import enrich_positions_with_prices
@@ -100,6 +101,13 @@ def _algo_id(order: dict[str, Any]) -> int | str | None:
     return order.get("algoId") or order.get("orderId")
 
 
+def _algo_closes_position(order: dict[str, Any]) -> bool:
+    value = order.get("closePosition")
+    if isinstance(value, bool):
+        return value
+    return str(value or "").lower() == "true"
+
+
 def _replace_dynamic_stop(
     client: BinanceFuturesClient,
     filters: ExchangeFilters,
@@ -147,6 +155,17 @@ def _replace_dynamic_stop(
             **action,
             "executed": False,
             "management_status": "no_safe_improvement",
+            "current_stop": current,
+            "desired_stop": desired,
+        }
+    if any(_algo_closes_position(order) for order in stops):
+        # Binance rejects a second same-direction closePosition stop with -4130,
+        # and the algo API has no atomic amend operation. Keep the confirmed hard
+        # stop instead of creating a cancellation gap during a synthetic replace.
+        return {
+            **action,
+            "executed": False,
+            "management_status": "exchange_atomic_replace_unavailable",
             "current_stop": current,
             "desired_stop": desired,
         }
@@ -289,7 +308,7 @@ def build_runtime_protection_action(
     }
 
 
-def manage_runtime_protection(
+def _manage_runtime_protection(
     client: BinanceFuturesClient,
     config: dict[str, Any],
     state: dict[str, Any],
@@ -368,3 +387,15 @@ def manage_runtime_protection(
     updates["runtime_protection_positions"] = tracked
     save_state(updates)
     return {"enabled": True, "actions": actions}
+
+
+def manage_runtime_protection(
+    client: BinanceFuturesClient,
+    config: dict[str, Any],
+    state: dict[str, Any],
+    account: dict[str, Any],
+) -> dict[str, Any]:
+    # Position price recovery, stop inspection and emergency exits are safety
+    # work. They must retain REST capacity even when called by the background scan.
+    with request_priority("critical"):
+        return _manage_runtime_protection(client, config, state, account)

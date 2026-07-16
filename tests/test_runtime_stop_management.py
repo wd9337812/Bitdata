@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from app.runtime_protection import _replace_dynamic_stop
+from contextlib import contextmanager
+
+import app.runtime_protection as runtime_protection
+from app.runtime_protection import _replace_dynamic_stop, manage_runtime_protection
 
 
 class Filters:
@@ -60,3 +63,40 @@ def test_dynamic_stop_is_confirmed_before_old_stop_is_cancelled():
     assert client.events.index("place") < client.events.index("cancel:1")
     assert tracked["managed_stop"] == 104.0
     assert [order["algoId"] for order in client.orders] == [2]
+
+
+def test_dynamic_stop_keeps_close_position_stop_when_atomic_replace_is_unavailable():
+    client = Client()
+    client.orders[0]["closePosition"] = True
+    tracked = {"trailing_distance_atr": 0.5}
+
+    result = _replace_dynamic_stop(
+        client,
+        Filters(),
+        {"symbol": "TESTUSDT", "positionAmt": "1", "positionSide": "LONG"},
+        {"symbol": "TESTUSDT", "direction": "LONG", "action": "trail_stop", "entry": 100, "mark": 105, "atr_pct": 2 / 105 * 100},
+        tracked,
+        {"runtime_stop_management_min_improvement_atr": 0.1},
+    )
+
+    assert result["executed"] is False
+    assert result["management_status"] == "exchange_atomic_replace_unavailable"
+    assert client.events == ["query"]
+    assert [order["algoId"] for order in client.orders] == [1]
+
+
+def test_runtime_protection_owns_critical_request_priority(monkeypatch):
+    priorities = []
+
+    @contextmanager
+    def priority(name):
+        priorities.append(name)
+        yield
+
+    monkeypatch.setattr(runtime_protection, "request_priority", priority)
+    monkeypatch.setattr(runtime_protection, "_manage_runtime_protection", lambda *args, **kwargs: {"enabled": True})
+
+    result = manage_runtime_protection(object(), {}, {}, {})
+
+    assert result == {"enabled": True}
+    assert priorities == ["critical"]

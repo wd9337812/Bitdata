@@ -61,6 +61,7 @@ def _seed_shadow(
         for index, net in enumerate(values):
             opened = now - timedelta(minutes=len(values) - index + 1)
             closed = opened + timedelta(minutes=1)
+            dedupe_key = f"{symbol}:{direction}:{version or 'legacy'}:{role or 'legacy'}:{index}:{now.timestamp()}"
             conn.execute(
                 """
                 INSERT INTO shadow_trades (
@@ -71,7 +72,7 @@ def _seed_shadow(
                           20, 0.024, ?, ?, 'TIME_EXIT', ?, '{}')
                 """,
                 (
-                    f"{symbol}:{direction}:{index}:{now.timestamp()}",
+                    dedupe_key,
                     opened.isoformat(),
                     closed.isoformat(),
                     symbol,
@@ -86,7 +87,7 @@ def _seed_shadow(
                 conn.execute(
                     "UPDATE shadow_trades SET strategy_family = ?, strategy_version = ?, "
                     "strategy_role = ?, release_id = ? WHERE dedupe_key = ?",
-                    (family, version, role or "active", f"{family}@{version}", f"{symbol}:{direction}:{index}:{now.timestamp()}"),
+                    (family, version, role or "active", f"{family}@{version}", dedupe_key),
                 )
         conn.commit()
 
@@ -142,6 +143,21 @@ def test_severe_live_loss_pauses_even_when_shadow_is_not_bad(monkeypatch, tmp_pa
     assert status["shadow_bad"] is False
     assert status["allowed"] is False
     assert "影子交易不得否决" in status["reason"]
+
+
+def test_consecutive_losses_pause_before_aggregate_profit_turns_negative(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _seed_live("STREAKUSDT", "LONG", [2.0, -0.2, -0.2, -0.2, -0.2])
+    _seed_shadow("STREAKUSDT", "LONG", [0.1] * 20)
+    clear_performance_cache()
+
+    status = global_performance_guard({}, 20)
+
+    assert status["live"]["net_pnl"] > 0
+    assert status["tail_losses"] == 4
+    assert status["severe_loss_streak"] is True
+    assert status["live_severe"] is True
+    assert status["allowed"] is False
 
 
 def test_negative_shadow_and_live_evidence_caps_risk_and_blocks_reentry(monkeypatch, tmp_path):
