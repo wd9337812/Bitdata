@@ -22,6 +22,7 @@ def _seed_live(
     commission: float = 0.01,
     version: str | None = None,
     role: str | None = None,
+    family: str = "extreme_v3_roll",
 ) -> None:
     now = datetime.now(timezone.utc)
     with connect() as conn:
@@ -38,9 +39,9 @@ def _seed_live(
             )
             if version:
                 conn.execute(
-                    "UPDATE live_trade_records SET strategy_family = 'extreme_v3_roll', strategy_version = ?, "
+                    "UPDATE live_trade_records SET strategy_family = ?, strategy_version = ?, "
                     "strategy_role = ?, release_id = ? WHERE id = last_insert_rowid()",
-                    (version, role or "active", f"extreme_v3_roll@{version}"),
+                    (family, version, role or "active", f"{family}@{version}"),
                 )
         conn.commit()
 
@@ -53,6 +54,7 @@ def _seed_shadow(
     *,
     version: str | None = None,
     role: str | None = None,
+    family: str = "extreme_v3_roll",
 ) -> None:
     now = datetime.now(timezone.utc)
     with connect() as conn:
@@ -82,9 +84,9 @@ def _seed_shadow(
             )
             if version:
                 conn.execute(
-                    "UPDATE shadow_trades SET strategy_family = 'extreme_v3_roll', strategy_version = ?, "
+                    "UPDATE shadow_trades SET strategy_family = ?, strategy_version = ?, "
                     "strategy_role = ?, release_id = ? WHERE dedupe_key = ?",
-                    (version, role or "active", f"extreme_v3_roll@{version}", f"{symbol}:{direction}:{index}:{now.timestamp()}"),
+                    (family, version, role or "active", f"{family}@{version}", f"{symbol}:{direction}:{index}:{now.timestamp()}"),
                 )
         conn.commit()
 
@@ -269,3 +271,27 @@ def test_one_current_release_trade_cannot_clear_legacy_safety_fallback(monkeypat
     assert status["release_warmup"] is True
     assert status["current_live"]["trades"] == 1
     assert status["allowed"] is False
+
+
+def test_v4_live_release_does_not_inherit_v3_negative_gate(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _seed_live("OLDUSDT", "LONG", [-0.4] * 10, version="v3.2", role="archived")
+    _seed_shadow("OLDUSDT", "LONG", [-0.2] * 50, version="v3.2", role="archived")
+    clear_performance_cache()
+
+    status = global_performance_guard(
+        {
+            "opportunity_v4_live_enabled": True,
+            "opportunity_v4_strategy_version": "v4.0",
+            "performance_guard_current_release_only": True,
+        },
+        25,
+    )
+
+    assert status["active_strategy_family"] == "extreme_v4_roll"
+    assert status["live_evidence_scope"] == "extreme_v4_roll@v4.0"
+    assert status["shadow_evidence_scope"] == "extreme_v4_roll@v4.0"
+    assert status["fallback_live"]["trades"] == 10
+    assert status["fallback_live"]["net_pnl"] < 0
+    assert status["release_warmup"] is False
+    assert status["allowed"] is True

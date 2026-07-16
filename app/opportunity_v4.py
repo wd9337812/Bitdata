@@ -45,7 +45,7 @@ def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "AND closed_at >= ? ORDER BY id DESC LIMIT ?",
                 (
                     V4_STRATEGY_FAMILY,
-                    str(config.get("opportunity_v4_strategy_version") or "v4.0-candidate"),
+                    str(config.get("opportunity_v4_strategy_version") or "v4.0"),
                     cutoff,
                     limit,
                 ),
@@ -144,7 +144,8 @@ def _model_features(candidate: dict[str, Any]) -> dict[str, float]:
     impulse = max(0.0, float(signal.get("impulse_atr") or 0.0))
     wick = float(signal.get("adverse_wick_ratio") or 0.0)
     anti_chase = 1.0 - _clamp(max(extension / 1.0, impulse / 2.0, wick / 4.0), 0.0, 1.0)
-    spread = float(depth.get("spread_pct") or 999.0)
+    spread_raw = depth.get("spread_pct")
+    spread = float(spread_raw) if spread_raw is not None else 999.0
     depth_notional = float(depth.get("depth_notional") or 0.0)
     liquidity = 0.0 if spread >= 999 else 0.55 * _clamp(1.0 - spread / 0.15, 0.0, 1.0) + 0.45 * _clamp(depth_notional / 10_000, 0.0, 1.0)
     return {
@@ -208,8 +209,14 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
     min_samples = int(config.get("opportunity_v4_admission_min_trades", 40))
     min_pf = float(config.get("opportunity_v4_admission_min_profit_factor", 1.10))
     min_lower = float(config.get("opportunity_v4_admission_min_lower_expectancy_pct", 0.02))
-    version = str(config.get("opportunity_v4_strategy_version") or "v4.0-candidate")
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.0")
     decision_limit = int(config.get("opportunity_v4_decision_shadow_limit", 3))
+    bootstrap_rank = float(config.get("opportunity_v4_bootstrap_min_rank_percentile", 0.85))
+    bootstrap_quality = float(config.get("opportunity_v4_bootstrap_min_quality_score", 58.0)) / 100
+    bootstrap_expectancy = float(config.get("opportunity_v4_bootstrap_min_model_expectancy_pct", 0.0))
+    negative_min_trades = int(config.get("opportunity_v4_bootstrap_negative_min_trades", 20))
+    negative_pf = float(config.get("opportunity_v4_bootstrap_negative_profit_factor", 0.75))
+    live_enabled = bool(config.get("opportunity_v4_live_enabled", False))
     ranked: list[tuple[float, dict[str, Any]]] = []
     for candidate, features, model in prepared:
         rank = _percentile_rank(model_values, model["expected_net_pct"])
@@ -221,36 +228,75 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         entry_type = str(candidate.get("entry_type") or "unknown")
         execution = candidate.get("execution_filter") or {}
         executable = not execution.get("enabled") or bool(execution.get("executable"))
+        depth = candidate.get("depth") or {}
+        spread_raw = depth.get("spread_pct")
+        spread_pct = float(spread_raw) if spread_raw is not None else 999.0
+        depth_notional = float(depth.get("depth_notional") or 0.0)
+        liquidity_ok = bool(
+            spread_pct <= float(config.get("opportunity_v3_max_spread_pct", 0.12))
+            and depth_notional >= float(config.get("opportunity_v3_min_depth_notional_usdt", 1_000.0))
+        )
         # Shadow exploration must not inherit V3's zero-risk sizing or minimum-order rejection.
         # It follows real prices without placing an exchange order, so execution viability is
         # reserved for eventual live admission only.
         shadow_eligible = bool(entry_type.startswith("v3_") and float(model["reward_pct"]) > float(model["cost_pct"]))
-        admitted = bool(
-            config.get("opportunity_v4_live_enabled", False)
+        validated = bool(
+            live_enabled
             and entry_type == "v3_breakout"
             and rank >= min_rank
             and selected["trades"] >= min_samples
             and selected["profit_factor"] >= min_pf
             and lower >= min_lower
             and executable
+            and liquidity_ok
+        )
+        negative_evidence = bool(
+            selected["trades"] >= negative_min_trades
+            and selected["net_pct"] < 0
+            and selected["profit_factor"] < negative_pf
+        )
+        bootstrap_admitted = bool(
+            live_enabled
+            and config.get("opportunity_v4_bootstrap_enabled", True)
+            and entry_type == "v3_breakout"
+            and rank >= bootstrap_rank
+            and model["quality"] >= bootstrap_quality
+            and model["expected_net_pct"] >= bootstrap_expectancy
+            and executable
+            and liquidity_ok
+            and not negative_evidence
+            and not validated
+        )
+        admitted = validated or bootstrap_admitted
+        risk_multiplier = (
+            float(config.get("opportunity_v4_validated_risk_multiplier", 1.0))
+            if validated
+            else float(config.get("opportunity_v4_bootstrap_risk_multiplier", 0.50))
+            if bootstrap_admitted
+            else 0.0
         )
         blockers: list[str] = []
         if entry_type != "v3_breakout":
-            blockers.append("首个 V4 实盘版本只允许趋势突破，其他结构继续积累影子样本")
-        if rank < min_rank:
-            blockers.append(f"本轮净期望排名 {rank * 100:.0f}% 未进入前 {100 - min_rank * 100:.0f}%")
-        if selected["trades"] < min_samples:
-            blockers.append(f"同类证据 {selected['trades']} / {min_samples} 笔")
-        elif selected["profit_factor"] < min_pf or lower < min_lower:
-            blockers.append("同类扣费后证据尚未达到准入标准")
+            blockers.append("V4 首个实盘版本只允许趋势突破，其他结构继续积累影子样本")
+        if rank < bootstrap_rank:
+            blockers.append(f"本轮 V4 净期望排名 {rank * 100:.0f}%，未进入前 {100 - bootstrap_rank * 100:.0f}%")
+        if model["quality"] < bootstrap_quality:
+            blockers.append(f"V4 模型质量 {model['quality'] * 100:.1f}，低于探索门槛 {bootstrap_quality * 100:.1f}")
+        if model["expected_net_pct"] < bootstrap_expectancy:
+            blockers.append("模型估算扣费后期望不为正")
+        if negative_evidence:
+            blockers.append(f"V4 同类证据已显著转负：{selected['trades']} 笔，PF {selected['profit_factor']:.2f}")
         if not executable:
             blockers.append("当前权益下不满足交易所最小下单量")
+        if not liquidity_ok:
+            blockers.append(f"盘口硬门未通过：点差 {spread_pct:.4f}%，深度 {depth_notional:.0f}U")
+
         opportunity = {
             "enabled": True,
             "engine": "opportunity_v4",
             "strategy_family": V4_STRATEGY_FAMILY,
             "strategy_version": version,
-            "strategy_role": "challenger",
+            "strategy_role": "active" if live_enabled else "challenger",
             "feature_schema_version": V4_FEATURE_SCHEMA,
             "score": round(model["quality"] * 100, 4),
             "rank_percentile": round(rank, 6),
@@ -262,13 +308,39 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             "model_win_probability": round(model["win_probability"], 6),
             "features": {key: round(value, 6) for key, value in features.items()},
             "evidence": evidence,
-            "evidence_status": "admitted" if admitted else "collecting" if selected["trades"] < min_samples else "rejected",
+            "evidence_status": (
+                "validated"
+                if validated
+                else "bootstrap"
+                if bootstrap_admitted
+                else "blocked_negative"
+                if negative_evidence
+                else "collecting"
+                if selected["trades"] < min_samples
+                else "rejected"
+            ),
             "shadow_eligible": shadow_eligible,
+            "validated": validated,
+            "bootstrap_admitted": bootstrap_admitted,
             "admitted": admitted,
             "passed": admitted,
+            "risk_multiplier": round(risk_multiplier, 4),
+            "legacy_v3_quality_used_for_live": False,
+            "liquidity_gate": {
+                "passed": liquidity_ok,
+                "spread_pct": round(spread_pct, 6),
+                "depth_notional": round(depth_notional, 4),
+            },
             "blockers": blockers,
             "reason": "V4 候选级净期望准入通过" if admitted else "；".join(blockers or ["继续积累公平影子样本"]),
         }
+        opportunity["reason"] = (
+            "V4 同类扣费后证据达标，允许标准实盘"
+            if validated
+            else "V4 顶排候选进入受限实盘探索"
+            if bootstrap_admitted
+            else "；".join(blockers or ["继续积累 V4 独立影子证据"])
+        )
         candidate["opportunity_v4"] = opportunity
         ranked.append((rank, candidate))
     ranked.sort(key=lambda item: (item[1]["opportunity_v4"]["lower_expected_net_pct"], item[0]), reverse=True)

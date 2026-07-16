@@ -11,7 +11,8 @@ from app.strategy_releases import (
     ACTIVE_ROLE,
     CHALLENGER_ROLE,
     V3_FAMILY,
-    active_version,
+    active_family,
+    active_release_version,
     challenger_version,
     ensure_release_schema,
     ensure_shadow_release_columns,
@@ -295,6 +296,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         hold_minutes,
                         max(5, int(protection.get("max_hold_bars") or 12) * 5),
                     )
+                fingerprint_role = strategy_role
                 conn.execute(
                     """
                     INSERT INTO shadow_trades (
@@ -329,7 +331,10 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         strategy_role,
                         release_id(strategy_family, strategy_version),
                         str(candidate.get("opportunity_id") or _opportunity_id(candidate, bucket_minutes)),
-                        str(candidate.get("parameter_fingerprint") or parameter_fingerprint(config, strategy_role)),
+                        str(
+                            candidate.get("parameter_fingerprint")
+                            or parameter_fingerprint(config, fingerprint_role, strategy_family)
+                        ),
                         str((v4 or {}).get("feature_schema_version") or "v2"),
                         evidence_type,
                         market_regime,
@@ -413,8 +418,10 @@ def _shadow_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
 def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or {}
     initialize_strategy_releases(config)
-    current_version = active_version(config)
+    current_family = active_family(config)
+    current_version = active_release_version(config)
     candidate_version = challenger_version(config)
+    v4_live = current_family == V4_STRATEGY_FAMILY
     with connect() as conn:
         ensure_shadow_tables(conn)
         migrate_shadow_release_metadata(conn, config)
@@ -486,15 +493,20 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             for row in conn.execute(
                 "SELECT * FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ? "
                 "AND strategy_role = 'active' ORDER BY id DESC LIMIT ?",
-                (V3_FAMILY, current_version, max(500, int(config.get("opportunity_v3_calibration_max_shadow_trades", 1500)))),
+                (current_family, current_version, max(500, int(config.get("opportunity_v3_calibration_max_shadow_trades", 1500)))),
             ).fetchall()
         ]
         candidate_rows = [
             dict(row)
             for row in conn.execute(
                 "SELECT * FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ? "
-                "AND strategy_role = 'challenger' ORDER BY id DESC LIMIT ?",
-                (V4_STRATEGY_FAMILY, candidate_version, max(500, int(config.get("opportunity_v4_admission_min_trades", 40)) * 10)),
+                "AND strategy_role = ? ORDER BY id DESC LIMIT ?",
+                (
+                    V4_STRATEGY_FAMILY,
+                    candidate_version,
+                    "active" if v4_live else "challenger",
+                    max(500, int(config.get("opportunity_v4_admission_min_trades", 40)) * 10),
+                ),
             ).fetchall()
         ]
     stats = dict(aggregate) if aggregate else {}
@@ -571,14 +583,14 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         "by_release": by_release,
         "by_evidence_type": by_evidence_type,
         "active_release": {
-            "strategy_family": V3_FAMILY,
+            "strategy_family": current_family,
             "strategy_version": current_version,
             "strategy_role": ACTIVE_ROLE,
             "all": _shadow_stats(active_rows),
             "recent": _shadow_stats(active_closed[:shadow_window]),
             "recovery": _shadow_stats(active_closed[:recovery_window]),
         },
-        "challenger_release": {
+        "challenger_release": None if v4_live else {
             "strategy_family": V4_STRATEGY_FAMILY,
             "strategy_version": candidate_version,
             "strategy_role": CHALLENGER_ROLE,

@@ -143,7 +143,7 @@ def track_runtime_position(decision: dict) -> None:
         "max_hold_bars": protection_plan.get("max_hold_bars"),
         "max_hold_seconds": protection_profile.get("max_hold_seconds"),
         "strategy_family": strategy_family,
-        "protection_version": "v5_dynamic" if strategy_family == "extreme_v3_roll" else protection_profile.get("protection_version"),
+        "protection_version": "v5_dynamic" if strategy_family in {"extreme_v3_roll", "extreme_v4_roll"} else protection_profile.get("protection_version"),
         "break_even_atr": protection_profile.get("break_even_atr"),
         "trailing_trigger_atr": protection_profile.get("trailing_trigger_atr"),
         "trailing_distance_atr": protection_profile.get("trailing_distance_atr"),
@@ -460,7 +460,8 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         decision_count = 0
         exploration_count = 0
         control_count = 0
-        v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.0-candidate")
+        v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.0")
+        v4_shadow_role = "active" if config.get("opportunity_v4_live_enabled", False) else "challenger"
         v4_rows = list(scan.get("v4_candidates") or scan.get("candidates", []))
         decision_rows = [item for item in v4_rows if (item.get("opportunity_v4") or {}).get("decision_candidate")]
         exploration_pool = [item for item in v4_rows if not (item.get("opportunity_v4") or {}).get("decision_candidate")]
@@ -494,7 +495,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
                     "strategy": "opportunity_v4_candidate",
                     "strategy_family": V4_STRATEGY_FAMILY,
                     "strategy_version": v4_version,
-                    "strategy_role": "challenger",
+                    "strategy_role": v4_shadow_role,
                     "strategy_generation": "v4-shadow",
                     "evidence_type": evidence_type,
                     "score": float(v4.get("score") or item.get("score") or 0),

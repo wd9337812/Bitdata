@@ -569,9 +569,21 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_profit_factor: float = Field(default=1.15, ge=0, le=100)
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
-    opportunity_v4_live_enabled: bool = False
-    opportunity_v4_strategy_version: str = "v4.0-candidate"
+    opportunity_v4_live_enabled: bool = True
+    opportunity_v4_strategy_version: str = "v4.0"
     opportunity_v4_decision_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
+    opportunity_v4_bootstrap_enabled: bool = True
+    opportunity_v4_bootstrap_min_rank_percentile: float = Field(default=0.85, ge=0, le=1)
+    opportunity_v4_bootstrap_min_quality_score: float = Field(default=58.0, ge=0, le=100)
+    opportunity_v4_bootstrap_min_model_expectancy_pct: float = Field(default=0.0, ge=-100, le=100)
+    opportunity_v4_bootstrap_risk_multiplier: float = Field(default=0.50, ge=0, le=1)
+    opportunity_v4_bootstrap_negative_min_trades: int = Field(default=20, ge=5, le=10000)
+    opportunity_v4_bootstrap_negative_profit_factor: float = Field(default=0.75, ge=0, le=100)
+    opportunity_v4_validated_risk_multiplier: float = Field(default=1.0, ge=0, le=2)
+    v4_credit_score_weight: float = Field(default=0.25, ge=0, le=2)
+    v4_credit_min_multiplier: float = Field(default=0.60, ge=0, le=2)
+    v4_credit_cooldown_min_multiplier: float = Field(default=0.35, ge=0, le=2)
+    v4_credit_max_multiplier: float = Field(default=1.20, ge=0, le=3)
     opportunity_v4_decision_shadow_limit: int = Field(default=3, ge=1, le=50)
     opportunity_v4_exploration_shadow_limit: int = Field(default=6, ge=0, le=100)
     opportunity_v4_control_shadow_limit: int = Field(default=3, ge=0, le=50)

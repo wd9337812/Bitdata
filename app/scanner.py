@@ -1827,6 +1827,71 @@ def _finalize_candidate(
     return candidate
 
 
+def _apply_v4_live_selection(
+    candidate: dict[str, Any],
+    config: dict[str, Any],
+    mode: dict[str, Any],
+) -> dict[str, Any]:
+    """Make V4 the live selector while retaining V3 fields for diagnostics only."""
+    if not config.get("opportunity_v4_enabled", True) or not config.get("opportunity_v4_live_enabled", False):
+        return candidate
+    result = dict(candidate)
+    result["legacy_v3_quality"] = dict(candidate.get("symbol_quality") or {})
+    v4 = dict(candidate.get("opportunity_v4") or {})
+    if not v4:
+        result["passed"] = False
+        result["reason"] = "opportunity_v4_no_trigger"
+        result["decision_reason"] = "V4 未识别到可执行的实时趋势触发"
+        return result
+
+    admitted = bool(v4.get("admitted"))
+    risk_multiplier = float(v4.get("risk_multiplier") or 0.0)
+    base_risk = float(candidate.get("base_risk_pct") or mode.get("risk_pct") or 0.0)
+    result.update(
+        {
+            "strategy": "opportunity_v4_ranked_breakout",
+            "strategy_family": V4_STRATEGY_FAMILY,
+            "strategy_version": str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.0"),
+            "strategy_role": "active",
+            "strategy_generation": "v4",
+            "score": float(v4.get("score") or 0),
+            "passed": admitted,
+            "reason": "passed" if admitted else "opportunity_v4_not_ready",
+            "decision_reason": str(v4.get("reason") or "V4 候选未达到实盘准入"),
+            "risk_pct": min(float(mode.get("risk_pct") or base_risk), base_risk * risk_multiplier),
+            # risk_pct already contains the V4 admission multiplier. Keep the legacy
+            # sizing multipliers neutral so execution cannot apply it a second time.
+            "quality_risk_multiplier": 1.0,
+            "v4_risk_multiplier": risk_multiplier,
+            "quality_risk_reasons": [
+                "V4 已验证准入" if v4.get("validated") else "V4 顶排受限探索" if v4.get("bootstrap_admitted") else "V4 继续观察"
+            ],
+            "symbol_quality": {
+                "engine": "opportunity_v4",
+                "score": float(v4.get("score") or 0),
+                "allowed": admitted,
+                "pool": "trade" if admitted else "observe",
+                "tier": "V4-VALIDATED" if v4.get("validated") else "V4-BOOTSTRAP" if v4.get("bootstrap_admitted") else "V4-WATCH",
+                "quality_risk_multiplier": risk_multiplier,
+                "quality_risk_reasons": ["V3.2 质量分层仅保留用于诊断，不参与实盘"],
+                "simulation": {
+                    "passed": None,
+                    "diagnostic": "V4 使用独立、版本隔离的决策/探索/对照影子证据",
+                },
+            },
+            "symbol_pool": "trade" if admitted else "observe",
+            "risk_adjustment": {
+                "type": "opportunity_v4_rank",
+                "multiplier": 1.0,
+                "v4_admission_multiplier": round(risk_multiplier, 6),
+                "rank_percentile": v4.get("rank_percentile"),
+                "evidence_status": v4.get("evidence_status"),
+            },
+        }
+    )
+    return result
+
+
 def scan_growth_candidates(
     client: BinanceFuturesClient,
     config: dict[str, Any],
@@ -2165,13 +2230,14 @@ def scan_growth_candidates(
                         },
                         "coarse": next((row for row in coarse_rows if row["symbol"] == symbol), {}),
                     }
-                    candidate = _finalize_candidate(
-                        candidate,
-                        config=config,
-                        mode=mode,
-                        exchange_filters=exchange_filters,
-                        equity=equity,
-                    )
+                    if not config.get("opportunity_v4_enabled", True):
+                        candidate = _finalize_candidate(
+                            candidate,
+                            config=config,
+                            mode=mode,
+                            exchange_filters=exchange_filters,
+                            equity=equity,
+                        )
                     candidates.append(candidate)
                     continue
 
@@ -2530,12 +2596,33 @@ def scan_growth_candidates(
             candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})
 
     candidates = attach_v4_rankings(candidates, config)
+    if v3_enabled and config.get("opportunity_v4_enabled", True):
+        candidates = [
+            _finalize_candidate(
+                _apply_v4_live_selection(candidate, config, mode),
+                config=config,
+                mode=mode,
+                exchange_filters=exchange_filters,
+                equity=equity,
+            )
+            for candidate in candidates
+        ]
     candidates.sort(
-        key=lambda item: (
-            item.get("passed", False),
-            item.get("symbol_quality", {}).get("allowed", False),
-            item.get("symbol_quality", {}).get("score", -999),
-            item.get("score", -999),
+        key=(
+            lambda item: (
+                item.get("passed", False),
+                bool((item.get("opportunity_v4") or {}).get("decision_candidate")),
+                float((item.get("opportunity_v4") or {}).get("lower_expected_net_pct") or -999),
+                float((item.get("opportunity_v4") or {}).get("rank_percentile") or -1),
+                item.get("score", -999),
+            )
+            if config.get("opportunity_v4_enabled", True)
+            else (
+                item.get("passed", False),
+                item.get("symbol_quality", {}).get("allowed", False),
+                item.get("symbol_quality", {}).get("score", -999),
+                item.get("score", -999),
+            )
         ),
         reverse=True,
     )
@@ -2570,7 +2657,11 @@ def scan_growth_candidates(
     }
     v33_ready = sum(1 for candidate in candidates if (candidate.get("v33_challenger") or {}).get("eligible"))
     v4_shadow_ready = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("shadow_eligible"))
-    v4_admitted = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("admitted"))
+    v4_admitted = sum(
+        1
+        for candidate in candidates
+        if candidate.get("passed") and (candidate.get("opportunity_v4") or {}).get("admitted")
+    )
     blocked_reasons: dict[str, int] = {}
     for candidate in candidates:
         if candidate.get("passed"):
@@ -2642,11 +2733,11 @@ def scan_growth_candidates(
         "opportunity_v4": {
             "enabled": bool(config.get("opportunity_v4_enabled", True)),
             "strategy_family": V4_STRATEGY_FAMILY,
-            "strategy_version": str(config.get("opportunity_v4_strategy_version") or "v4.0-candidate"),
+            "strategy_version": str(config.get("opportunity_v4_strategy_version") or "v4.0"),
             "shadow_ready": v4_shadow_ready,
             "admitted": v4_admitted,
             "live_enabled": bool(config.get("opportunity_v4_live_enabled", False)),
-            "label": "V4 候选级净期望实验",
+            "label": "V4 实盘机会排序",
         },
         "opportunity_queue": {
             "enabled": bool(config.get("opportunity_queue_enabled", True)),

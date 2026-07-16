@@ -8,8 +8,9 @@ from typing import Any
 from app.recovery_controller import recovery_permit_status
 from app.strategy_releases import (
     ACTIVE_ROLE,
-    V3_FAMILY,
-    active_version,
+    V4_FAMILY,
+    active_family,
+    active_release_version,
     ensure_live_release_columns,
     ensure_shadow_release_columns,
     migrate_shadow_release_metadata,
@@ -72,7 +73,8 @@ def global_performance_guard(
     live_limit = int(config.get("performance_guard_live_window_trades", 10))
     shadow_limit = int(config.get("performance_guard_shadow_window_trades", 100))
     recovery_shadow_limit = int(config.get("performance_guard_recovery_shadow_trades", 20))
-    current_version = active_version(config)
+    current_family = active_family(config)
+    current_version = active_release_version(config)
     release_only = bool(config.get("performance_guard_current_release_only", True))
 
     def load() -> dict[str, Any]:
@@ -86,14 +88,14 @@ def global_performance_guard(
                         "SELECT close_time, net_pnl, commission, funding_fee FROM live_trade_records "
                         "WHERE strategy_family = ? AND strategy_version = ? AND strategy_role = ? "
                         "ORDER BY close_time DESC LIMIT ?",
-                        (V3_FAMILY, current_version, ACTIVE_ROLE, live_limit),
+                        (current_family, current_version, ACTIVE_ROLE, live_limit),
                     ).fetchall()
                 ]
                 scoped_live_total = int(
                     conn.execute(
                         "SELECT COUNT(*) FROM live_trade_records WHERE strategy_family = ? "
                         "AND strategy_version = ? AND strategy_role = ?",
-                        (V3_FAMILY, current_version, ACTIVE_ROLE),
+                        (current_family, current_version, ACTIVE_ROLE),
                     ).fetchone()[0]
                 )
                 fallback_live = [
@@ -104,9 +106,9 @@ def global_performance_guard(
                         (live_limit,),
                     ).fetchall()
                 ]
-                if release_only and scoped_live:
+                if release_only and (current_family == V4_FAMILY or scoped_live):
                     live = scoped_live
-                    live_scope = f"{V3_FAMILY}@{current_version}"
+                    live_scope = f"{current_family}@{current_version}"
                 else:
                     live = fallback_live
                     live_scope = "legacy_safety_fallback" if release_only else "all_strategies"
@@ -126,19 +128,19 @@ def global_performance_guard(
                         "SELECT id, closed_at, net_pnl, estimated_cost FROM shadow_trades "
                         "WHERE status = 'CLOSED' AND strategy_family = ? AND strategy_version = ? "
                         "AND strategy_role = ? ORDER BY id DESC LIMIT ?",
-                        (V3_FAMILY, current_version, ACTIVE_ROLE, max(shadow_limit, recovery_shadow_limit)),
+                        (current_family, current_version, ACTIVE_ROLE, max(shadow_limit, recovery_shadow_limit)),
                     ).fetchall()
                 ]
                 scoped_shadow_total = int(
                     conn.execute(
                         "SELECT COUNT(*) FROM shadow_trades WHERE status = 'CLOSED' AND strategy_family = ? "
                         "AND strategy_version = ? AND strategy_role = ?",
-                        (V3_FAMILY, current_version, ACTIVE_ROLE),
+                        (current_family, current_version, ACTIVE_ROLE),
                     ).fetchone()[0]
                 )
-                if release_only and scoped_shadow:
+                if release_only and (current_family == V4_FAMILY or scoped_shadow):
                     shadow = scoped_shadow
-                    shadow_scope = f"{V3_FAMILY}@{current_version}"
+                    shadow_scope = f"{current_family}@{current_version}"
                 else:
                     shadow = [
                         dict(row)
@@ -179,7 +181,7 @@ def global_performance_guard(
             "shadow_scope": shadow_scope,
         }
 
-    cache_key = f"global:{current_version}:{int(release_only)}:{live_limit}:{shadow_limit}:{recovery_shadow_limit}"
+    cache_key = f"global:{current_family}:{current_version}:{int(release_only)}:{live_limit}:{shadow_limit}:{recovery_shadow_limit}"
     raw = _cached(cache_key, float(config.get("performance_guard_cache_seconds", 15)), load)
     live_rows = raw["live_rows"]
     shadow_rows = raw["shadow_rows"]
@@ -261,7 +263,14 @@ def global_performance_guard(
         and current_live["net_pnl"] > 0
         and current_live["profit_factor"] >= normal_live_pf
     )
-    release_warmup = release_only and not current_live_ready and fallback_live_severe
+    # Superseded releases remain visible as fallback diagnostics, but cannot block a
+    # newly isolated strategy family. The active release must earn or lose its own status.
+    release_warmup = bool(
+        release_only
+        and current_family != V4_FAMILY
+        and not current_live_ready
+        and fallback_live_severe
+    )
     risk_off = live_severe or release_warmup or peak_drawdown_severe or (live_bad and shadow_bad)
     latest_close_ms = int(live_rows[0].get("close_time") or 0) if live_rows else 0
     latest_close = datetime.fromtimestamp(latest_close_ms / 1000, timezone.utc) if latest_close_ms else None
@@ -369,7 +378,7 @@ def global_performance_guard(
         "rolling_losses": rolling_losses,
         "tail_losses": tail_losses,
         "equity": equity,
-        "active_strategy_family": V3_FAMILY,
+        "active_strategy_family": current_family,
         "active_strategy_version": current_version,
         "live_evidence_scope": raw.get("live_scope"),
         "shadow_evidence_scope": raw.get("shadow_scope"),
@@ -609,7 +618,7 @@ def apply_strategy_evidence_to_candidate(candidate: dict[str, Any], config: dict
     if not symbol or direction not in {"LONG", "SHORT"}:
         return candidate
     strategy_family = str(candidate.get("strategy_family") or "")
-    strategy_version = str(candidate.get("strategy_version") or active_version(config)) if strategy_family == V3_FAMILY else None
+    strategy_version = str(candidate.get("strategy_version") or active_release_version(config)) if strategy_family else None
     signal = candidate.get("signal") or {}
     signal_type = str(candidate.get("entry_type") or signal.get("entry_type") or signal.get("reason") or "") or None
     evidence = strategy_evidence_for(

@@ -18,6 +18,17 @@ def test_equity_profiles_follow_confirmed_automatic_route():
     json.dumps(all_stage_profiles(), allow_nan=False)
 
 
+def test_v4_live_switch_updates_growth_stage_identity():
+    config = {"opportunity_v4_live_enabled": True}
+
+    profile = stage_profile_for_equity(50, config)
+    route = resolve_stage_route(config, {}, 50)
+
+    assert profile["strategy_family"] == "extreme_v4_roll"
+    assert "V4" in profile["label"]
+    assert route["strategy_family"] == "extreme_v4_roll"
+
+
 def test_upward_switch_requires_buffer_and_three_confirmations():
     config = {"stage_routing_enabled": True, "stage_switch_up_buffer_pct": 5, "stage_switch_confirmations": 3}
     state = {"active_stage": "S2", "active_growth_mode": "extreme_sprint"}

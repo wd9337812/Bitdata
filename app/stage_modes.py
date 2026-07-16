@@ -117,6 +117,9 @@ def _as_utc(value: Any) -> datetime | None:
 
 def _profile_values(profile: dict[str, Any], config: dict[str, Any], equity: float) -> dict[str, Any]:
     result = dict(profile)
+    if result.get("stage") in {"S0", "S1", "S2"} and config.get("opportunity_v4_live_enabled", False):
+        result["strategy_family"] = "extreme_v4_roll"
+        result["label"] = str(result.get("label") or "").replace("V3", "V4")
     if result.get("max_equity") == float("inf"):
         result["max_equity"] = None
     result["equity"] = float(equity)
@@ -166,7 +169,7 @@ def _manual_route(config: dict[str, Any], equity: float, now: datetime) -> dict[
         return None
     profile = stage_profile_for_equity(equity, config)
     family = {
-        "extreme_sprint": "extreme_v3_roll",
+        "extreme_sprint": "extreme_v4_roll" if config.get("opportunity_v4_live_enabled", False) else "extreme_v3_roll",
         "yolo_scalp": "orderbook_scalp",
         "grid": "grid_stable",
     }.get(mode, "legacy_mixed")

@@ -429,6 +429,16 @@ def live_reaction_for(symbol: str, direction: str, config: dict[str, Any]) -> di
 def apply_live_reaction_to_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     if not config.get("live_reaction_enabled", True):
         return candidate
+    if str(candidate.get("strategy_family") or "") == "extreme_v4_roll":
+        result = dict(candidate)
+        result["live_reaction"] = {
+            "enabled": False,
+            "status": "strategy_isolated",
+            "status_label": "V4 独立证据",
+            "risk_multiplier": 1.0,
+            "reason": "旧策略的币种方向快反记录不参与 V4；V4 使用独立信用与版本证据",
+        }
+        return result
     symbol = str(candidate.get("symbol") or "").upper()
     direction = str(candidate.get("direction") or "").upper()
     if not symbol or direction not in {"LONG", "SHORT"}:

@@ -223,6 +223,76 @@ def test_extreme_v2_uses_its_own_strategy_credit(monkeypatch):
     assert any("旧策略信用仅展示" in item for item in candidate["live_credit_adjustment"]["reasons"])
 
 
+def test_v4_uses_only_v4_strategy_credit_for_position_size(monkeypatch):
+    monkeypatch.setattr(
+        "app.live_learning.live_score_for",
+        lambda symbol, direction, config: {
+            "enabled": True,
+            "score": 10,
+            "status": "penalty",
+            "status_label": "legacy penalty",
+            "closed_trades": 4,
+            "wins": 0,
+            "losses": 4,
+            "consecutive_wins": 0,
+            "consecutive_losses": 4,
+            "penalty_until": None,
+            "commission": 1,
+            "net_pnl": -5,
+            "profit_factor": 0,
+            "notes": [],
+        },
+    )
+    monkeypatch.setattr(
+        "app.live_learning.strategy_live_score_for",
+        lambda symbol, direction, strategy_family, config: {
+            "enabled": True,
+            "score": 50,
+            "status": "new",
+            "status_label": "V4 new strategy observation",
+            "strategy_family": strategy_family,
+            "closed_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "consecutive_wins": 0,
+            "consecutive_losses": 0,
+            "penalty_until": None,
+            "commission": 0,
+            "net_pnl": 0,
+            "profit_factor": 0,
+            "notes": [],
+        },
+    )
+
+    candidate = apply_live_credit_to_candidate(
+        {
+            "symbol": "SOLUSDT",
+            "direction": "LONG",
+            "mode": "extreme_sprint",
+            "entry_type": "v3_breakout",
+            "strategy_family": "extreme_v4_roll",
+            "strategy_generation": "v4",
+            "score": 100,
+            "passed": True,
+            "risk_pct": 5,
+        },
+        {
+            "live_credit_enabled": True,
+            "strategy_family_credit_enabled": True,
+            "v4_credit_score_weight": 0.25,
+            "v4_credit_min_multiplier": 0.60,
+            "v4_credit_max_multiplier": 1.20,
+        },
+    )
+
+    assert candidate["passed"] is True
+    assert candidate["risk_pct"] == 5
+    assert candidate["live_credit"]["strategy_family"] == "extreme_v4_roll"
+    assert candidate["legacy_live_credit"]["score"] == 10
+    assert candidate["live_credit_adjustment"]["strategy_family"] == "extreme_v4_roll"
+    assert candidate["live_credit_adjustment"]["risk_multiplier"] == 1.0
+
+
 def test_live_credit_multiplier_is_score_divided_by_50():
     config = {"live_credit_multiplier_divisor": 50, "live_credit_max_risk_multiplier": 2.0, "live_credit_fuse_score": 2}
 

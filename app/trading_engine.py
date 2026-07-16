@@ -22,7 +22,7 @@ from app.scanner import latest_strategy_signal, mode_config, scan_growth_candida
 from app.stage_modes import resolve_stage_route, stage_route_state_updates
 from app.state_store import daily_session_state_updates, save_state
 from app.strategy import StrategyParams
-from app.strategy_releases import V3_FAMILY, active_version
+from app.strategy_releases import active_family, active_release_version
 from app.target import target_progress, target_state_updates
 
 
@@ -298,7 +298,7 @@ def sync_stage(config: dict[str, Any], state: dict[str, Any], account_summary: d
     updates.update(target_state_updates(config, state, account_summary))
     active_mode = route.get("mode")
     if equity is not None and active_mode in {"extreme_sprint", "yolo_scalp"}:
-        release_id = f"{V3_FAMILY}@{active_version(config)}"
+        release_id = f"{active_family(config)}@{active_release_version(config)}"
         current_release_id = str(state.get("strategy_release_equity_id") or "")
         current_release_high = float(state.get("strategy_release_equity_high_watermark") or 0)
         if current_release_id != release_id or current_release_high <= 0:

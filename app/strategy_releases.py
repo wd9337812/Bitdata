@@ -47,15 +47,27 @@ def active_version(config: dict[str, Any]) -> str:
 
 
 def challenger_version(config: dict[str, Any]) -> str:
-    return str(config.get("opportunity_v4_strategy_version") or "v4.0-candidate")
+    return str(config.get("opportunity_v4_strategy_version") or "v4.0")
+
+
+def active_family(config: dict[str, Any]) -> str:
+    return V4_FAMILY if config.get("opportunity_v4_live_enabled", False) else V3_FAMILY
+
+
+def active_release_version(config: dict[str, Any]) -> str:
+    return challenger_version(config) if active_family(config) == V4_FAMILY else active_version(config)
 
 
 def release_id(family: str, version: str) -> str:
     return f"{family}@{version}"
 
 
-def parameter_fingerprint(config: dict[str, Any], role: str = ACTIVE_ROLE) -> str:
-    keys = _CHALLENGER_FINGERPRINT_KEYS if role == CHALLENGER_ROLE else _ACTIVE_FINGERPRINT_KEYS
+def parameter_fingerprint(
+    config: dict[str, Any],
+    role: str = ACTIVE_ROLE,
+    family: str | None = None,
+) -> str:
+    keys = _CHALLENGER_FINGERPRINT_KEYS if role == CHALLENGER_ROLE or family == V4_FAMILY else _ACTIVE_FINGERPRINT_KEYS
     payload = {key: config.get(key) for key in keys if key in config}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]
@@ -133,7 +145,7 @@ def _register(
     config: dict[str, Any],
 ) -> None:
     current = now_iso()
-    keys = _CHALLENGER_FINGERPRINT_KEYS if role == CHALLENGER_ROLE else _ACTIVE_FINGERPRINT_KEYS
+    keys = _CHALLENGER_FINGERPRINT_KEYS if role == CHALLENGER_ROLE or family == V4_FAMILY else _ACTIVE_FINGERPRINT_KEYS
     snapshot = {key: config.get(key) for key in keys if key in config}
     conn.execute(
         """
@@ -175,28 +187,31 @@ def _register(
 
 
 def initialize_strategy_releases(config: dict[str, Any]) -> dict[str, Any]:
-    active = active_version(config)
-    challenger = challenger_version(config)
-    active_fingerprint = parameter_fingerprint(config, ACTIVE_ROLE)
-    challenger_fingerprint = parameter_fingerprint(config, CHALLENGER_ROLE)
+    v3_version = active_version(config)
+    v4_version = challenger_version(config)
+    live_family = active_family(config)
+    live_version = active_release_version(config)
+    v3_fingerprint = parameter_fingerprint(config, ACTIVE_ROLE, V3_FAMILY)
+    v4_fingerprint = parameter_fingerprint(config, CHALLENGER_ROLE, V4_FAMILY)
+    v4_live = live_family == V4_FAMILY
     with connect() as conn:
         ensure_release_schema(conn)
         _register(
             conn,
             family=V3_FAMILY,
-            version=active,
-            role=ACTIVE_ROLE,
-            status="live",
-            fingerprint=active_fingerprint,
+            version=v3_version,
+            role=ARCHIVED_ROLE if v4_live else ACTIVE_ROLE,
+            status="retired" if v4_live else "live",
+            fingerprint=v3_fingerprint,
             config=config,
         )
         _register(
             conn,
             family=V4_FAMILY,
-            version=challenger,
-            role=CHALLENGER_ROLE,
-            status="shadow",
-            fingerprint=challenger_fingerprint,
+            version=v4_version,
+            role=ACTIVE_ROLE if v4_live else CHALLENGER_ROLE,
+            status="live" if v4_live else "shadow",
+            fingerprint=v4_fingerprint,
             config=config,
         )
         _register(
@@ -219,10 +234,10 @@ def initialize_strategy_releases(config: dict[str, Any]) -> dict[str, Any]:
         )
         conn.commit()
     return {
-        "active_release": release_id(V3_FAMILY, active),
-        "challenger_release": release_id(V4_FAMILY, challenger),
-        "active_parameter_fingerprint": active_fingerprint,
-        "challenger_parameter_fingerprint": challenger_fingerprint,
+        "active_release": release_id(live_family, live_version),
+        "challenger_release": None if v4_live else release_id(V4_FAMILY, v4_version),
+        "active_parameter_fingerprint": v4_fingerprint if v4_live else v3_fingerprint,
+        "challenger_parameter_fingerprint": None if v4_live else v4_fingerprint,
     }
 
 
@@ -230,8 +245,8 @@ def migrate_shadow_release_metadata(conn: sqlite3.Connection, config: dict[str, 
     ensure_shadow_release_columns(conn)
     active = active_version(config)
     challenger = challenger_version(config)
-    active_fingerprint = parameter_fingerprint(config, ACTIVE_ROLE)
-    challenger_fingerprint = parameter_fingerprint(config, CHALLENGER_ROLE)
+    active_fingerprint = parameter_fingerprint(config, ACTIVE_ROLE, V3_FAMILY)
+    challenger_fingerprint = parameter_fingerprint(config, CHALLENGER_ROLE, V4_FAMILY)
     before = conn.total_changes
     conn.execute(
         """
