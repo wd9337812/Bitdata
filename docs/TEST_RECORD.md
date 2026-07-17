@@ -285,3 +285,11 @@ This file tracks local verification for the two-stage futures system.
 - 前端：`npm run build`，通过，生成版本化生产静态资源。
 - `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
 - 本地 HTTP 冒烟：首页与 5 个版本化 JS/CSS 资源全部返回 HTTP 200；OpenAPI 版本为 `0.11.0`，旧 `/api/validation/v31` 已不再暴露。
+- 发布提交：V4.2 主提交 `d59afb0`；中性影子命名与旧名去重修复最终提交 `1387b4a`，分支 `codex/two-stage-live-system`。
+- VPS 部署前两次安全复核均为空仓、普通挂单 0、条件单 0；权益约 `19.63U`，机器人运行，5U 硬停止未触发。
+- 配置与状态备份：`/opt/bitdata/backups/v0.11.0-20260717T134315Z`；仅迁移 V4.2、通用执行门槛和精确版本许可证字段，API 密钥、150 币实时池、阶段风险和杠杆未改。
+- 部署后：路由 `extreme_v4_roll@v4.2`，S0 仍为单仓、10% 单笔风险上限、5x 杠杆上限；新版本许可证状态 `waiting_candidate`，`0.4x`、最多 3 次、已用 0 次，不处于强制冷却。
+- 线上连接：150 币、4 条公共 WebSocket、451 个订阅；私有账户流已初始化并实时连接。REST 观察时交易所额度使用约 `40.96%`，无 429 冷却或错误。
+- 线上静态资源：首页及 5 个版本化 JS/CSS 全部 HTTP 200，OpenAPI `0.11.0`；容器重启计数均为 0，近端日志无 429/500/502、数据库锁、异常栈或错误。
+- V4.2 新影子实测使用中性 `breakout/prebreakout/pullback`，payload 包含 `market_structure` 且不再写旧 `market_state`；开放影子没有同 `opportunity_id + evidence_type` 重复组。
+- 最终实盘安全：权益约 `19.6283U`，无持仓、普通挂单或条件单；机器人持续运行，许可证等待第一个符合 V4.2 条件的候选，不曾因部署主动开仓或平仓。
