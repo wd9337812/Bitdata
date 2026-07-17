@@ -12,6 +12,7 @@ from app.live_learning import apply_live_credit_to_candidate, list_live_scores
 from app.live_reaction import apply_live_reaction_to_candidate
 from app.performance_guard import apply_strategy_evidence_to_candidate, observed_round_trip_cost_pct
 from app.strategy_calibration import calibrate_v3_opportunity
+from app.market_structure import build_market_structure_features, market_structure
 from app.market_stream import stream_depth, stream_triggers, write_stream_intent
 from app.opportunity_engine import (
     V3_STRATEGY_FAMILY,
@@ -1832,11 +1833,10 @@ def _apply_v4_live_selection(
     config: dict[str, Any],
     mode: dict[str, Any],
 ) -> dict[str, Any]:
-    """Make V4 the live selector while retaining V3 fields for diagnostics only."""
+    """Make V4 the live selector; legacy features remain internal compatibility inputs."""
     if not config.get("opportunity_v4_enabled", True) or not config.get("opportunity_v4_live_enabled", False):
         return candidate
     result = dict(candidate)
-    result["legacy_v3_quality"] = dict(candidate.get("symbol_quality") or {})
     v4 = dict(candidate.get("opportunity_v4") or {})
     if not v4:
         result["passed"] = False
@@ -1852,11 +1852,11 @@ def _apply_v4_live_selection(
         signal["protection_profile"] = dict(v4["protection_profile"])
     result.update(
         {
-            "strategy": "opportunity_v41_state_ranked_roll",
+            "strategy": "opportunity_v42_adaptive_roll",
             "strategy_family": V4_STRATEGY_FAMILY,
-            "strategy_version": str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.1"),
+            "strategy_version": str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.2"),
             "strategy_role": "active",
-            "strategy_generation": "v4.1",
+            "strategy_generation": "v4.2",
             "signal": signal,
             "score": float(v4.get("score") or 0),
             "passed": admitted,
@@ -1868,13 +1868,15 @@ def _apply_v4_live_selection(
             "quality_risk_multiplier": 1.0,
             "v4_risk_multiplier": risk_multiplier,
             "quality_risk_reasons": [
-                "V4.1 已验证准入"
+                "V4.2 已验证核心准入"
                 if v4.get("validated")
-                else "V4.1 同状态受限准入"
+                else "V4.2 同状态核心准入"
                 if v4.get("provisional")
-                else "V4.1 限次策略试运行"
+                else "V4.2 核心限次试运行"
                 if v4.get("bootstrap_admitted")
-                else "V4.1 继续观察"
+                else "V4.2 顺势受限探索"
+                if v4.get("exploration_admitted")
+                else "V4.2 仅影子观察"
             ],
             "symbol_quality": {
                 "engine": "opportunity_v4",
@@ -1882,19 +1884,21 @@ def _apply_v4_live_selection(
                 "allowed": admitted,
                 "pool": "trade" if admitted else "observe",
                 "tier": (
-                    "V4.1-VALIDATED"
+                    "V4.2-CORE"
                     if v4.get("validated")
-                    else "V4.1-PROVISIONAL"
+                    else "V4.2-CORE-LIMITED"
                     if v4.get("provisional")
-                    else "V4.1-CANARY"
+                    else "V4.2-CORE-CANARY"
                     if v4.get("bootstrap_admitted")
-                    else "V4.1-WATCH"
+                    else "V4.2-EXPLORE"
+                    if v4.get("exploration_admitted")
+                    else "V4.2-SHADOW"
                 ),
                 "quality_risk_multiplier": risk_multiplier,
-                "quality_risk_reasons": ["V3.2 质量分层仅保留用于诊断，不参与实盘"],
+                "quality_risk_reasons": [str(v4.get("reason") or "V4.2 独立排序")],
                 "simulation": {
                     "passed": None,
-                    "diagnostic": "V4.1 只用独立决策影子做准入；探索和对照样本仅用于诊断",
+                    "diagnostic": "V4.2 按核心、受限探索和影子三通道隔离证据",
                 },
             },
             "symbol_pool": "trade" if admitted else "observe",
@@ -1904,6 +1908,7 @@ def _apply_v4_live_selection(
                 "v4_admission_multiplier": round(risk_multiplier, 6),
                 "rank_percentile": v4.get("rank_percentile"),
                 "evidence_status": v4.get("evidence_status"),
+                "admission_lane": v4.get("admission_lane"),
             },
         }
     )
@@ -2131,28 +2136,51 @@ def scan_growth_candidates(
                     derivative_checks += 1
                 if v3_enabled:
                     event = opportunity_by_symbol.get(symbol) or trigger_by_symbol.get(symbol)
-                    opportunity = score_v3_opportunity(
+                    v4_enabled = bool(config.get("opportunity_v4_enabled", True))
+                    structure = build_market_structure_features(
                         symbol=symbol,
                         direction=direction,
                         signal=signal,
-                        ticker=ticker,
                         market_context=v3_market_context,
                         medium_context=v31_medium_context,
-                        depth=depth,
-                        derivatives=derivatives,
-                        event=event,
-                        cost_pct=observed_cost_pct,
-                        config=config,
                     )
-                    opportunity = calibrate_v3_opportunity(opportunity, signal, direction, config)
-                    challenger = build_v33_challenger(
-                        symbol=symbol,
-                        direction=direction,
-                        signal=signal,
-                        opportunity=opportunity,
-                        medium_context=v31_medium_context,
-                        config=config,
-                    )
+                    if not v4_enabled:
+                        opportunity = score_v3_opportunity(
+                            symbol=symbol,
+                            direction=direction,
+                            signal=signal,
+                            ticker=ticker,
+                            market_context=v3_market_context,
+                            medium_context=v31_medium_context,
+                            depth=depth,
+                            derivatives=derivatives,
+                            event=event,
+                            cost_pct=observed_cost_pct,
+                            config=config,
+                        )
+                        opportunity = calibrate_v3_opportunity(opportunity, signal, direction, config)
+                        challenger = build_v33_challenger(
+                            symbol=symbol,
+                            direction=direction,
+                            signal=signal,
+                            opportunity=opportunity,
+                            medium_context=v31_medium_context,
+                            config=config,
+                        )
+                    else:
+                        expected = float(signal.get("expected_profit_pct") or 0)
+                        opportunity = {
+                            **structure,
+                            "score": 0.0,
+                            "tier": "WATCH",
+                            "risk_multiplier": 0.0,
+                            "passed": False,
+                            "eligible": False,
+                            "expected_profit_pct": expected,
+                            "cost_ratio": expected / observed_cost_pct if observed_cost_pct > 0 else 999.0,
+                            "reason": "中性市场结构已生成，交由 V4.2 独立排序",
+                        }
+                        challenger = {"enabled": False, "reason": "旧 V3 实验已归档"}
                     tier = str(opportunity.get("tier") or "WATCH")
                     tier_multiplier = float(opportunity.get("risk_multiplier") or 0)
                     direction_multiplier = float(opportunity.get("direction_multiplier") or 0)
@@ -2201,7 +2229,6 @@ def scan_growth_candidates(
                         "decision_reason": opportunity.get("reason"),
                         "entry_type": entry_type,
                         "entry_type_label": signal.get("entry_type_label", "V3 观察"),
-                        "opportunity_v3": opportunity,
                         "v33_challenger": challenger,
                         "v3_tier": tier,
                         "symbol_quality": quality,
@@ -2248,7 +2275,9 @@ def scan_growth_candidates(
                         },
                         "coarse": next((row for row in coarse_rows if row["symbol"] == symbol), {}),
                     }
-                    if not config.get("opportunity_v4_enabled", True):
+                    candidate["market_structure"] = structure
+                    if not v4_enabled:
+                        candidate["opportunity_v3"] = opportunity
                         candidate = _finalize_candidate(
                             candidate,
                             config=config,
@@ -2669,28 +2698,33 @@ def scan_growth_candidates(
     probe_count = sum(1 for candidate in candidates if candidate.get("entry_type") in {"extreme_probe", "weak_quality_probe"})
     scalp_count = sum(1 for candidate in candidates if candidate.get("entry_type") in {"orderbook_impact", "volume_scalp", "imbalance_probe"})
     sprint_count = sum(1 for candidate in candidates if candidate.get("passed") and candidate.get("entry_type") not in {"extreme_probe", "weak_quality_probe"})
-    v3_tiers = {
-        tier: sum(1 for candidate in candidates if candidate.get("v3_tier") == tier)
-        for tier in ("A+", "A", "B", "WATCH")
-    }
-    v33_ready = sum(1 for candidate in candidates if (candidate.get("v33_challenger") or {}).get("eligible"))
     v4_shadow_ready = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("shadow_eligible"))
     v4_admitted = sum(
         1
         for candidate in candidates
         if candidate.get("passed") and (candidate.get("opportunity_v4") or {}).get("admitted")
     )
-    v41_canary_ready = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("canary_eligible"))
-    v41_validated = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("validated"))
-    v41_provisional = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("provisional"))
+    v42_canary_ready = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("canary_eligible"))
+    v42_validated = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("validated"))
+    v42_provisional = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("provisional"))
+    v42_exploration = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("exploration_admitted"))
     blocked_reasons: dict[str, int] = {}
     for candidate in candidates:
         if candidate.get("passed"):
             continue
         reason = str(candidate.get("reason") or "unknown")
+        v4_blockers = list((candidate.get("opportunity_v4") or {}).get("blockers") or [])
         market_reason = str(candidate.get("market_state", {}).get("state") or "")
         pool_reason = str(candidate.get("symbol_quality", {}).get("pool") or "")
-        key = market_reason if market_reason in {"chop", "liquidity_trap", "spike_wick"} else pool_reason if pool_reason == "disabled" else reason
+        key = (
+            str(v4_blockers[0])
+            if v4_blockers
+            else market_reason
+            if market_reason in {"chop", "liquidity_trap", "spike_wick"}
+            else pool_reason
+            if pool_reason == "disabled"
+            else reason
+        )
         blocked_reasons[key] = blocked_reasons.get(key, 0) + 1
     if not fast_lane:
         _publish_stream_intent(config, account_summary, coarse_rows, candidates, trade_pool)
@@ -2731,37 +2765,29 @@ def scan_growth_candidates(
             "blocked_reasons": blocked_reasons,
             "label": "极限V2",
         },
-        "opportunity_v3": {
-            "enabled": v3_enabled,
-            "strategy_family": V3_STRATEGY_FAMILY,
+        "market_structure": {
+            "enabled": bool(v3_enabled),
+            "schema_version": "market-structure-v1",
             "market_regime": v3_market_context.get("regime"),
             "market_label": v3_market_context.get("label"),
             "breadth_positive": v3_market_context.get("breadth_positive"),
             "dispersion_pct": v3_market_context.get("dispersion_pct"),
-            "tiers": v3_tiers,
             "observed_cost_floor_pct": round(observed_cost_pct, 6),
-            "label": "机会引擎 V3",
-        },
-        "opportunity_v33": {
-            "enabled": bool(v3_enabled and config.get("opportunity_v33_challenger_enabled", False) and not config.get("opportunity_v4_enabled", True)),
-            "strategy_family": V3_STRATEGY_FAMILY,
-            "strategy_version": str(config.get("opportunity_v33_strategy_version") or "v3.3-candidate"),
-            "medium_symbols": len(v31_medium_context),
-            "shadow_ready": v33_ready,
-            "cache_seconds": int(config.get("opportunity_v31_bar_cache_seconds", 600)),
-            "label": "V3.3 配对影子挑战者",
+            "label": "市场结构特征",
         },
         "opportunity_v4": {
             "enabled": bool(config.get("opportunity_v4_enabled", True)),
             "strategy_family": V4_STRATEGY_FAMILY,
-            "strategy_version": str(config.get("opportunity_v4_strategy_version") or "v4.1"),
+            "strategy_version": str(config.get("opportunity_v4_strategy_version") or "v4.2"),
             "shadow_ready": v4_shadow_ready,
             "admitted": v4_admitted,
-            "canary_ready": v41_canary_ready,
-            "provisional": v41_provisional,
-            "validated": v41_validated,
+            "canary_ready": v42_canary_ready,
+            "provisional": v42_provisional,
+            "validated": v42_validated,
+            "exploration_admitted": v42_exploration,
+            "blocked_reasons": blocked_reasons,
             "live_enabled": bool(config.get("opportunity_v4_live_enabled", False)),
-            "label": "V4.1 状态自适应机会排序",
+            "label": "V4.2 自适应双通道机会排序",
         },
         "opportunity_queue": {
             "enabled": bool(config.get("opportunity_queue_enabled", True)),

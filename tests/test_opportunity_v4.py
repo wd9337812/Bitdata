@@ -89,7 +89,7 @@ def test_v4_live_selector_ignores_v3_tier_and_applies_admission_risk_once():
                 "bootstrap_admitted": True,
                 "validated": False,
                 "risk_multiplier": 0.4,
-                "strategy_version": "v4.1",
+                "strategy_version": "v4.2",
                 "score": 75,
                 "rank_percentile": 0.95,
                 "evidence_status": "bootstrap",
@@ -114,8 +114,8 @@ def test_v4_live_selector_ignores_v3_tier_and_applies_admission_risk_once():
 
     assert selected["passed"] is True
     assert selected["strategy_family"] == "extreme_v4_roll"
-    assert selected["legacy_v3_quality"]["tier"] == "WATCH"
-    assert selected["symbol_quality"]["tier"] == "V4.1-CANARY"
+    assert "legacy_v3_quality" not in selected
+    assert selected["symbol_quality"]["tier"] == "V4.2-CORE-CANARY"
     assert selected["risk_pct"] == 4.0
     assert selected["quality_risk_multiplier"] == 1.0
     assert selected["risk_adjustment"]["multiplier"] == 1.0
@@ -226,3 +226,57 @@ def test_v41_retest_scores_above_triggered_and_dynamic_cost_can_block(monkeypatc
     assert retest["opportunity_v4"]["score"] > triggered["opportunity_v4"]["score"]
     assert expensive["opportunity_v4"]["admitted"] is False
     assert any("成本比" in reason for reason in expensive["opportunity_v4"]["blockers"])
+
+
+def _momentum_candidate(symbol: str, direction: str, regime: str) -> dict:
+    candidate = _candidate(symbol, 0.95, 2.2)
+    candidate["direction"] = direction
+    candidate["entry_type"] = "v3_momentum"
+    candidate["signal"].update(
+        {
+            "signal": direction,
+            "stop": 101 if direction == "SHORT" else 99,
+            "take_profit": 97 if direction == "SHORT" else 103,
+            "entry_phase": "ARMED",
+            "directed_trade_flow": 0.65,
+        }
+    )
+    candidate["market_state"] = {"state": regime}
+    candidate["opportunity_v3"].update(
+        {
+            "market_regime": regime,
+            "medium_trend_aligned": False,
+            "medium_path_efficiency": 0.25,
+        }
+    )
+    return candidate
+
+
+def test_v42_broad_down_short_momentum_uses_limited_exploration(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    clear_v4_evidence_cache()
+    candidate = _momentum_candidate("DOWNUSDT", "SHORT", "broad_down")
+
+    attach_v4_rankings([candidate], {"opportunity_v4_live_enabled": True})
+
+    v4 = candidate["opportunity_v4"]
+    assert v4["admitted"] is True
+    assert v4["exploration_admitted"] is True
+    assert v4["admission_lane"] == "limited_exploration"
+    assert v4["risk_multiplier"] == 0.4
+    assert v4["canary_eligible"] is True
+    assert v4["momentum_confirmations"] >= 2
+
+
+def test_v42_countertrend_and_panic_remain_shadow_only(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    clear_v4_evidence_cache()
+    countertrend = _momentum_candidate("COUNTERUSDT", "LONG", "broad_down")
+    panic = _momentum_candidate("PANICUSDT", "SHORT", "panic")
+
+    attach_v4_rankings([countertrend, panic], {"opportunity_v4_live_enabled": True})
+
+    assert countertrend["opportunity_v4"]["admitted"] is False
+    assert countertrend["opportunity_v4"]["admission_lane"] == "shadow_only"
+    assert panic["opportunity_v4"]["admitted"] is False
+    assert panic["opportunity_v4"]["regime_policy"]["scope"] == "panic_shadow_only"

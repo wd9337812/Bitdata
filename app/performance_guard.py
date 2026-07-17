@@ -374,9 +374,9 @@ def global_performance_guard(
         "probe_open": "恢复试单持仓中",
         "recovery_2": "已取得恢复试单资格",
         "recovery_3": "三级受限恢复",
-        "strategy_canary_1": "V4.1 新策略一级试运行",
-        "strategy_canary_2": "V4.1 新策略二级试运行",
-        "strategy_canary_3": "V4.1 新策略已验证",
+        "strategy_canary_1": "V4.2 新策略一级试运行",
+        "strategy_canary_2": "V4.2 新策略二级试运行",
+        "strategy_canary_3": "V4.2 新策略已验证",
     }
     reason = "当前版本滚动表现正常"
     if canary_allowed and risk_off:

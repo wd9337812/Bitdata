@@ -41,7 +41,7 @@ def test_release_registry_and_legacy_migration(monkeypatch, tmp_path):
     assert row["release_id"] == "extreme_v31_challenger@v3.1"
     assert ("v3.2", "active") in roles
     assert ("v3.3-candidate", "archived") in roles
-    assert ("v4.1", "challenger") in roles
+    assert ("v4.2", "challenger") in roles
     assert ("v3.1-legacy", "archived") in roles
 
 
@@ -58,6 +58,28 @@ def test_v4_live_release_retires_v3(monkeypatch, tmp_path):
 
     assert ("extreme_v4_roll", "v4.0", "active", "live") in roles
     assert ("extreme_v3_roll", "v3.2", "archived", "retired") in roles
+
+
+def test_new_v4_release_archives_older_v4_release(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    list_strategy_releases(
+        {
+            "opportunity_v3_strategy_version": "v3.2",
+            "opportunity_v4_strategy_version": "v4.1",
+            "opportunity_v4_live_enabled": True,
+        }
+    )
+    releases = list_strategy_releases(
+        {
+            "opportunity_v3_strategy_version": "v3.2",
+            "opportunity_v4_strategy_version": "v4.2",
+            "opportunity_v4_live_enabled": True,
+        }
+    )
+    roles = {(row["strategy_version"], row["role"], row["status"]) for row in releases}
+
+    assert ("v4.2", "active", "live") in roles
+    assert ("v4.1", "archived", "retired") in roles
 
 
 def test_live_legacy_placeholder_is_backfilled_from_exact_open_decision(monkeypatch, tmp_path):

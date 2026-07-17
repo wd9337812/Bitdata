@@ -231,11 +231,11 @@ def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
         keys = {
             "symbol", "direction", "mode", "strategy", "strategy_family", "strategy_version", "strategy_role",
             "score", "passed", "reason", "decision_reason", "entry_type", "entry_type_label",
-            "v3_tier", "symbol_pool", "cost_ratio", "estimated_cost_pct", "expected_profit_pct",
+            "symbol_pool", "cost_ratio", "estimated_cost_pct", "expected_profit_pct",
             "risk_pct", "base_risk_pct", "leverage", "margin_pct", "current_score",
         }
         item = {key: candidate.get(key) for key in keys if key in candidate}
-        for nested_key in ("opportunity_v3", "market_state", "risk_adjustment", "ticker"):
+        for nested_key in ("market_structure", "opportunity_v4", "market_state", "risk_adjustment", "ticker"):
             if isinstance(candidate.get(nested_key), dict):
                 item[nested_key] = candidate[nested_key]
         signal = candidate.get("signal") or {}
@@ -266,7 +266,7 @@ def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
     raw_scan = dict(compact.get("scan") or {})
     scan = {
         key: raw_scan.get(key)
-        for key in ("mode", "funnel", "market_context", "opportunity_v3", "opportunity_v33", "elapsed_seconds")
+        for key in ("mode", "funnel", "market_context", "market_structure", "opportunity_v4", "elapsed_seconds")
         if key in raw_scan
     }
     if isinstance(raw_scan.get("best"), dict):

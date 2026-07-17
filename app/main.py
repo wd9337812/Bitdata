@@ -17,7 +17,6 @@ from app.config_store import load_config, save_config
 from app.learning_report import latest_daily_learning_report, save_daily_learning_report
 from app.live_learning import (
     EXTREME_V2_FAMILY,
-    EXTREME_V3_FAMILY,
     EXTREME_V4_FAMILY,
     ORDERBOOK_SCALP_FAMILY,
     list_live_scores,
@@ -33,7 +32,6 @@ from app.runtime_protection import manage_runtime_protection
 from app.runtime_snapshot import read_runtime_snapshot
 from app.scanner import mode_config
 from app.shadow_trading import shadow_summary
-from app.strategy_calibration import calibration_snapshot
 from app.strategy_releases import list_strategy_releases
 from app.stage_modes import all_stage_profiles, stage_profile_for_equity
 from app.stage_simulation import simulate_stage_path
@@ -52,7 +50,6 @@ from app.telemetry import (
     telemetry_storage_status,
 )
 from app.user_stream import user_stream_status
-from app.v31_validation import compare_v31_to_plain_breakout
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
@@ -66,7 +63,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.10.2")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.11.0")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -263,9 +260,7 @@ def live_learning(limit: int = 100) -> dict[str, Any]:
         "strategy_scores": list_strategy_live_scores(limit, config),
         "scalp_scores": list_strategy_live_scores(limit, config, strategy_family=ORDERBOOK_SCALP_FAMILY),
         "extreme_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V2_FAMILY),
-        "v3_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V3_FAMILY),
         "v4_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V4_FAMILY),
-        "v3_calibration": calibration_snapshot(config),
     }
 
 
@@ -437,20 +432,6 @@ def api_backtest(symbol: str | None = None) -> dict[str, Any]:
         bars = client.klines(item, config["interval"], int(config["limit"]))
         results.append(backtest(item, bars, StrategyParams()))
     return {"results": results}
-
-
-@app.get("/api/validation/v31", dependencies=[Depends(require_auth)])
-def api_validation_v31(symbol: str = "SOLUSDT", days: int = 180) -> dict[str, Any]:
-    """Manual-only validation. The runner and Dashboard polling never call this endpoint."""
-    safe_days = max(30, min(int(days), 365))
-    config = load_config()
-    client = client_from_config()
-    bars = client.klines_history(symbol.upper(), "1h", safe_days, warmup=200)
-    cost_pct = max(
-        float(config.get("shadow_round_trip_cost_pct", 0.12)),
-        float(config.get("taker_fee_pct_round_trip", 0.08)) + float(config.get("estimated_slippage_pct", 0.04)),
-    )
-    return {"symbol": symbol.upper(), "days": safe_days, "bars": len(bars), **compare_v31_to_plain_breakout(bars, cost_pct)}
 
 
 @app.get("/api/signals", dependencies=[Depends(require_auth)])

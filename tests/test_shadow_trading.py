@@ -79,7 +79,7 @@ def test_v32_and_v33_paired_shadow_trades_can_coexist(monkeypatch, tmp_path):
     assert {row["strategy_role"] for row in summary["trades"]} == {"active", "challenger"}
     assert len({row["opportunity_id"] for row in summary["trades"]}) == 1
     assert summary["active_release"]["strategy_version"] == "v3.2"
-    assert summary["challenger_release"]["strategy_version"] == "v4.1"
+    assert summary["challenger_release"]["strategy_version"] == "v4.2"
 
 
 def test_v4_decision_exploration_and_control_are_separate(monkeypatch, tmp_path):

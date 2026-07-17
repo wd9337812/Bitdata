@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.market_stream import read_snapshot
+from app.market_structure import market_structure
 from app.performance_guard import observed_round_trip_cost_pct
 from app.strategy_releases import (
     ACTIVE_ROLE,
@@ -288,7 +289,8 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 continue
             try:
                 strategy_family = str(candidate.get("strategy_family") or "legacy_mixed")
-                market_regime = str((candidate.get("market_state") or {}).get("state") or "unknown")
+                structure = market_structure(candidate)
+                market_regime = str(structure.get("market_regime") or (candidate.get("market_state") or {}).get("state") or "unknown")
                 candidate_hold_minutes = hold_minutes
                 if strategy_family in {V3_FAMILY, V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY, "extreme_v31_challenger"}:
                     protection = signal.get("protection_profile") or {}
@@ -348,10 +350,14 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                                 "passed": candidate.get("passed"),
                                 "strategy_version": candidate.get("strategy_version"),
                                 "strategy_role": strategy_role,
-                                "tier": candidate.get("v3_tier") or v3.get("tier"),
                                 "entry_type": candidate.get("entry_type"),
                                 "evidence_type": evidence_type,
                                 "rank_bucket": v4.get("rank_bucket"),
+                                "admission_lane": v4.get("admission_lane"),
+                                "exploration_admitted": v4.get("exploration_admitted"),
+                                "regime_policy": v4.get("regime_policy"),
+                                "blockers": v4.get("blockers"),
+                                "model_expected_net_pct": v4.get("model_expected_net_pct"),
                                 "expected_net_pct": v4.get("expected_net_pct"),
                                 "lower_expected_net_pct": v4.get("lower_expected_net_pct"),
                                 "features": {
@@ -362,8 +368,9 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                                     "impulse_atr": signal.get("impulse_atr"),
                                     "breakout_extension_atr": signal.get("breakout_extension_atr"),
                                     "entry_phase": signal.get("entry_phase"),
-                                    "medium_trend_aligned": (v33 if is_v33 else v3).get("medium_trend_aligned"),
-                                    "medium_path_efficiency": (v33 if is_v33 else v3).get("medium_path_efficiency"),
+                                    "medium_trend_aligned": structure.get("medium_trend_aligned"),
+                                    "medium_path_efficiency": structure.get("medium_path_efficiency"),
+                                    "setup_type": structure.get("setup_type"),
                                 },
                             },
                             ensure_ascii=False,
@@ -490,6 +497,24 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             """,
             (V4_STRATEGY_FAMILY, candidate_version),
         ).fetchall()
+        admission_lane_rows = conn.execute(
+            """
+            SELECT COALESCE(NULLIF(json_extract(payload, '$.admission_lane'), ''), 'unclassified') AS admission_lane,
+                   COUNT(*) AS total,
+                   COUNT(DISTINCT NULLIF(opportunity_id, '')) AS opportunities,
+                   SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) AS closed,
+                   SUM(CASE WHEN status = 'CLOSED' AND net_pnl > 0 THEN 1 ELSE 0 END) AS wins,
+                   SUM(CASE WHEN status = 'CLOSED' THEN net_pnl ELSE 0 END) AS net_pnl,
+                   SUM(CASE WHEN status = 'CLOSED' THEN estimated_cost ELSE 0 END) AS cost,
+                   SUM(CASE WHEN status = 'CLOSED' AND net_pnl > 0 THEN net_pnl ELSE 0 END) AS gross_wins,
+                   -SUM(CASE WHEN status = 'CLOSED' AND net_pnl < 0 THEN net_pnl ELSE 0 END) AS gross_losses
+            FROM shadow_trades
+            WHERE strategy_family = ? AND strategy_version = ?
+              AND COALESCE(evidence_type, 'decision') = 'decision'
+            GROUP BY COALESCE(NULLIF(json_extract(payload, '$.admission_lane'), ''), 'unclassified')
+            """,
+            (V4_STRATEGY_FAMILY, candidate_version),
+        ).fetchall()
         active_rows = [
             dict(row)
             for row in conn.execute(
@@ -548,6 +573,16 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         item["win_rate"] = item_wins / item_closed * 100 if item_closed else 0.0
         item["profit_factor"] = gross_wins / gross_losses if gross_losses else (999.0 if gross_wins > 0 else 0.0)
         by_evidence_type.append(item)
+    by_admission_lane = []
+    for row in admission_lane_rows:
+        item = dict(row)
+        item_closed = int(item.get("closed") or 0)
+        item_wins = int(item.get("wins") or 0)
+        gross_wins = float(item.get("gross_wins") or 0)
+        gross_losses = float(item.get("gross_losses") or 0)
+        item["win_rate"] = item_wins / item_closed * 100 if item_closed else 0.0
+        item["profit_factor"] = gross_wins / gross_losses if gross_losses else (999.0 if gross_wins > 0 else 0.0)
+        by_admission_lane.append(item)
     trades = []
     for row in rows:
         item = dict(row)
@@ -556,7 +591,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         except json.JSONDecodeError:
             item["payload"] = {}
         trades.append(item)
-    # V4.1 primary performance uses only decision shadows. Exploration and paired
+    # V4 primary performance uses only decision shadows. Exploration and paired
     # controls remain visible by evidence type, but cannot inflate live admission.
     if current_family == V4_STRATEGY_FAMILY:
         active_rows = [row for row in active_rows if str(row.get("evidence_type") or "decision") == "decision"]
@@ -589,6 +624,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         "by_strategy": by_strategy,
         "by_release": by_release,
         "by_evidence_type": by_evidence_type,
+        "by_admission_lane": by_admission_lane,
         "active_release": {
             "strategy_family": current_family,
             "strategy_version": current_version,

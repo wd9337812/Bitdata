@@ -26,8 +26,8 @@ _ACTIVE_FINGERPRINT_KEYS = (
     "opportunity_v3_b_min_cost_ratio",
     "opportunity_v3_long_strength_floor",
     "opportunity_v3_short_strength_floor",
-    "opportunity_v3_max_spread_pct",
-    "opportunity_v3_min_depth_notional_usdt",
+    "execution_max_spread_pct",
+    "execution_min_depth_notional_usdt",
     "opportunity_v3_max_breakout_extension_atr",
     "opportunity_v3_max_entry_impulse_atr",
     "opportunity_v3_min_medium_path_efficiency",
@@ -51,6 +51,14 @@ _CHALLENGER_FINGERPRINT_KEYS = _ACTIVE_FINGERPRINT_KEYS + (
     "opportunity_v41_armed_take_profit_atr",
     "opportunity_v41_triggered_stop_atr",
     "opportunity_v41_triggered_take_profit_atr",
+    "opportunity_v42_exploration_enabled",
+    "opportunity_v42_exploration_min_rank_percentile",
+    "opportunity_v42_exploration_min_quality_score",
+    "opportunity_v42_exploration_min_expected_net_pct",
+    "opportunity_v42_exploration_min_lower_expectancy_pct",
+    "opportunity_v42_exploration_min_cost_ratio",
+    "opportunity_v42_exploration_min_confirmations",
+    "opportunity_v42_exploration_risk_multiplier",
 )
 
 
@@ -59,7 +67,7 @@ def active_version(config: dict[str, Any]) -> str:
 
 
 def challenger_version(config: dict[str, Any]) -> str:
-    return str(config.get("opportunity_v4_strategy_version") or "v4.1")
+    return str(config.get("opportunity_v4_strategy_version") or "v4.2")
 
 
 def active_family(config: dict[str, Any]) -> str:
@@ -248,6 +256,20 @@ def initialize_strategy_releases(config: dict[str, Any]) -> dict[str, Any]:
             fingerprint="legacy-v33",
             config={},
         )
+        current = now_iso()
+        conn.execute(
+            "UPDATE strategy_releases SET role = ?, status = 'retired', "
+            "retired_at = COALESCE(retired_at, ?), updated_at = ? "
+            "WHERE strategy_family = ? AND strategy_version != ? AND role != ?",
+            (ARCHIVED_ROLE, current, current, V4_FAMILY, v4_version, ARCHIVED_ROLE),
+        )
+        if v4_live:
+            conn.execute(
+                "UPDATE strategy_releases SET role = ?, status = 'retired', "
+                "retired_at = COALESCE(retired_at, ?), updated_at = ? "
+                "WHERE strategy_family = ? AND role != ?",
+                (ARCHIVED_ROLE, current, current, V3_FAMILY, ARCHIVED_ROLE),
+            )
         conn.commit()
     return {
         "active_release": release_id(live_family, live_version),

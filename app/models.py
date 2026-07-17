@@ -501,6 +501,8 @@ class TradingConfig(BaseModel):
     opportunity_v3_market_trend_move_pct: float = Field(default=0.8, ge=0, le=100)
     opportunity_v3_rotation_dispersion_pct: float = Field(default=7.0, ge=0, le=200)
     opportunity_v3_quiet_median_abs_pct: float = Field(default=1.8, ge=0, le=100)
+    execution_max_spread_pct: float = Field(default=0.10, ge=0, le=5)
+    execution_min_depth_notional_usdt: float = Field(default=5_000.0, ge=0)
     opportunity_v3_max_spread_pct: float = Field(default=0.10, ge=0, le=5)
     opportunity_v3_min_depth_notional_usdt: float = Field(default=5_000.0, ge=0)
     opportunity_v3_stream_depth_max_age_seconds: int = Field(default=8, ge=1, le=60)
@@ -521,7 +523,7 @@ class TradingConfig(BaseModel):
     opportunity_v3_canary_bypass_enabled: bool = False
     opportunity_v3_canary_risk_multiplier: float = Field(default=0.25, ge=0.01, le=1)
     opportunity_v3_strategy_version: str = "v3.2"
-    opportunity_v3_calibration_enabled: bool = True
+    opportunity_v3_calibration_enabled: bool = False
     opportunity_v3_calibration_live_min_trades: int = Field(default=30, ge=1, le=10000)
     opportunity_v3_calibration_shadow_min_trades: int = Field(default=70, ge=1, le=10000)
     opportunity_v3_calibration_lookback_days: float = Field(default=30, ge=1, le=3650)
@@ -572,7 +574,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v4.1"
+    opportunity_v4_strategy_version: str = "v4.2"
     opportunity_v4_decision_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
     opportunity_v4_bootstrap_enabled: bool = True
     opportunity_v4_bootstrap_min_rank_percentile: float = Field(default=0.85, ge=0, le=1)
@@ -611,12 +613,20 @@ class TradingConfig(BaseModel):
     opportunity_v41_triggered_stop_atr: float = Field(default=0.70, ge=0.05, le=20)
     opportunity_v41_triggered_take_profit_atr: float = Field(default=1.20, ge=0.05, le=50)
     opportunity_v41_triggered_max_hold_bars: int = Field(default=8, ge=1, le=200)
+    opportunity_v42_exploration_enabled: bool = True
+    opportunity_v42_exploration_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
+    opportunity_v42_exploration_min_quality_score: float = Field(default=55.0, ge=0, le=100)
+    opportunity_v42_exploration_min_expected_net_pct: float = Field(default=0.04, ge=-100, le=100)
+    opportunity_v42_exploration_min_lower_expectancy_pct: float = Field(default=-0.03, ge=-100, le=100)
+    opportunity_v42_exploration_min_cost_ratio: float = Field(default=1.60, ge=0, le=1000)
+    opportunity_v42_exploration_min_confirmations: int = Field(default=2, ge=1, le=4)
+    opportunity_v42_exploration_risk_multiplier: float = Field(default=0.40, ge=0, le=1)
     opportunity_v4_evidence_lookback_hours: float = Field(default=168, ge=1, le=8760)
     opportunity_v4_evidence_max_trades: int = Field(default=2500, ge=100, le=100000)
     opportunity_v4_evidence_cache_seconds: int = Field(default=60, ge=1, le=3600)
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
-    strategy_canary_release_id: str = "extreme_v4_roll@v4.1"
+    strategy_canary_release_id: str = "extreme_v4_roll@v4.2"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
     strategy_canary_level_1_multiplier: float = Field(default=0.40, ge=0, le=1)
     strategy_canary_level_1_max_opportunities: int = Field(default=3, ge=1, le=100)

@@ -391,7 +391,8 @@ def test_scanner_routes_extreme_mode_through_v3_without_window_backtest(monkeypa
     assert candidate["strategy_family"] == "extreme_v3_roll"
     assert candidate["strategy_generation"] == "v3"
     assert candidate["backtests"][2]["diagnostic"] == "offline_v3_validation"
-    assert result["funnel"]["opportunity_v3"]["enabled"] is True
+    assert result["funnel"]["market_structure"]["enabled"] is True
+    assert "opportunity_v3" not in result["funnel"]
 
 
 def test_scanner_v3_uses_stream_depth_without_rest_depth_call(monkeypatch):
@@ -452,7 +453,7 @@ def test_scanner_v3_uses_stream_depth_without_rest_depth_call(monkeypatch):
     )
 
     assert result["candidates"][0]["depth_checked"] is True
-    assert result["candidates"][0]["opportunity_v3"]["liquidity_safe"] is True
+    assert result["candidates"][0]["opportunity_v4"]["liquidity_gate"]["passed"] is True
 
 
 def test_v31_challenger_requires_aligned_medium_horizon():

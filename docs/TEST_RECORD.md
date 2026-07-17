@@ -272,3 +272,16 @@ This file tracks local verification for the two-stage futures system.
 - VPS 性能：runner 六次 CPU 采样平均约 54%、峰值 120.7%（2 核），内存约 92-97MiB；系统可用内存约 3.0GiB、负载约 0.70、磁盘可用约 14GB。
 - 部署后 REST 交易所额度使用约 5.2%、无冷却；Dashboard/OpenAPI/5 个静态资源全部 HTTP 200，版本 `0.10.2`，近端日志无 429/500/502、数据库锁或异常栈。
 - 实盘安全：部署前后均为空仓，普通挂单和条件单均为 0；机器人运行，路由仍为 `extreme_v4_roll@v4.1`，许可证有效且使用次数仍为 0。
+
+# v0.11.0 V4.2 自适应双通道准入与 V3 归档（2026-07-17）
+
+- 策略：保留 V4 核心通道，新增只接收顺势动量或确认回踩的受限探索通道；默认排名前 25%、质量分 55、融合期望 0.04%、保守下界 -0.03%、成本比 1.60、动量确认至少 2/4、风险倍率 0.4x。
+- 隔离：恐慌和逆势候选继续只做影子；当前 V4 执行链不再运行 V3 完整质量评分、校准或 V3.3 配对影子。
+- 归档：V3 历史证据和回滚实现保留，当前 API、Dashboard 和紧凑遥测不再暴露 V3 实验；版本注册自动标记为 `archived/retired`。
+- 架构：新增中性 `market-structure-v1` 适配层，V4.2 明确记录 `legacy_v3_quality_used_for_live=false`；点差和深度改用通用 execution 配置名，并兼容旧配置别名。
+- API 与性能：未增加 Binance REST、订单或深度预算；V4.2 复用现有 WebSocket、K 线和中周期缓存，跳过旧 V3 实验可减少 CPU 与 SQLite 写入。
+- 定向回归：V4.2、scanner、影子、版本归档和遥测共 `65 passed`。
+- 完整后端：`python -m pytest -q`，`239 passed`；包含旧配置点差/深度无损迁移回归。
+- 前端：`npm run build`，通过，生成版本化生产静态资源。
+- `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
+- 本地 HTTP 冒烟：首页与 5 个版本化 JS/CSS 资源全部返回 HTTP 200；OpenAPI 版本为 `0.11.0`，旧 `/api/validation/v31` 已不再暴露。

@@ -60,6 +60,9 @@ def test_compact_decision_drops_large_universe_but_keeps_learning_metrics():
             "candidates": [
                 {
                     "symbol": "TESTUSDT",
+                    "opportunity_v3": {"tier": "A+"},
+                    "market_structure": {"schema_version": "market-structure-v1", "market_regime": "broad_down"},
+                    "opportunity_v4": {"strategy_version": "v4.2", "admission_lane": "shadow_only"},
                     "coarse": {"large": "x" * 1000},
                     "backtests": {"2": {"trades": 8, "win_rate": 50, "net_pct": 2, "profit_factor": 1.2, "raw": "x" * 1000}},
                 }
@@ -72,6 +75,8 @@ def test_compact_decision_drops_large_universe_but_keeps_learning_metrics():
     assert "ranked_symbols" not in compact["scan"]
     assert "recalled_symbols" not in compact["scan"]
     assert "coarse" not in compact["scan"]["candidates"][0]
+    assert "opportunity_v3" not in compact["scan"]["candidates"][0]
+    assert compact["scan"]["candidates"][0]["opportunity_v4"]["strategy_version"] == "v4.2"
     assert compact["scan"]["candidates"][0]["backtests"]["2"]["profit_factor"] == 1.2
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 
 from app.models import TradingConfig
 
@@ -32,7 +33,7 @@ def test_credentials_are_trimmed_before_save(tmp_path, monkeypatch):
     assert raw["api_secret"] == "secret-with-space"
 
 
-def test_v32_safety_defaults_match_api_model():
+def test_strategy_safety_defaults_match_api_model():
     import app.config_store as config_store
 
     model = TradingConfig().model_dump()
@@ -44,7 +45,30 @@ def test_v32_safety_defaults_match_api_model():
         "opportunity_v3_strategy_version",
         "opportunity_v4_strategy_version",
         "opportunity_v4_live_enabled",
+        "execution_max_spread_pct",
+        "execution_min_depth_notional_usdt",
         "position_rotation_enabled",
         "position_rotation_shadow_enabled",
     ):
         assert model[key] == config_store.DEFAULT_CONFIG[key]
+
+
+def test_v42_loads_legacy_execution_limits_without_changing_values(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "opportunity_v3_max_spread_pct": 0.075,
+                "opportunity_v3_min_depth_notional_usdt": 4321.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APP_CONFIG_PATH", str(path))
+    import app.config_store as config_store
+
+    importlib.reload(config_store)
+    loaded = config_store.load_config(include_secret=True)
+
+    assert loaded["execution_max_spread_pct"] == 0.075
+    assert loaded["execution_min_depth_notional_usdt"] == 4321.0

@@ -8,12 +8,13 @@ from datetime import datetime, timedelta, timezone
 from statistics import mean, pstdev
 from typing import Any
 
+from app.market_structure import MARKET_STRUCTURE_SCHEMA, market_structure, normalize_setup_type
 from app.telemetry import connect, db_path
 
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.1"
+V4_FEATURE_SCHEMA = "v4.2"
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -36,9 +37,7 @@ def _entry_phase(candidate: dict[str, Any]) -> str:
 
 
 def _market_regime(candidate: dict[str, Any]) -> str:
-    opportunity = candidate.get("opportunity_v3") or {}
-    state = candidate.get("market_state") or {}
-    return str(opportunity.get("market_regime") or state.get("state") or "unknown").lower()
+    return str(market_structure(candidate).get("market_regime") or "unknown").lower()
 
 
 def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -57,7 +56,7 @@ def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "AND closed_at >= ? ORDER BY id DESC LIMIT ?",
                 (
                     V4_STRATEGY_FAMILY,
-                    str(config.get("opportunity_v4_strategy_version") or "v4.1"),
+                    str(config.get("opportunity_v4_strategy_version") or "v4.2"),
                     cutoff,
                     limit,
                 ),
@@ -103,7 +102,7 @@ def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def evidence_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
-    key = f"{db_path()}:{config.get('opportunity_v4_strategy_version', 'v4.1')}"
+    key = f"{db_path()}:{config.get('opportunity_v4_strategy_version', 'v4.2')}"
     now = time.monotonic()
     ttl = float(config.get("opportunity_v4_evidence_cache_seconds", 60))
     cached = _CACHE.get(key)
@@ -184,15 +183,15 @@ def _cohort_evidence(candidate: dict[str, Any], config: dict[str, Any]) -> dict[
 
 def _model_features(candidate: dict[str, Any]) -> dict[str, float]:
     signal = candidate.get("signal") or {}
-    opportunity = candidate.get("opportunity_v3") or {}
+    structure = market_structure(candidate)
     depth = candidate.get("depth") or {}
     phase = _entry_phase(candidate)
-    strength = float(opportunity.get("strength_percentile") or 0.5)
-    direction_fit = _clamp(float(opportunity.get("direction_multiplier") or 0.8) / 1.15, 0.0, 1.0)
+    strength = float(structure.get("strength_percentile") or 0.5)
+    direction_fit = _clamp(float(structure.get("direction_multiplier") or 0.8) / 1.15, 0.0, 1.0)
     volume = _clamp((float(signal.get("volume_acceleration") or 1.0) - 0.75) / 1.5, 0.0, 1.0)
     flow = _clamp((float(signal.get("directed_trade_flow") or 0.5) - 0.42) / 0.20, 0.0, 1.0)
-    path = _clamp(float(opportunity.get("medium_path_efficiency") or 0.0) / 0.35, 0.0, 1.0)
-    medium = 1.0 if opportunity.get("medium_trend_aligned") else 0.35 if opportunity.get("medium_ready") else 0.15
+    path = _clamp(float(structure.get("medium_path_efficiency") or 0.0) / 0.35, 0.0, 1.0)
+    medium = 1.0 if structure.get("medium_trend_aligned") else 0.35 if structure.get("medium_ready") else 0.15
     entry_quality = {"RETEST": 1.0, "ARMED": 0.68, "TRIGGERED": 0.30}.get(phase, 0.45)
     extension = float(signal.get("breakout_extension_atr") or 0.0)
     impulse = max(0.0, float(signal.get("impulse_atr") or 0.0))
@@ -262,23 +261,73 @@ def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], con
 def _regime_policy(candidate: dict[str, Any]) -> dict[str, Any]:
     regime = _market_regime(candidate)
     direction = str(candidate.get("direction") or "").upper()
-    entry_type = str(candidate.get("entry_type") or "unknown")
-    opportunity = candidate.get("opportunity_v3") or {}
-    aligned = bool(opportunity.get("medium_trend_aligned"))
-    quiet_short = regime == "quiet" and direction == "SHORT" and entry_type in {
-        "v3_breakout",
-        "v3_pullback",
-        "v3_prebreakout",
+    structure = market_structure(candidate)
+    setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
+    aligned = bool(structure.get("medium_trend_aligned"))
+    regime_aligned = (regime == "broad_down" and direction == "SHORT") or (
+        regime == "broad_up" and direction == "LONG"
+    )
+    trend_aligned = aligned or regime_aligned
+    quiet_short = regime == "quiet" and direction == "SHORT" and setup_type in {
+        "breakout",
+        "pullback",
+        "prebreakout",
     }
-    mixed_long_pullback = regime == "mixed" and direction == "LONG" and entry_type == "v3_pullback"
-    broad_up_long = regime == "broad_up" and direction == "LONG" and entry_type in {"v3_pullback", "v3_breakout"}
+    mixed_long_pullback = regime == "mixed" and direction == "LONG" and setup_type == "pullback"
+    broad_up_long = regime == "broad_up" and direction == "LONG" and setup_type in {"pullback", "breakout"}
     if quiet_short:
-        return {"scope": "quiet_short", "live_scope": True, "canary_scope": True, "reason": "静市做空结构有正向历史证据"}
+        return {
+            "scope": "quiet_short",
+            "live_scope": True,
+            "canary_scope": True,
+            "exploration_scope": False,
+            "trend_aligned": trend_aligned,
+            "reason": "静市做空结构进入核心证据通道",
+        }
     if aligned and (mixed_long_pullback or broad_up_long):
-        return {"scope": "aligned_long_pullback", "live_scope": False, "canary_scope": True, "reason": "顺势做多回踩仅允许新策略试运行"}
-    if regime in {"broad_down", "panic", "rotation"}:
-        return {"scope": "blocked_regime", "live_scope": False, "canary_scope": False, "reason": "当前市场状态的历史扣费后证据不足"}
-    return {"scope": "shadow_only", "live_scope": False, "canary_scope": False, "reason": "该状态组合继续积累独立决策影子"}
+        return {
+            "scope": "aligned_long_pullback",
+            "live_scope": False,
+            "canary_scope": True,
+            "exploration_scope": False,
+            "trend_aligned": trend_aligned,
+            "reason": "顺势做多回踩进入核心试运行通道",
+        }
+    if regime == "panic":
+        return {
+            "scope": "panic_shadow_only",
+            "live_scope": False,
+            "canary_scope": False,
+            "exploration_scope": False,
+            "trend_aligned": trend_aligned,
+            "reason": "恐慌行情仅记录影子，不实盘追价",
+        }
+    if trend_aligned and setup_type == "momentum" and regime in {"broad_down", "broad_up", "mixed", "rotation", "quiet"}:
+        return {
+            "scope": "trend_momentum_exploration",
+            "live_scope": False,
+            "canary_scope": False,
+            "exploration_scope": True,
+            "trend_aligned": True,
+            "reason": "顺势动量进入 V4.2 受限探索通道",
+        }
+    if aligned and setup_type == "pullback" and regime in {"mixed", "rotation"}:
+        return {
+            "scope": "aligned_pullback_exploration",
+            "live_scope": False,
+            "canary_scope": False,
+            "exploration_scope": True,
+            "trend_aligned": True,
+            "reason": "中周期对齐回踩进入 V4.2 受限探索通道",
+        }
+    return {
+        "scope": "shadow_only",
+        "live_scope": False,
+        "canary_scope": False,
+        "exploration_scope": False,
+        "trend_aligned": trend_aligned,
+        "reason": "方向或结构未达到 V4.2 实盘通道，继续积累影子",
+    }
 
 
 def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
@@ -313,7 +362,7 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
     min_time_blocks = int(config.get("opportunity_v41_validation_min_time_blocks", 2))
     min_symbols = int(config.get("opportunity_v41_validation_min_symbols", 3))
     prior_trades = float(config.get("opportunity_v41_empirical_prior_trades", 40))
-    version = str(config.get("opportunity_v4_strategy_version") or "v4.1")
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.2")
     decision_limit = int(config.get("opportunity_v4_decision_shadow_limit", 3))
     bootstrap_rank = float(config.get("opportunity_v4_bootstrap_min_rank_percentile", 0.85))
     bootstrap_quality = float(config.get("opportunity_v4_bootstrap_min_quality_score", 58.0)) / 100
@@ -326,6 +375,22 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
     negative_pf = float(config.get("opportunity_v4_bootstrap_negative_profit_factor", 0.75))
     require_alignment = bool(config.get("opportunity_v41_medium_alignment_required", True))
     live_enabled = bool(config.get("opportunity_v4_live_enabled", False))
+    exploration_enabled = bool(config.get("opportunity_v42_exploration_enabled", True))
+    exploration_rank = float(config.get("opportunity_v42_exploration_min_rank_percentile", 0.75))
+    exploration_quality = float(config.get("opportunity_v42_exploration_min_quality_score", 55.0)) / 100
+    exploration_expected = float(config.get("opportunity_v42_exploration_min_expected_net_pct", 0.04))
+    exploration_lower = float(config.get("opportunity_v42_exploration_min_lower_expectancy_pct", -0.03))
+    exploration_cost_ratio = float(config.get("opportunity_v42_exploration_min_cost_ratio", 1.60))
+    exploration_confirmations_required = int(config.get("opportunity_v42_exploration_min_confirmations", 2))
+    max_spread_pct = float(
+        config.get("execution_max_spread_pct", config.get("opportunity_v3_max_spread_pct", 0.10))
+    )
+    min_depth_notional = float(
+        config.get(
+            "execution_min_depth_notional_usdt",
+            config.get("opportunity_v3_min_depth_notional_usdt", 1_000.0),
+        )
+    )
     ranked: list[tuple[float, dict[str, Any]]] = []
 
     for candidate, features, model in prepared:
@@ -341,16 +406,15 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         spread_raw = depth.get("spread_pct")
         spread_pct = float(spread_raw) if spread_raw is not None else 999.0
         depth_notional = float(depth.get("depth_notional") or 0.0)
-        liquidity_ok = bool(
-            spread_pct <= float(config.get("opportunity_v3_max_spread_pct", 0.12))
-            and depth_notional >= float(config.get("opportunity_v3_min_depth_notional_usdt", 1_000.0))
-        )
+        liquidity_ok = bool(spread_pct <= max_spread_pct and depth_notional >= min_depth_notional)
         policy = _regime_policy(candidate)
-        medium_aligned = bool((candidate.get("opportunity_v3") or {}).get("medium_trend_aligned"))
+        structure = market_structure(candidate)
+        setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
+        medium_aligned = bool(structure.get("medium_trend_aligned"))
         alignment_ok = medium_aligned or not require_alignment
         cost_ok = model["cost_ratio"] >= min_cost_ratio
         model_ok = model["expected_net_pct"] >= min_expected and model["lower_expected_net_pct"] > min_lower
-        shadow_eligible = bool(str(candidate.get("entry_type") or "").startswith("v3_") and model["reward_pct"] > model["cost_pct"])
+        shadow_eligible = bool(setup_type != "unknown" and model["reward_pct"] > model["cost_pct"])
         negative_evidence = bool(
             selected["trades"] >= negative_min_trades
             and selected["net_pct"] < 0
@@ -389,8 +453,46 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             and not validated
             and not provisional
         )
+        momentum_confirmations = sum(
+            (
+                features["volume_persistence"] >= 0.60,
+                features["directed_flow"] >= 0.60,
+                features["cross_sectional_strength"] >= 0.75,
+                features["medium_path"] >= 0.45,
+            )
+        )
+        momentum_confirmed = setup_type == "momentum" and momentum_confirmations >= exploration_confirmations_required
+        exploration_signal_ok = momentum_confirmed or (
+            setup_type == "pullback" and _entry_phase(candidate) == "RETEST" and medium_aligned
+        )
+        exploration_model_ok = expected >= exploration_expected and lower >= exploration_lower
+        exploration_admitted = bool(
+            live_enabled
+            and exploration_enabled
+            and policy["exploration_scope"]
+            and rank >= exploration_rank
+            and model["quality"] >= exploration_quality
+            and exploration_signal_ok
+            and exploration_model_ok
+            and model["cost_ratio"] >= exploration_cost_ratio
+            and executable
+            and liquidity_ok
+            and not negative_evidence
+        )
+        permit_eligible = canary_eligible or exploration_admitted
         bootstrap_admitted = canary_eligible
-        admitted = validated or provisional or bootstrap_admitted
+        admitted = validated or provisional or bootstrap_admitted or exploration_admitted
+        admission_lane = (
+            "validated"
+            if validated
+            else "core_provisional"
+            if provisional
+            else "core_canary"
+            if bootstrap_admitted
+            else "limited_exploration"
+            if exploration_admitted
+            else "shadow_only"
+        )
         risk_multiplier = (
             float(config.get("opportunity_v4_validated_risk_multiplier", 1.0))
             if validated
@@ -398,22 +500,34 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             if provisional
             else float(config.get("opportunity_v4_bootstrap_risk_multiplier", 0.40))
             if bootstrap_admitted
+            else float(config.get("opportunity_v42_exploration_risk_multiplier", 0.40))
+            if exploration_admitted
             else 0.0
         )
         blockers: list[str] = []
-        if not policy["canary_scope"] and not policy["live_scope"]:
+        exploring = bool(policy["exploration_scope"])
+        applicable_rank = exploration_rank if exploring else bootstrap_rank
+        applicable_quality = exploration_quality if exploring else bootstrap_quality
+        applicable_expected = exploration_expected if exploring else min_expected
+        applicable_lower = exploration_lower if exploring else min_lower
+        applicable_cost_ratio = exploration_cost_ratio if exploring else min_cost_ratio
+        if not policy["canary_scope"] and not policy["live_scope"] and not policy["exploration_scope"]:
             blockers.append(policy["reason"])
-        if rank < bootstrap_rank:
-            blockers.append(f"本轮净期望排名 {rank * 100:.0f}%，未进入前 {100 - bootstrap_rank * 100:.0f}%")
-        if model["quality"] < bootstrap_quality:
-            blockers.append(f"模型质量 {model['quality'] * 100:.1f}，低于探索门槛 {bootstrap_quality * 100:.1f}")
-        if model["expected_net_pct"] < min_expected:
-            blockers.append(f"扣费后模型期望 {model['expected_net_pct']:.3f}% 低于 {min_expected:.3f}%")
-        if model["lower_expected_net_pct"] <= min_lower:
-            blockers.append("扣费后保守期望仍未大于零")
-        if not cost_ok:
-            blockers.append(f"毛利/成本比 {model['cost_ratio']:.2f} 低于 {min_cost_ratio:.2f}")
-        if not alignment_ok:
+        if rank < applicable_rank:
+            blockers.append(f"本轮净期望排名 {rank * 100:.0f}%，未进入前 {100 - applicable_rank * 100:.0f}%")
+        if model["quality"] < applicable_quality:
+            blockers.append(f"模型质量 {model['quality'] * 100:.1f}，低于当前通道门槛 {applicable_quality * 100:.1f}")
+        if expected < applicable_expected:
+            blockers.append(f"扣费后融合期望 {expected:.3f}% 低于 {applicable_expected:.3f}%")
+        if lower < applicable_lower:
+            blockers.append(f"扣费后保守期望 {lower:.3f}% 低于 {applicable_lower:.3f}%")
+        if model["cost_ratio"] < applicable_cost_ratio:
+            blockers.append(f"毛利/成本比 {model['cost_ratio']:.2f} 低于 {applicable_cost_ratio:.2f}")
+        if exploring and not exploration_signal_ok:
+            blockers.append(
+                f"受限探索确认不足：{momentum_confirmations}/{exploration_confirmations_required}，或回踩结构未确认"
+            )
+        if not exploring and not alignment_ok:
             blockers.append("中周期方向未对齐")
         if negative_evidence:
             blockers.append(f"同状态独立决策证据转负：{selected['trades']} 笔，PF {selected['profit_factor']:.2f}")
@@ -422,7 +536,19 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         if not liquidity_ok:
             blockers.append(f"盘口硬门未通过：点差 {spread_pct:.4f}%，深度 {depth_notional:.0f}U")
 
-        status = "validated" if validated else "provisional" if provisional else "canary" if bootstrap_admitted else "blocked_negative" if negative_evidence else "collecting"
+        status = (
+            "validated"
+            if validated
+            else "provisional"
+            if provisional
+            else "canary"
+            if bootstrap_admitted
+            else "exploration"
+            if exploration_admitted
+            else "blocked_negative"
+            if negative_evidence
+            else "collecting"
+        )
         opportunity = {
             "enabled": True,
             "engine": "opportunity_v4",
@@ -430,6 +556,8 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             "strategy_version": version,
             "strategy_role": "active" if live_enabled else "challenger",
             "feature_schema_version": V4_FEATURE_SCHEMA,
+            "market_structure_schema": MARKET_STRUCTURE_SCHEMA,
+            "setup_type": setup_type,
             "score": round(model["quality"] * 100, 4),
             "rank_percentile": round(rank, 6),
             "rank_bucket": "top" if rank >= 0.75 else "middle" if rank >= 0.35 else "tail",
@@ -448,8 +576,13 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             "shadow_eligible": shadow_eligible,
             "validated": validated,
             "provisional": provisional,
-            "canary_eligible": canary_eligible,
+            "canary_eligible": permit_eligible,
+            "core_canary_eligible": canary_eligible,
             "bootstrap_admitted": bootstrap_admitted,
+            "exploration_admitted": exploration_admitted,
+            "admission_lane": admission_lane,
+            "momentum_confirmations": momentum_confirmations,
+            "momentum_confirmations_required": exploration_confirmations_required,
             "admitted": admitted,
             "passed": admitted,
             "risk_multiplier": round(risk_multiplier, 4),
@@ -461,13 +594,15 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             },
             "blockers": blockers,
             "reason": (
-                "V4.1 状态证据充分，允许标准实盘"
+                "V4.2 核心证据充分，允许标准实盘"
                 if validated
-                else "V4.1 状态证据初步达标，允许受限实盘"
+                else "V4.2 核心证据初步达标，允许受限实盘"
                 if provisional
-                else "V4.1 新策略候选可使用限次许可证试单"
+                else "V4.2 核心候选可使用限次许可证试单"
                 if bootstrap_admitted
-                else "；".join(blockers or ["继续积累 V4.1 独立决策影子"])
+                else "V4.2 顺势机会通过受限探索通道"
+                if exploration_admitted
+                else "；".join(blockers or ["继续积累 V4.2 独立决策影子"])
             ),
         }
         candidate["opportunity_v4"] = opportunity
