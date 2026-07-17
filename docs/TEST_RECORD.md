@@ -227,3 +227,10 @@ This file tracks local verification for the two-stage futures system.
 - Python 编译：`python -m compileall -q app`，通过。
 - 前端：`npm run build`，通过，生成版本化静态资源。
 - `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
+- 本地 HTTP 冒烟：主页、`openapi.json`、`/api/status` 及 5 个版本化 JS/CSS 资源全部返回 HTTP 200；OpenAPI 版本为 `0.10.0`。
+- 发布提交：`13a5bfb`，分支 `codex/two-stage-live-system`。
+- VPS 部署前：权益 `19.63063606U`，机器人运行中，无持仓、普通挂单或条件单；公共/私有 WebSocket 正常，REST 无冷却。
+- VPS 配置仅更新 40 个 V4.1 专属字段，原 Binance API 与其他用户配置保持不变；旧配置及状态已备份到 `/opt/bitdata/backups/v0.10.0-*`。
+- VPS 部署后：提交 `13a5bfb`，路由 `extreme_v4_roll@v4.1`，权益 `19.63068912U`，无持仓、普通挂单或条件单；两个容器重启计数均为 0。
+- 新策略试运行许可证已签发：精确绑定 `extreme_v4_roll@v4.1`，24 小时有效，一级 `0.4x`，最多 3 次；当时处于强制冷却，状态为 `waiting_candidate`，未绕过冷却或主动下单。
+- 部署后公共/私有 WebSocket 正常，REST 交易所限额使用率约 `7.67%`、无 429 冷却；Dashboard、API 及全部静态资源为 HTTP 200，近 8 分钟无 429/500/502、数据库锁、异常栈或错误日志。
