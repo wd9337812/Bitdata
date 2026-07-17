@@ -267,3 +267,8 @@ This file tracks local verification for the two-stage futures system.
 - Shell 语法：Git Bash `bash -n deploy.sh ops/bitdata-maintenance.sh`，通过。
 - `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
 - 本地 HTTP 冒烟：首页和 OpenAPI 返回 HTTP 200，OpenAPI 版本为 `0.10.2`，5 个版本化 JS/CSS 资源全部返回 HTTP 200。
+- VPS 实施提交：`a7b95b2`；配置更新为 150 币、每连接 75 币、实时池最低 24h 成交额 500 万 U，REST 精排和交易风险参数未变。
+- 线上实测：150 币、4 条连接、451 个订阅；150/150 个币的 1m/5m K 线新鲜，15 秒内盘口覆盖 149/150。
+- VPS 性能：runner 六次 CPU 采样平均约 54%、峰值 120.7%（2 核），内存约 92-97MiB；系统可用内存约 3.0GiB、负载约 0.70、磁盘可用约 14GB。
+- 部署后 REST 交易所额度使用约 5.2%、无冷却；Dashboard/OpenAPI/5 个静态资源全部 HTTP 200，版本 `0.10.2`，近端日志无 429/500/502、数据库锁或异常栈。
+- 实盘安全：部署前后均为空仓，普通挂单和条件单均为 0；机器人运行，路由仍为 `extreme_v4_roll@v4.1`，许可证有效且使用次数仍为 0。
