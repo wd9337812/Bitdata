@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.market_stream import read_snapshot
-from app.market_structure import market_structure
+from app.market_structure import market_structure, normalize_setup_type
 from app.performance_guard import observed_round_trip_cost_pct
 from app.strategy_releases import (
     ACTIVE_ROLE,
@@ -87,6 +87,15 @@ def _candidate_price(candidate: dict[str, Any]) -> float:
     return float(signal.get("last_price") or ticker.get("last") or 0)
 
 
+def _candidate_signal_type(candidate: dict[str, Any]) -> str:
+    family = str(candidate.get("strategy_family") or "")
+    raw = str(candidate.get("entry_type") or "watch")
+    if family in {V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY}:
+        structure = market_structure(candidate)
+        return normalize_setup_type(structure.get("setup_type") or raw)
+    return raw
+
+
 def _dedupe_key(candidate: dict[str, Any], bucket_minutes: int) -> str:
     current = datetime.now(timezone.utc)
     bucket = int(current.timestamp() // max(60, bucket_minutes * 60))
@@ -99,7 +108,7 @@ def _dedupe_key(candidate: dict[str, Any], bucket_minutes: int) -> str:
             str(candidate.get("evidence_type") or "decision"),
             str(candidate.get("symbol") or "").upper(),
             str(candidate.get("direction") or "LONG").upper(),
-            str(candidate.get("entry_type") or "watch"),
+            _candidate_signal_type(candidate),
             str(bucket),
         ]
     )
@@ -112,7 +121,7 @@ def _opportunity_id(candidate: dict[str, Any], bucket_minutes: int) -> str:
         [
             str(candidate.get("symbol") or "").upper(),
             str(candidate.get("direction") or "LONG").upper(),
-            str(candidate.get("entry_type") or "watch"),
+            _candidate_signal_type(candidate),
             str(bucket),
         ]
     )
@@ -283,13 +292,14 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 evidence_type,
                 str(candidate.get("symbol") or "").upper(),
                 str(candidate.get("direction") or "LONG").upper(),
-                str(candidate.get("entry_type") or "watch"),
+                _candidate_signal_type(candidate),
             )
             if active_key in active_keys:
                 continue
             try:
                 strategy_family = str(candidate.get("strategy_family") or "legacy_mixed")
                 structure = market_structure(candidate)
+                signal_type = _candidate_signal_type(candidate)
                 market_regime = str(structure.get("market_regime") or (candidate.get("market_state") or {}).get("state") or "unknown")
                 candidate_hold_minutes = hold_minutes
                 if strategy_family in {V3_FAMILY, V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY, "extreme_v31_challenger"}:
@@ -314,7 +324,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         now_iso(),
                         str(candidate.get("symbol") or "").upper(),
                         direction,
-                        str(candidate.get("entry_type") or "watch"),
+                        signal_type,
                         str(candidate.get("mode") or "growth"),
                         str(candidate.get("decision_reason") or candidate.get("reason") or "未通过实盘条件"),
                         entry,
@@ -344,13 +354,29 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         json.dumps(
                             {
                                 "score": candidate.get("score"),
-                                "market_state": candidate.get("market_state"),
-                                "adaptive_thresholds": candidate.get("adaptive_thresholds"),
+                                **(
+                                    {
+                                        "market_structure": {
+                                            "schema": structure.get("schema"),
+                                            "market_regime": structure.get("market_regime"),
+                                            "market_regime_label": structure.get("market_regime_label"),
+                                            "setup_type": structure.get("setup_type"),
+                                            "entry_phase": structure.get("entry_phase"),
+                                            "medium_trend_aligned": structure.get("medium_trend_aligned"),
+                                            "medium_path_efficiency": structure.get("medium_path_efficiency"),
+                                        }
+                                    }
+                                    if is_v4 or is_v4_control
+                                    else {
+                                        "market_state": candidate.get("market_state"),
+                                        "adaptive_thresholds": candidate.get("adaptive_thresholds"),
+                                    }
+                                ),
                                 "cost_ratio": candidate.get("cost_ratio"),
                                 "passed": candidate.get("passed"),
                                 "strategy_version": candidate.get("strategy_version"),
                                 "strategy_role": strategy_role,
-                                "entry_type": candidate.get("entry_type"),
+                                "entry_type": signal_type,
                                 "evidence_type": evidence_type,
                                 "rank_bucket": v4.get("rank_bucket"),
                                 "admission_lane": v4.get("admission_lane"),

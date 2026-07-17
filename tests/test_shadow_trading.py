@@ -117,3 +117,6 @@ def test_v4_decision_exploration_and_control_are_separate(monkeypatch, tmp_path)
     assert result["opened"] == 3
     assert {row["evidence_type"] for row in summary["trades"]} == {"decision", "exploration", "paired_control"}
     assert len({row["opportunity_id"] for row in summary["trades"]}) == 1
+    assert {row["signal_type"] for row in summary["trades"]} == {"breakout"}
+    assert all("market_structure" in row["payload"] for row in summary["trades"])
+    assert all("market_state" not in row["payload"] for row in summary["trades"])
