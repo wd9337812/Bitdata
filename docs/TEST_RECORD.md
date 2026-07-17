@@ -248,3 +248,7 @@ This file tracks local verification for the two-stage futures system.
 - 前端：`npm run build`，通过。
 - Shell 语法：Git Bash `bash -n deploy.sh ops/bitdata-maintenance.sh`，通过。
 - `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
+- VPS 发布提交：`0d7c1e6`；原生 Bash 语法、Docker 构建和 systemd 定时器安装通过。
+- 修复后许可证：`strategy_canary_1`、`allowed=true`、`0.4x`、`pause_until=null`，最多 3 次，未主动开仓。
+- 首次维护：磁盘使用率 68% -> 55%，可用空间 9.3GB -> 14GB；旧快照保留为压缩文件，活动库未处理。
+- 部署后：机器人运行中，权益约 19.6309U，无持仓或挂单；公共/私有 WebSocket 正常，REST 无冷却，Dashboard/OpenAPI/全部静态资源 HTTP 200，版本 `0.10.1`。
