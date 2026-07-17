@@ -1,0 +1,11 @@
+[Unit]
+Description=Bitdata storage maintenance
+After=docker.service
+
+[Service]
+Type=oneshot
+Environment=BITDATA_APP_DIR=/opt/bitdata
+EnvironmentFile=-/etc/default/bitdata-maintenance
+ExecStart=/usr/local/sbin/bitdata-maintenance
+Nice=19
+IOSchedulingClass=idle

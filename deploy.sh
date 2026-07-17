@@ -64,6 +64,19 @@ compose_up() {
   docker compose up -d --build
 }
 
+install_maintenance_timer() {
+  if ! command -v systemctl >/dev/null 2>&1 || [ ! -d /run/systemd/system ]; then
+    echo "systemd unavailable; skipped Bitdata maintenance timer installation."
+    return
+  fi
+  need_sudo install -m 0755 "$APP_DIR/ops/bitdata-maintenance.sh" /usr/local/sbin/bitdata-maintenance
+  need_sudo install -m 0644 "$APP_DIR/ops/bitdata-maintenance.service" /etc/systemd/system/bitdata-maintenance.service
+  need_sudo install -m 0644 "$APP_DIR/ops/bitdata-maintenance.timer" /etc/systemd/system/bitdata-maintenance.timer
+  printf 'BITDATA_APP_DIR=%s\n' "$APP_DIR" | need_sudo tee /etc/default/bitdata-maintenance >/dev/null
+  need_sudo systemctl daemon-reload
+  need_sudo systemctl enable --now bitdata-maintenance.timer
+}
+
 open_firewall_hint() {
   if command -v ufw >/dev/null 2>&1; then
     echo "If UFW is enabled, run: sudo ufw allow ${APP_PORT}/tcp"
@@ -77,6 +90,7 @@ case "$ACTION" in
     sync_repo
     ensure_env
     compose_up
+    install_maintenance_timer
     open_firewall_hint
     echo "Bitdata deployed."
     echo "Dashboard: http://YOUR_VPS_IP:${APP_PORT}"
@@ -86,6 +100,7 @@ case "$ACTION" in
     sync_repo
     ensure_env
     compose_up
+    install_maintenance_timer
     echo "Bitdata updated."
     ;;
   restart)

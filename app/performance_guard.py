@@ -293,7 +293,10 @@ def global_performance_guard(
     latest_close_ms = int(live_rows[0].get("close_time") or 0) if live_rows else 0
     latest_close = datetime.fromtimestamp(latest_close_ms / 1000, timezone.utc) if latest_close_ms else None
     pause_minutes = float(config.get("performance_guard_pause_minutes", 60))
-    pause_until = (latest_close or now) + timedelta(minutes=pause_minutes) if risk_off else None
+    # A cooldown must be anchored to an actual close. Using ``now`` when a
+    # freshly released strategy has no live trades renews the deadline on every
+    # guard check and permanently prevents its version-scoped canary.
+    pause_until = latest_close + timedelta(minutes=pause_minutes) if risk_off and latest_close else None
     cooldown_active = bool(pause_until and now < pause_until)
     live_tail = _stats(live_rows[: max(3, min_live // 2)])
     shadow_tail = _stats(raw.get("shadow_recovery_rows") or [])

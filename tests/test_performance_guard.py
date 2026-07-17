@@ -352,6 +352,41 @@ def test_v4_live_release_does_not_inherit_v3_negative_gate(monkeypatch, tmp_path
     assert status["allowed"] is True
 
 
+def test_v41_canary_without_live_closes_does_not_renew_cooldown_forever(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    monkeypatch.setenv("APP_STATE_PATH", str(tmp_path / "state.json"))
+    now = datetime.now(timezone.utc)
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO equity_snapshots (ts, equity, available_balance, unrealized_pnl) "
+            "VALUES (?, 100, 100, 0)",
+            (now.isoformat(),),
+        )
+        conn.commit()
+
+    status = global_performance_guard(
+        {
+            "opportunity_v4_live_enabled": True,
+            "opportunity_v4_strategy_version": "v4.1",
+            "performance_guard_peak_drawdown_pct": 12,
+            "strategy_canary_enabled": True,
+            "strategy_canary_auto_issue": True,
+            "strategy_canary_release_id": "extreme_v4_roll@v4.1",
+            "strategy_canary_level_1_multiplier": 0.4,
+            "strategy_canary_level_1_max_opportunities": 3,
+        },
+        80,
+        now=now + timedelta(minutes=5),
+    )
+
+    assert status["peak_drawdown_severe"] is True
+    assert status["pause_until"] is None
+    assert status["status"] == "strategy_canary_1"
+    assert status["allowed"] is True
+    assert status["risk_multiplier"] == 0.4
+    assert status["strategy_canary_permit"]["allowed"] is True
+
+
 def test_v4_guard_uses_decision_shadows_and_excludes_exploration(monkeypatch, tmp_path):
     _prepare(monkeypatch, tmp_path)
     _seed_shadow(

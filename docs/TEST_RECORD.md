@@ -234,3 +234,17 @@ This file tracks local verification for the two-stage futures system.
 - VPS 部署后：提交 `13a5bfb`，路由 `extreme_v4_roll@v4.1`，权益 `19.63068912U`，无持仓、普通挂单或条件单；两个容器重启计数均为 0。
 - 新策略试运行许可证已签发：精确绑定 `extreme_v4_roll@v4.1`，24 小时有效，一级 `0.4x`，最多 3 次；当时处于强制冷却，状态为 `waiting_candidate`，未绕过冷却或主动下单。
 - 部署后公共/私有 WebSocket 正常，REST 交易所限额使用率约 `7.67%`、无 429 冷却；Dashboard、API 及全部静态资源为 HTTP 200，近 8 分钟无 429/500/502、数据库锁、异常栈或错误日志。
+
+# v0.10.1 V4.1 许可证冷却与存储维护（2026-07-17）
+
+- 线上复现：V4.1 许可证已签发，但没有当前版本已平仓交易时，`pause_until` 每次检查都会按“当前时间 + 60 分钟”后移，造成永久冷却。
+- 修复：冷却只锚定真实最近平仓时间；新版本无平仓样本时，许可证可直接等待合格候选。
+- 新增回归：V4.1 在高点回撤 `risk_off`、无当前版本实盘样本时，状态为 `strategy_canary_1`、允许候选、风险倍率 `0.4x`，且不生成虚假 `pause_until`。
+- VPS 存储审计：活动库约 2.14GB，其中约 538MB 为 SQLite 可回收页；另有两个约 2.14GB 的未压缩历史快照。两个容器合计内存约 287MB，系统可用内存约 1.2GB。
+- 新增每日 systemd 存储维护：压缩非活动数据库快照、保留 30 天压缩归档并清理 7 天以上 Docker 悬空镜像/构建缓存；明确排除活动库，不自动执行长锁 `VACUUM`。
+- 定向回归：`python -m pytest tests/test_performance_guard.py tests/test_strategy_canary.py -q`，16 passed。
+- 完整后端：`python -m pytest -q`，233 passed。
+- Python 编译：`python -m compileall -q app tests`，通过。
+- 前端：`npm run build`，通过。
+- Shell 语法：Git Bash `bash -n deploy.sh ops/bitdata-maintenance.sh`，通过。
+- `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
