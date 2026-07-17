@@ -214,7 +214,7 @@ def effective_position_risk(
     performance_multiplier = max(0.0, min(1.0, float(performance.get("risk_multiplier", 1.0))))
     performance_cap = raw_risk * performance_multiplier
     performance_mode = "multiplier"
-    if str(performance.get("status") or "").startswith("recovery_"):
+    if str(performance.get("status") or "").startswith(("recovery_", "strategy_canary_")):
         # Recovery and drawdown protection are independent absolute caps. Multiplying
         # both can make a valid probe economically meaningless.
         final_risk = min(final_risk, performance_cap)

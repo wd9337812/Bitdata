@@ -206,7 +206,8 @@ function App() {
   const runtime = status?.runtime || {};
   const performanceGuard = runtime?.risk_status?.performance_guard || {};
   const recoveryPermit = performanceGuard.recovery_permit || {};
-  const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v4_roll"}@${performanceGuard.active_strategy_version || "v4.0"}`;
+  const strategyCanary = performanceGuard.strategy_canary_permit || {};
+  const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v4_roll"}@${performanceGuard.active_strategy_version || "v4.1"}`;
   const liveEvidenceIsCurrent = performanceGuard.live_evidence_scope === currentPerformanceScope;
   const target = status?.target_progress || {};
   const stageProfile = status?.stage_profile || {};
@@ -219,6 +220,26 @@ function App() {
     cooldown: "强制冷却中",
     revoked: "恢复资格已撤销",
     normal: "正常实盘",
+    level_2: "二级试运行",
+    validated: "已完成试运行验证",
+    exhausted: "试运行次数已用完",
+    expired: "试运行许可证已过期",
+    inactive: "未启用",
+    not_required: "当前无需许可证",
+  };
+  const canaryReasonLabel: Record<string, string> = {
+    new_strategy_release_canary: "新版本已签发限次试运行资格",
+    waiting_for_canary_candidate: "等待同版本合格候选",
+    protected_canary_position_open: "受保护试运行持仓已建立",
+    canary_live_evidence_positive: "试运行实盘证据为正，已升二级",
+    canary_live_evidence_validated: "试运行实盘证据达标",
+    canary_loss_budget_exhausted: "试运行亏损预算已用完",
+    canary_opportunity_budget_exhausted: "试运行机会次数已用完",
+    canary_permit_expired: "试运行许可证已过期",
+    mandatory_cooldown: "仍在强制冷却期",
+    emergency_safety_stop: "触发账户硬安全停止",
+    global_guard_normal: "当前无需穿透风险背景",
+    release_not_authorized: "当前策略版本未获授权",
   };
   const stageRoute = Object.keys(rawStageRoute).length > 0 ? rawStageRoute : stageProfile;
   const stageProfiles = status?.stage_profiles || [];
@@ -397,6 +418,16 @@ function App() {
                 tone={recoveryPermit.status === "waiting_candidate" ? "positive" : recoveryPermit.status === "normal" ? "positive" : "negative"}
               />
               <MetricCard
+                title="V4.1 新策略试运行许可证"
+                value={recoveryStatusLabel[strategyCanary.status] || strategyCanary.status || "等待状态"}
+                sub={
+                  strategyCanary.enabled
+                    ? `${strategyCanary.release_id || "-"} · ${fmt(strategyCanary.used_opportunities, 0)} / ${fmt(strategyCanary.max_opportunities, 0)} 次 · 当前 ${fmt(strategyCanary.risk_multiplier, 2)}x · ${canaryReasonLabel[strategyCanary.reason] || "只对同版本合格候选生效"}`
+                    : "未授权当前版本；不会穿透全局风险保护"
+                }
+                tone={strategyCanary.allowed ? "positive" : ""}
+              />
+              <MetricCard
                 title="当日权益基准"
                 value={`${fmt(state.daily_start_equity, 4)} U`}
                 sub={`${state.daily_session_date || "等待初始化"}（UTC），跨日自动重置`}
@@ -419,7 +450,7 @@ function App() {
               <div className="panel-head">
                 <div>
                   <h2>机会漏斗</h2>
-                  <p>系统先大范围召回，再逐层粗排、精排和竞价；V4 复用实时行情为候选计算扣费后净期望，只对精选币检查盘口和衍生品。</p>
+                  <p>系统先大范围召回，再逐层粗排、精排和竞价；V4.1 按市场状态、方向、信号与入场阶段计算扣费后净期望，只对精选币检查盘口。</p>
                 </div>
               </div>
               <FunnelPanel funnel={funnel} />
@@ -429,7 +460,7 @@ function App() {
               <div className="panel-head">
                 <div>
                   <h2>候选币排名</h2>
-                  <p>V4 是当前实盘排序器；旧 V3 的 A+/A/B 只作为特征与历史诊断，不再决定是否开仓。</p>
+                  <p>V4.1 是当前实盘排序器；只有“决策影子”参与准入，探索和对照影子只用于研究。</p>
                 </div>
               </div>
               <CandidateTable rows={candidates} />
@@ -589,9 +620,11 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
         <div><span>旧 V3 档位（诊断）</span><strong>{best.legacy_v3_quality?.tier || best.v3_tier || "-"}</strong></div>
         <div><span>V4 本轮排名</span><strong>{v4.enabled ? `前 ${fmt((1 - Number(v4.rank_percentile || 0)) * 100, 0)}%` : "-"}</strong></div>
-        <div><span>V4 准入状态</span><strong>{best.passed ? (v4.validated ? "已验证实盘" : v4.bootstrap_admitted ? "受限探索" : "继续等待") : "等待执行条件"}</strong></div>
-        <div><span>V4 保守净期望</span><strong>{v4.enabled ? `${fmt(v4.lower_expected_net_pct, 3)}%` : "-"}</strong></div>
-        <div><span>V4 同类证据</span><strong>{v4.enabled ? `${fmt(v4.evidence?.selected?.trades, 0)} 笔 · ${pfLabel(v4.evidence?.selected?.profit_factor, v4.evidence?.selected?.trades)}` : "-"}</strong></div>
+        <div><span>V4.1 准入状态</span><strong>{best.passed ? (v4.validated ? "已验证实盘" : v4.provisional ? "同状态受限准入" : v4.bootstrap_admitted ? "许可证试运行" : "继续等待") : "等待执行条件"}</strong></div>
+        <div><span>V4.1 保守净期望</span><strong>{v4.enabled ? `${fmt(v4.lower_expected_net_pct, 3)}%` : "-"}</strong></div>
+        <div><span>V4.1 成本比</span><strong>{v4.enabled ? `${fmt(v4.cost_ratio, 2)}x` : "-"}</strong></div>
+        <div><span>V4.1 状态路线</span><strong>{v4.regime_policy?.scope || "-"}</strong></div>
+        <div><span>V4.1 同类证据</span><strong>{v4.enabled ? `${fmt(v4.evidence?.selected?.trades, 0)} 笔 · ${pfLabel(v4.evidence?.selected?.profit_factor, v4.evidence?.selected?.trades)}` : "-"}</strong></div>
         <div><span>市场状态</span><strong>{opportunity.market_regime_label || best.market_state?.label || "-"}</strong></div>
         <div><span>真实收益/成本</span><strong>{opportunity.enabled ? `${fmt(opportunity.cost_ratio, 2)}x` : fmt(best.cost_ratio, 2)}</strong></div>
         <div><span>{"\u4fdd\u62a4\u6863\u6848"}</span><strong>{protectionLabel}</strong></div>
@@ -636,11 +669,11 @@ function FunnelPanel({ funnel }: { funnel: any }) {
         return <MetricCard key={key} title={label} value={value} sub={sub} />;
       })}
       <MetricCard
-        title={funnel?.opportunity_v4?.enabled ? "V4 实盘候选" : "剥头皮信号"}
+        title={funnel?.opportunity_v4?.enabled ? "V4.1 实盘候选" : "剥头皮信号"}
         value={funnel?.opportunity_v4?.enabled
           ? `${fmt(funnel?.opportunity_v4?.admitted, 0)} 个`
           : `${fmt(funnel?.extreme_v2?.scalp, 0)} 个`}
-        sub={funnel?.opportunity_v4?.enabled ? "受限探索 + 已验证机会" : "盘口冲击 / 放量剥头皮 / 失衡试探"}
+        sub={funnel?.opportunity_v4?.enabled ? "许可证试运行 + 受限准入 + 已验证" : "盘口冲击 / 放量剥头皮 / 失衡试探"}
       />
       <MetricCard
         title="市场自适应"
@@ -661,8 +694,8 @@ function OpportunityV3Panel({ funnel }: { funnel: any }) {
     <div className="panel">
       <div className="panel-head">
         <div>
-          <h2>V4 当前实盘机会排序</h2>
-          <p>V4 按扣费后净期望、同轮排名、流动性和独立证据选币。旧 V3 分层已退出实盘准入，只保留在下方帮助复盘模型为何曾经打分。</p>
+          <h2>V4.1 状态自适应机会排序</h2>
+          <p>按市场状态 × 方向 × 信号 × 入场阶段选币。优先回踩确认，追涨触发会被额外降分；旧 V3 分层不再决定开仓。</p>
         </div>
       </div>
       <div className="metrics">
@@ -672,8 +705,10 @@ function OpportunityV3Panel({ funnel }: { funnel: any }) {
         <MetricCard title="旧 V3 B（诊断）" value={`${fmt(tiers.B, 0)} 个`} sub="不再作为影子硬门" />
         <MetricCard title="旧 V3 观察（诊断）" value={`${fmt(tiers.WATCH, 0)} 个`} sub="V4 仍可独立重新排序" />
         <MetricCard title="真实成本线" value={`${fmt(v3.observed_cost_floor_pct, 3)}%`} sub="手续费、资金费和历史滑点的保守估计" />
-        <MetricCard title="V4 可观察候选" value={`${fmt(v4.shadow_ready, 0)} 个`} sub="公平记录决策、探索和同机会对照" tone={Number(v4.shadow_ready || 0) > 0 ? "positive" : ""} />
-        <MetricCard title="V4 当前可实盘" value={`${fmt(v4.admitted, 0)} 个`} sub={v4.live_enabled ? "顶排候选先受限探索；同类证据达标后使用标准倍率" : "V4 实盘未启用"} tone={Number(v4.admitted || 0) > 0 ? "positive" : ""} />
+        <MetricCard title="V4.1 决策候选" value={`${fmt(v4.shadow_ready, 0)} 个`} sub="只有决策影子参与后续准入统计" tone={Number(v4.shadow_ready || 0) > 0 ? "positive" : ""} />
+        <MetricCard title="许可证可试" value={`${fmt(v4.canary_ready, 0)} 个`} sub="仍须全局许可证有效，且不会绕过硬风控" tone={Number(v4.canary_ready || 0) > 0 ? "positive" : ""} />
+        <MetricCard title="受限准入" value={`${fmt(v4.provisional, 0)} 个`} sub="同状态证据初步达标，默认 0.7x" tone={Number(v4.provisional || 0) > 0 ? "positive" : ""} />
+        <MetricCard title="已验证" value={`${fmt(v4.validated, 0)} 个`} sub="跨时间与币种证据达标，才允许标准倍率" tone={Number(v4.validated || 0) > 0 ? "positive" : ""} />
       </div>
     </div>
   );
@@ -715,7 +750,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
         <tbody>
           {rows.map((row, index) => (
             <tr key={`${row.symbol}-${row.direction}-${index}`}>
-              <td><span className={row.passed ? "pill ok" : "pill"}>{row.passed ? (row.opportunity_v4?.validated ? "已验证" : row.opportunity_v4?.bootstrap_admitted ? "受限探索" : "通过") : "等待"}</span></td>
+              <td><span className={row.passed ? "pill ok" : "pill"}>{row.passed ? (row.opportunity_v4?.validated ? "已验证" : row.opportunity_v4?.provisional ? "受限准入" : row.opportunity_v4?.bootstrap_admitted ? "许可证试运行" : "通过") : "等待"}</span></td>
               <td className="symbol">{row.symbol}</td>
               <td>{signalLabel(row.direction || row.signal?.signal)}</td>
               <td>{entryTypeLabel(row, "-")}</td>
@@ -1007,14 +1042,14 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
         <div className="panel-head">
           <div>
             <h2>策略版本一眼看懂</h2>
-            <p>{active.strategy_version || "V4"} 是当前实盘版本。V4 会同时记录决策、旧门槛漏掉的探索样本和同机会对照；旧 V3 证据只用于历史复盘。</p>
+            <p>{active.strategy_version || "V4.1"} 是当前实盘版本。只有决策样本参与准入；探索和同机会对照用于发现漏判，不会混进实盘 PF。</p>
           </div>
           <span className="pill ok">当前实盘</span>
         </div>
         <div className="metrics">
           <MetricCard title={`${active.strategy_version || "V4"} 近期基线`} value={`${fmt(activeRecent.closed, 0)} 笔`} sub={`${pfLabel(activeRecent.profit_factor, activeRecent.closed)} · 净收益 ${fmt(activeRecent.net_pnl, 4)} U`} tone={Number(activeRecent.net_pnl || 0) >= 0 ? "positive" : "negative"} />
           <MetricCard title="当前安全观察窗" value={`${fmt(recovery.closed, 0)} / 20 笔`} sub={`${pfLabel(recovery.profit_factor, recovery.closed)} · 只对应当前 V4`} tone={Number(recovery.net_pnl || 0) >= 0 ? "positive" : "negative"} />
-          <MetricCard title="V4 运行方式" value="受限探索 + 证据晋级" sub="顶排候选先用 0.5 倍；同类证据达标后 1.0 倍" />
+          <MetricCard title="V4.1 运行方式" value="限次许可证 + 证据晋级" sub="新版本 0.4x 限次试运行；正向实盘证据达到 3 / 8 笔后再升到 0.7x / 1.0x" />
           <MetricCard title="旧 V3 状态" value="历史诊断" sub="A+/A/B、旧信用与旧亏损不再控制实盘" />
         </div>
       </div>
@@ -1029,9 +1064,9 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
         </table>
       </div>}
       <div className="panel table-wrap">
-        <h2>V4 三类证据</h2>
+        <h2>V4.1 三类证据</h2>
         <table><thead><tr><th>类型</th><th>含义</th><th>已结束</th><th>胜率</th><th>PF</th><th>净收益</th><th>成本</th></tr></thead><tbody>
-          {evidenceTypes.map((row: any) => <tr key={row.evidence_type}><td>{row.evidence_type === "decision" ? "决策样本" : row.evidence_type === "exploration" ? "探索样本" : "同机会对照"}</td><td>{row.evidence_type === "decision" ? "V4 当时最想做的机会" : row.evidence_type === "exploration" ? "从被拒机会中分层抽样，检查漏判" : "同一时刻用简单突破规则做基线"}</td><td>{fmt(row.closed, 0)}</td><td>{fmt(row.win_rate, 1)}%</td><td>{pfLabel(row.profit_factor, row.closed)}</td><td>{fmt(row.net_pnl, 4)} U</td><td>{fmt(row.cost, 4)} U</td></tr>)}
+          {evidenceTypes.map((row: any) => <tr key={row.evidence_type}><td>{row.evidence_type === "decision" ? "决策样本" : row.evidence_type === "exploration" ? "探索样本" : "同机会对照"}</td><td>{row.evidence_type === "decision" ? "V4.1 当时真正排名靠前的独立机会，用于准入" : row.evidence_type === "exploration" ? "从被拒机会中抽样，只检查是否漏判" : "同一时刻用简单规则做基线，不参与准入"}</td><td>{fmt(row.opportunities || row.closed, 0)}</td><td>{fmt(row.win_rate, 1)}%</td><td>{pfLabel(row.profit_factor, row.closed)}</td><td>{fmt(row.net_pnl, 4)} U</td><td>{fmt(row.cost, 4)} U</td></tr>)}
           {!evidenceTypes.length && <tr><td colSpan={7}>V4 刚启用，等待第一批决策、探索和对照样本结束。</td></tr>}
         </tbody></table>
       </div>
@@ -1361,7 +1396,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
         <div className="panel">
           <div className="panel-head"><div><h2>当前生效设置</h2><p>这里只显示当前阶段真正参与执行的参数。旧策略和未来阶段参数已收进专家设置。</p></div><button className="secondary" onClick={() => setExpert(true)}>进入专家设置</button></div>
           <div className="form-grid">
-            {toggle("stage_routing_enabled", "按权益自动选择阶段", "推荐开启；当前 S0-S2 使用 V4 机会排序滚仓")}
+            {toggle("stage_routing_enabled", "按权益自动选择阶段", "推荐开启；当前 S0-S2 使用 V4.1 状态自适应滚仓")}
             {select("stage_manual_mode", "阶段控制", stageManualOptions.slice(0, 4), "自动模式会按权益切换策略")}
             {toggle("dry_run", "模拟交易", "开启后绝不会真实下单")}
             {toggle("live_trading_enabled", "允许实盘交易", "还需要正确的实盘确认短语")}
@@ -1369,10 +1404,12 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {number("hard_stop_equity", "权益硬停止线 U", "当前建议保持 5U")}
             {number("stage_s0_risk_pct", "S0 单笔风险上限%", "0-300U 当前生效")}
             {number("stage_s0_max_leverage", "S0 最大杠杆", "当前生效")}
-            {toggle("opportunity_v4_live_enabled", "V4 当前实盘排序", "推荐开启；旧 V3 分层只保留诊断")}
+            {toggle("opportunity_v4_live_enabled", "V4.1 当前实盘排序", "推荐开启；旧 V3 分层只保留诊断")}
             {number("opportunity_v4_bootstrap_min_rank_percentile", "受限探索最低排名分位", "默认 0.85，即只考虑本轮前 15%")}
             {number("opportunity_v4_bootstrap_min_quality_score", "受限探索最低模型分", "默认 58；不是旧 V3 档位")}
-            {number("opportunity_v4_bootstrap_risk_multiplier", "受限探索仓位倍率", "默认 0.5 倍，只应用一次")}
+            {number("opportunity_v4_bootstrap_risk_multiplier", "新策略一级试运行倍率", "默认 0.4 倍；仅限精确版本许可证，只应用一次")}
+            {toggle("strategy_canary_enabled", "启用新策略试运行许可证", "risk_off 时给新版本少量真实机会；不绕过 5U 硬停止、保护单、成本和流动性门槛")}
+            {number("strategy_canary_level_1_max_opportunities", "一级试运行最多机会", "默认 3 次；开仓后必须等待该单平仓才可继续")}
             {number("opportunity_v3_max_spread_pct", "V4 盘口最大点差%", "流动性硬门，超过后不实盘")}
             {number("opportunity_v3_min_depth_notional_usdt", "V4 最低盘口深度 U", "流动性硬门，低于后不实盘")}
             {toggle("runtime_stop_management_enabled", "自动保本与移动止盈", "对新开的 V4 仓位生效")}
@@ -1613,22 +1650,35 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("opportunity_v3_canary_risk_multiplier", "旧 V3 受限验证倍率", "仅在回滚到 V3 时使用")}
           {toggle("opportunity_v4_enabled", "启用 V4 机会引擎", "推荐开启：计算扣费后净期望并记录公平影子证据，不增加 Binance 下单请求")}
           {toggle("opportunity_v4_live_enabled", "V4 作为当前实盘排序器", "默认开启；V3 分层与旧信用退出实盘准入")}
-          {text("opportunity_v4_strategy_version", "V4 当前版本号", "当前 v4.0；改变模型后必须换版本，避免混用历史证据")}
+          {text("opportunity_v4_strategy_version", "V4 当前版本号", "当前 v4.1；改变模型后必须换版本，避免混用历史证据")}
           {number("opportunity_v4_decision_min_rank_percentile", "V4 决策排名分位", "默认 0.75；只把本轮前 25% 作为决策样本")}
           {toggle("opportunity_v4_bootstrap_enabled", "允许 V4 受限实盘探索", "顶排候选在独立证据尚少时可用折扣仓位实盘，不继承旧 V3 拦截")}
           {number("opportunity_v4_bootstrap_min_rank_percentile", "V4 探索最低排名分位", "默认 0.85，即本轮前 15%")}
           {number("opportunity_v4_bootstrap_min_quality_score", "V4 探索最低模型分", "默认 58")}
-          {number("opportunity_v4_bootstrap_min_model_expectancy_pct", "V4 探索最低模型净期望%", "默认 0，必须估算扣费后不为负")}
-          {number("opportunity_v4_bootstrap_risk_multiplier", "V4 探索仓位倍率", "默认 0.5，只在候选风险中应用一次")}
+          {number("opportunity_v4_bootstrap_min_model_expectancy_pct", "V4.1 试运行最低模型净期望%", "默认 0.10%；与下方全局净期望线取更严格者")}
+          {number("opportunity_v4_bootstrap_risk_multiplier", "V4.1 一级试运行倍率", "默认 0.4，只在候选风险中应用一次")}
           {number("opportunity_v4_bootstrap_negative_min_trades", "V4 负证据最少样本", "默认 20 笔，同类证据足够后才阻断")}
           {number("opportunity_v4_bootstrap_negative_profit_factor", "V4 负证据 PF 线", "默认 0.75，且同类净收益必须为负")}
           {number("opportunity_v4_validated_risk_multiplier", "V4 已验证仓位倍率", "默认 1.0，仍受权益、信用和硬风控约束")}
           {number("opportunity_v4_decision_shadow_limit", "每轮决策样本上限", "默认 3；控制数据库与行情跟踪开销")}
           {number("opportunity_v4_exploration_shadow_limit", "每轮探索样本上限", "默认 6；从被拒机会中取代表样本，检查旧模型漏判")}
           {number("opportunity_v4_control_shadow_limit", "每轮对照样本上限", "默认 3；同机会运行简单突破基线")}
-          {number("opportunity_v4_admission_min_trades", "V4 同类最低样本", "默认 40 笔；按市场状态、方向和信号类型分组")}
+          {number("opportunity_v4_admission_min_trades", "V4.1 同类受限准入样本", "默认 200 个独立决策机会；按市场状态、方向、信号和入场阶段分组")}
           {number("opportunity_v4_admission_min_profit_factor", "V4 同类最低 PF", "默认 1.10，且必须是扣费后结果")}
-          {number("opportunity_v4_admission_min_lower_expectancy_pct", "V4 保守净期望下限%", "默认 0.02%；不是平均值，而是考虑样本不确定性后的下界")}
+          {number("opportunity_v4_admission_min_lower_expectancy_pct", "V4.1 保守净期望下限%", "默认 0%；考虑样本不确定性后的下界必须大于零")}
+          {number("opportunity_v41_validation_min_trades", "V4.1 标准实盘样本", "默认 500 个独立决策机会，并且需要跨时间块与币种")}
+          {number("opportunity_v41_validation_min_profit_factor", "V4.1 标准实盘最低 PF", "默认 1.15，必须为扣费后 PF")}
+          {number("opportunity_v41_provisional_risk_multiplier", "V4.1 受限准入倍率", "默认 0.7；达到 200 个正向同类样本后使用")}
+          {number("opportunity_v41_min_expected_net_pct", "V4.1 最低扣费后模型期望%", "默认 0.10%")}
+          {number("opportunity_v41_min_cost_ratio", "V4.1 最低毛利成本比", "默认 2.0 倍")}
+          {toggle("opportunity_v41_medium_alignment_required", "要求中周期方向一致", "推荐开启；历史中方向一致样本显著更稳")}
+          {toggle("strategy_canary_enabled", "新策略限次许可证", "仅在 risk_off 且版本精确匹配时生效，不会绕过硬风控")}
+          {text("strategy_canary_release_id", "许可证授权版本", "默认 extreme_v4_roll@v4.1；必须精确匹配")}
+          {number("strategy_canary_permit_hours", "许可证有效小时", "默认 24 小时")}
+          {number("strategy_canary_level_1_max_opportunities", "一级最多机会", "默认 3 次，倍率 0.4x")}
+          {number("strategy_canary_level_2_min_trades", "升二级所需实盘", "默认 3 笔且净收益为正、PF≥1.05")}
+          {number("strategy_canary_level_3_min_trades", "升标准所需实盘", "默认 8 笔且净收益为正、PF≥1.15")}
+          {number("strategy_canary_max_losses", "试运行最大亏损笔数", "默认 2 笔；达到即撤销许可证")}
           {toggle("extreme_sprint_enabled", "开启 S0-S2 机会滚仓", "必须配合确认短语 ENABLE_EXTREME_SPRINT 才会生效；当前由 V4 排序")}
           {text("extreme_sprint_confirmation", "机会滚仓确认短语", "填写 ENABLE_EXTREME_SPRINT 后，增长模式才会启用")}
           {select("extreme_sprint_interval", "极限冲刺周期", intervalOptions)}

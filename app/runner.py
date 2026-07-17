@@ -19,6 +19,7 @@ from app.opportunity_v4 import V4_CONTROL_FAMILY, V4_STRATEGY_FAMILY
 from app.performance_guard import global_performance_guard
 from app.protection_audit import audit_account_protection
 from app.recovery_controller import consume_recovery_permit, revoke_recovery_permit
+from app.strategy_canary import consume_strategy_canary, revoke_strategy_canary
 from app.risk import direction_cooldown_key, live_trading_allowed
 from app.runtime_protection import manage_runtime_protection
 from app.shadow_trading import update_shadow_trades
@@ -460,7 +461,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         decision_count = 0
         exploration_count = 0
         control_count = 0
-        v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.0")
+        v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.1")
         v4_shadow_role = "active" if config.get("opportunity_v4_live_enabled", False) else "challenger"
         v4_rows = list(scan.get("v4_candidates") or scan.get("candidates", []))
         decision_rows = [item for item in v4_rows if (item.get("opportunity_v4") or {}).get("decision_candidate")]
@@ -582,8 +583,10 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         )
     if result.get("mode") in {"protection_failed_closed", "protection_confirm_failed_closed"}:
         revoke_recovery_permit("exchange_protection_confirmation_failed")
+        revoke_strategy_canary("exchange_protection_confirmation_failed")
     if result.get("mode") in {"live", "rotation_live"} and decision.get("symbol"):
         consume_recovery_permit(decision, result)
+        consume_strategy_canary(decision, result)
         track_runtime_position(decision)
         cooldown_minutes = float(config.get("symbol_cooldown_minutes", 0))
         if config.get("directional_cooldown_enabled", True):

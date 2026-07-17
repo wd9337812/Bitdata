@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from app.recovery_controller import recovery_permit_status
+from app.strategy_canary import strategy_canary_status
 from app.strategy_releases import (
     ACTIVE_ROLE,
     V4_FAMILY,
@@ -202,6 +203,7 @@ def global_performance_guard(
     current_live_rows = raw.get("current_live_rows") or []
     current_live = _stats(current_live_rows)
     current_live["latest_net_pnl"] = float(current_live_rows[0].get("net_pnl") or 0) if current_live_rows else 0.0
+    current_live["recent_net_pnls"] = [float(row.get("net_pnl") or 0) for row in current_live_rows]
     current_live["closed_total"] = int(raw.get("current_live_total") or 0)
     fallback_live_rows = raw.get("fallback_live_rows") or []
     fallback_live = _stats(fallback_live_rows)
@@ -301,6 +303,7 @@ def global_performance_guard(
         newest_shadow = shadow_recovery_rows[0]
         shadow_token = f"{newest_shadow.get('id')}:{newest_shadow.get('closed_at')}"
     hard_stop = float(config.get("hard_stop_equity", config.get("tournament_stop_equity", 5.0)))
+    emergency_stop = equity is not None and float(equity) <= hard_stop
     permit = recovery_permit_status(
         config,
         strategy_version=current_version,
@@ -309,14 +312,25 @@ def global_performance_guard(
         # A peak drawdown keeps the release in risk-off, but it must remain
         # recoverable through the shadow-confirmed, single-probe permit path.
         # Only the account hard stop is an unconditional recovery revocation.
-        emergency_stop=equity is not None and float(equity) <= hard_stop,
+        emergency_stop=emergency_stop,
         shadow_tail=shadow_tail,
         shadow_token=shadow_token,
         shadow_closed_total=int(raw.get("shadow_closed_total") or 0),
         current_live=current_live,
         now=now,
     )
-    allowed = bool(permit.get("allowed"))
+    canary = strategy_canary_status(
+        config,
+        active_release_id=f"{current_family}@{current_version}",
+        risk_off=risk_off,
+        cooldown_active=cooldown_active,
+        emergency_stop=emergency_stop,
+        current_live=current_live,
+        now=now,
+    )
+    canary_allowed = bool(canary.get("allowed"))
+    recovery_allowed = bool(permit.get("allowed"))
+    allowed = recovery_allowed or canary_allowed
     recovery_level = int(permit.get("recovery_level") or 0)
     recovery_multiplier = float(permit.get("risk_multiplier") or 0.0)
     both_recovering = (
@@ -335,6 +349,8 @@ def global_performance_guard(
     status = (
         "normal"
         if not risk_off
+        else f"strategy_canary_{max(1, int(canary.get('level') or 1))}"
+        if canary_allowed
         else "recovery_3"
         if recovery_level >= 3
         else "recovery_2"
@@ -355,9 +371,14 @@ def global_performance_guard(
         "probe_open": "恢复试单持仓中",
         "recovery_2": "已取得恢复试单资格",
         "recovery_3": "三级受限恢复",
+        "strategy_canary_1": "V4.1 新策略一级试运行",
+        "strategy_canary_2": "V4.1 新策略二级试运行",
+        "strategy_canary_3": "V4.1 新策略已验证",
     }
     reason = "当前版本滚动表现正常"
-    if allowed and risk_off:
+    if canary_allowed and risk_off:
+        reason = "旧版本风险背景仍保留；当前精确版本可用限次许可证验证合格候选"
+    elif allowed and risk_off:
         reason = "影子恢复证据已锁定，等待首个满足成本和质量要求的候选"
     elif permit_state == "confirming":
         reason = "影子数据已达门槛，正在确认其稳定性"
@@ -376,7 +397,15 @@ def global_performance_guard(
         "allowed": allowed,
         "status": status,
         "status_label": labels[status],
-        "risk_multiplier": 0.0 if not allowed else recovery_multiplier if risk_off else 1.0,
+        "risk_multiplier": (
+            0.0
+            if not allowed
+            else float(canary.get("risk_multiplier") or 0.0)
+            if risk_off and canary_allowed
+            else recovery_multiplier
+            if risk_off
+            else 1.0
+        ),
         "pause_until": pause_until.isoformat() if pause_until else None,
         "live": live,
         "shadow": shadow,
@@ -403,6 +432,7 @@ def global_performance_guard(
         "live_evidence_scope": raw.get("live_scope"),
         "shadow_evidence_scope": raw.get("shadow_scope"),
         "recovery_permit": permit,
+        "strategy_canary_permit": canary,
         "recovery_requirements": {
             "shadow_trades": recovery_shadow_limit,
             "shadow_net_positive": True,

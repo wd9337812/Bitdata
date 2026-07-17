@@ -14,6 +14,7 @@ from app.position_sizing import (
     unified_position_sizing,
 )
 from app.performance_guard import global_performance_guard
+from app.strategy_canary import candidate_can_use_canary
 from app.protection_audit import audit_position_protection, enrich_positions_with_prices
 from app.protection import apply_initial_protection_to_signal, build_protection_plan
 from app.risk import assess_new_position, equity_guard_status, live_trading_allowed, position_size_from_risk
@@ -405,6 +406,27 @@ def build_stage1_decision(
         scan_candidate = {**scan_candidate, "global_performance_guard": performance_guard}
         evidence = scan_candidate.get("strategy_evidence") or {}
         recovery_status = str(performance_guard.get("status") or "")
+        if recovery_status.startswith("strategy_canary_"):
+            canary_ok, canary_reason = candidate_can_use_canary(
+                scan_candidate,
+                performance_guard.get("strategy_canary_permit") or {},
+            )
+            if not canary_ok:
+                return {
+                    "symbol": symbol,
+                    "action": "WAIT",
+                    "direction": direction,
+                    "signal": signal,
+                    "risk": {"allowed": False, "reason": canary_reason},
+                    "mode": active_mode["mode"],
+                    "strategy": active_mode["strategy"],
+                    "entry_type": entry_type,
+                    "decision_reason": "V4.1 试运行许可证继续保留：当前候选未通过同版本状态、成本和质量门槛",
+                    "primary_block_reason": canary_reason,
+                    "performance_guard": performance_guard,
+                    "protection_plan": protection_plan,
+                    "equity": equity,
+                }
         if (
             config.get("strategy_evidence_recovery_block_negative", True)
             and recovery_status.startswith("recovery_")

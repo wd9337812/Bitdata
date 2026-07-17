@@ -39,6 +39,18 @@ _CHALLENGER_FINGERPRINT_KEYS = _ACTIVE_FINGERPRINT_KEYS + (
     "opportunity_v4_admission_min_profit_factor",
     "opportunity_v4_admission_min_lower_expectancy_pct",
     "opportunity_v4_evidence_lookback_hours",
+    "opportunity_v41_min_expected_net_pct",
+    "opportunity_v41_min_cost_ratio",
+    "opportunity_v41_medium_alignment_required",
+    "opportunity_v41_validation_min_trades",
+    "opportunity_v41_validation_min_profit_factor",
+    "opportunity_v41_provisional_risk_multiplier",
+    "opportunity_v41_retest_stop_atr",
+    "opportunity_v41_retest_take_profit_atr",
+    "opportunity_v41_armed_stop_atr",
+    "opportunity_v41_armed_take_profit_atr",
+    "opportunity_v41_triggered_stop_atr",
+    "opportunity_v41_triggered_take_profit_atr",
 )
 
 
@@ -47,7 +59,7 @@ def active_version(config: dict[str, Any]) -> str:
 
 
 def challenger_version(config: dict[str, Any]) -> str:
-    return str(config.get("opportunity_v4_strategy_version") or "v4.0")
+    return str(config.get("opportunity_v4_strategy_version") or "v4.1")
 
 
 def active_family(config: dict[str, Any]) -> str:
@@ -120,6 +132,10 @@ def ensure_shadow_release_columns(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_shadow_opportunity_release "
         "ON shadow_trades(opportunity_id, strategy_version, strategy_role)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_shadow_v41_evidence "
+        "ON shadow_trades(strategy_family, strategy_version, evidence_type, status, closed_at DESC)"
     )
 
 

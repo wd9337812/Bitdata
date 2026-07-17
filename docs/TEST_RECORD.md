@@ -216,3 +216,14 @@ This file tracks local verification for the two-stage futures system.
 - VPS 已部署提交 `5f338be`；机器人为 `running`，S0 路由为 `extreme_v4_roll@v4.0`，公共/私有 WebSocket 正常，REST 未限流。
 - 部署后：Binance 仍无持仓、普通挂单或条件单；Dashboard 首页及 5 个静态资源全部返回 HTTP 200，近 3 分钟无 429/500/502、数据库锁或异常日志。
 - 恢复状态已由不可达的 `revoked` 转为 `accumulating`。当时最近 20 笔 V4 决策影子净收益 -0.202U、PF 0.9255，证据未达正收益要求，因此没有立即签发试单许可。
+
+# v0.10.0 / V4.1 状态自适应与新策略许可证（2026-07-17）
+
+- 假设：V4.0 的统一质量分层失真，需要按市场状态、方向、信号与入场阶段拆分；新版本不能被旧版本 `risk_off` 永久锁死，但试单不得绕过账户和交易所安全边界。
+- 后端：决策影子独立去重；探索/对照证据隔离；动态成本和保守净期望硬门；回踩优先；三档状态化保护；精确版本限时、限次许可证及 `0.4x -> 0.7x -> 1.0x` 晋级。
+- 前端：中文展示 V4.1 状态路线、成本比、准入等级、恢复许可证与新策略试运行许可证。
+- 数据库：新增 V4.1 版本/证据类型索引；未清空任何历史数据。
+- 完整后端：`python -m pytest -q`，232 passed。
+- Python 编译：`python -m compileall -q app`，通过。
+- 前端：`npm run build`，通过，生成版本化静态资源。
+- `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。

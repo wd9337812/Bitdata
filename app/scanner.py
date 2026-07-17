@@ -1847,13 +1847,17 @@ def _apply_v4_live_selection(
     admitted = bool(v4.get("admitted"))
     risk_multiplier = float(v4.get("risk_multiplier") or 0.0)
     base_risk = float(candidate.get("base_risk_pct") or mode.get("risk_pct") or 0.0)
+    signal = dict(candidate.get("signal") or {})
+    if v4.get("protection_profile"):
+        signal["protection_profile"] = dict(v4["protection_profile"])
     result.update(
         {
-            "strategy": "opportunity_v4_ranked_breakout",
+            "strategy": "opportunity_v41_state_ranked_roll",
             "strategy_family": V4_STRATEGY_FAMILY,
-            "strategy_version": str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.0"),
+            "strategy_version": str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.1"),
             "strategy_role": "active",
-            "strategy_generation": "v4",
+            "strategy_generation": "v4.1",
+            "signal": signal,
             "score": float(v4.get("score") or 0),
             "passed": admitted,
             "reason": "passed" if admitted else "opportunity_v4_not_ready",
@@ -1864,19 +1868,33 @@ def _apply_v4_live_selection(
             "quality_risk_multiplier": 1.0,
             "v4_risk_multiplier": risk_multiplier,
             "quality_risk_reasons": [
-                "V4 已验证准入" if v4.get("validated") else "V4 顶排受限探索" if v4.get("bootstrap_admitted") else "V4 继续观察"
+                "V4.1 已验证准入"
+                if v4.get("validated")
+                else "V4.1 同状态受限准入"
+                if v4.get("provisional")
+                else "V4.1 限次策略试运行"
+                if v4.get("bootstrap_admitted")
+                else "V4.1 继续观察"
             ],
             "symbol_quality": {
                 "engine": "opportunity_v4",
                 "score": float(v4.get("score") or 0),
                 "allowed": admitted,
                 "pool": "trade" if admitted else "observe",
-                "tier": "V4-VALIDATED" if v4.get("validated") else "V4-BOOTSTRAP" if v4.get("bootstrap_admitted") else "V4-WATCH",
+                "tier": (
+                    "V4.1-VALIDATED"
+                    if v4.get("validated")
+                    else "V4.1-PROVISIONAL"
+                    if v4.get("provisional")
+                    else "V4.1-CANARY"
+                    if v4.get("bootstrap_admitted")
+                    else "V4.1-WATCH"
+                ),
                 "quality_risk_multiplier": risk_multiplier,
                 "quality_risk_reasons": ["V3.2 质量分层仅保留用于诊断，不参与实盘"],
                 "simulation": {
                     "passed": None,
-                    "diagnostic": "V4 使用独立、版本隔离的决策/探索/对照影子证据",
+                    "diagnostic": "V4.1 只用独立决策影子做准入；探索和对照样本仅用于诊断",
                 },
             },
             "symbol_pool": "trade" if admitted else "observe",
@@ -2662,6 +2680,9 @@ def scan_growth_candidates(
         for candidate in candidates
         if candidate.get("passed") and (candidate.get("opportunity_v4") or {}).get("admitted")
     )
+    v41_canary_ready = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("canary_eligible"))
+    v41_validated = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("validated"))
+    v41_provisional = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("provisional"))
     blocked_reasons: dict[str, int] = {}
     for candidate in candidates:
         if candidate.get("passed"):
@@ -2733,11 +2754,14 @@ def scan_growth_candidates(
         "opportunity_v4": {
             "enabled": bool(config.get("opportunity_v4_enabled", True)),
             "strategy_family": V4_STRATEGY_FAMILY,
-            "strategy_version": str(config.get("opportunity_v4_strategy_version") or "v4.0"),
+            "strategy_version": str(config.get("opportunity_v4_strategy_version") or "v4.1"),
             "shadow_ready": v4_shadow_ready,
             "admitted": v4_admitted,
+            "canary_ready": v41_canary_ready,
+            "provisional": v41_provisional,
+            "validated": v41_validated,
             "live_enabled": bool(config.get("opportunity_v4_live_enabled", False)),
-            "label": "V4 实盘机会排序",
+            "label": "V4.1 状态自适应机会排序",
         },
         "opportunity_queue": {
             "enabled": bool(config.get("opportunity_queue_enabled", True)),

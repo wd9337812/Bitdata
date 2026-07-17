@@ -399,6 +399,7 @@ def _shadow_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "total": len(rows),
         "active": sum(str(row.get("status")) == "OPEN" for row in rows),
         "closed": len(closed_rows),
+        "opportunities": len({str(row.get("opportunity_id")) for row in closed_rows if row.get("opportunity_id")}),
         "wins": sum(float(row.get("net_pnl") or 0) > 0 for row in closed_rows),
         "win_rate": round(
             sum(float(row.get("net_pnl") or 0) > 0 for row in closed_rows) / len(closed_rows) * 100,
@@ -477,6 +478,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             """
             SELECT COALESCE(evidence_type, 'decision') AS evidence_type,
                    COUNT(*) AS total,
+                   COUNT(DISTINCT NULLIF(opportunity_id, '')) AS opportunities,
                    SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) AS closed,
                    SUM(CASE WHEN status = 'CLOSED' AND net_pnl > 0 THEN 1 ELSE 0 END) AS wins,
                    SUM(CASE WHEN status = 'CLOSED' THEN net_pnl ELSE 0 END) AS net_pnl,
@@ -554,14 +556,19 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         except json.JSONDecodeError:
             item["payload"] = {}
         trades.append(item)
+    # V4.1 primary performance uses only decision shadows. Exploration and paired
+    # controls remain visible by evidence type, but cannot inflate live admission.
+    if current_family == V4_STRATEGY_FAMILY:
+        active_rows = [row for row in active_rows if str(row.get("evidence_type") or "decision") == "decision"]
+    candidate_rows = [row for row in candidate_rows if str(row.get("evidence_type") or "decision") == "decision"]
     active_closed = [row for row in active_rows if str(row.get("status")) == "CLOSED"]
     candidate_closed = [row for row in candidate_rows if str(row.get("status")) == "CLOSED"]
     shadow_window = int(config.get("performance_guard_shadow_window_trades", 100))
     recovery_window = int(config.get("performance_guard_recovery_shadow_trades", 20))
     candidate_stats = _shadow_stats(candidate_rows)
-    min_trades = int(config.get("opportunity_v4_admission_min_trades", 40))
+    min_trades = int(config.get("opportunity_v41_validation_min_trades", 500))
     min_hours = 24.0
-    min_pf = float(config.get("opportunity_v4_admission_min_profit_factor", 1.10))
+    min_pf = float(config.get("opportunity_v41_validation_min_profit_factor", 1.15))
     min_regimes = 2
     candidate_validation = {
         "min_trades": min_trades,
@@ -589,6 +596,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             "all": _shadow_stats(active_rows),
             "recent": _shadow_stats(active_closed[:shadow_window]),
             "recovery": _shadow_stats(active_closed[:recovery_window]),
+            "primary_evidence_type": "decision" if current_family == V4_STRATEGY_FAMILY else "all",
         },
         "challenger_release": None if v4_live else {
             "strategy_family": V4_STRATEGY_FAMILY,
