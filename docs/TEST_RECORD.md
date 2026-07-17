@@ -200,3 +200,16 @@ This file tracks local verification for the two-stage futures system.
 - 前端：`npm run build`，通过。
 - 本地静态冒烟：首页、主脚本、React、图表和 CSS 资源均返回 HTTP 200。
 - VPS 部署结果在本次发布完成后补充。
+
+# v0.9.4 权益回撤恢复死锁修复（2026-07-17）
+
+- 线上复现：权益约 19.63U、无持仓；高点回撤约 13.26%，V4 最近 20 笔决策影子净收益 1.264U、PF 1.821，但恢复许可仍停在 `revoked`。
+- 根因：高点回撤被同时作为永久 `emergency_stop` 传入恢复控制器，使影子确认通道永远不可达。
+- 修复：高点回撤继续触发 `risk_off` 和冷却；仅 5U 硬停止保持无条件撤销。冷却后仍须连续三份当前 V4 决策影子正证据才签发一次 `0.4x` 许可。
+- 定向回归：`python -m pytest tests/test_performance_guard.py tests/test_recovery_controller.py -q`，19 passed。
+- 完整后端：`python -m pytest -q`，228 passed。
+- Python 编译：`python -m compileall -q app tests`，通过。
+- 前端：`npm run build`，通过。
+- 本地静态冒烟：首页及 5 个 JS/CSS 资源全部返回 HTTP 200。
+- `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
+- VPS 部署结果在本次发布完成后补充。

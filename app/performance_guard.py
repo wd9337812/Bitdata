@@ -306,7 +306,10 @@ def global_performance_guard(
         strategy_version=current_version,
         risk_off=risk_off,
         cooldown_active=cooldown_active,
-        emergency_stop=peak_drawdown_severe or (equity is not None and float(equity) <= hard_stop),
+        # A peak drawdown keeps the release in risk-off, but it must remain
+        # recoverable through the shadow-confirmed, single-probe permit path.
+        # Only the account hard stop is an unconditional recovery revocation.
+        emergency_stop=equity is not None and float(equity) <= hard_stop,
         shadow_tail=shadow_tail,
         shadow_token=shadow_token,
         shadow_closed_total=int(raw.get("shadow_closed_total") or 0),

@@ -133,6 +133,43 @@ def test_global_guard_allows_only_small_recovery_after_pause(monkeypatch, tmp_pa
     assert status["risk_multiplier"] == 0.0
 
 
+def test_peak_drawdown_can_recover_through_confirmed_shadow_probe(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    config = {
+        "performance_guard_peak_drawdown_pct": 12,
+        "performance_guard_recovery_shadow_trades": 20,
+        "performance_recovery_confirm_closes": 3,
+        "performance_recovery_confirm_minutes": 60,
+        "performance_guard_recovery_level_2_multiplier": 0.4,
+    }
+    now = datetime.now(timezone.utc)
+    _seed_live("GOODUSDT", "LONG", [0.1], version="v3.2", role="active")
+    _seed_shadow("GOODUSDT", "LONG", [0.1] * 20, version="v3.2", role="active")
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO equity_snapshots (ts, equity, available_balance, unrealized_pnl) "
+            "VALUES (?, 100, 100, 0)",
+            (now.isoformat(),),
+        )
+        conn.commit()
+
+    first = global_performance_guard(config, 80, now=now + timedelta(hours=2))
+    _seed_shadow("GOODUSDT", "LONG", [0.1], version="v3.2", role="active")
+    clear_performance_cache()
+    second = global_performance_guard(config, 80, now=now + timedelta(hours=2, minutes=1))
+    _seed_shadow("GOODUSDT", "LONG", [0.1], version="v3.2", role="active")
+    clear_performance_cache()
+    permit = global_performance_guard(config, 80, now=now + timedelta(hours=2, minutes=2))
+
+    assert first["peak_drawdown_severe"] is True
+    assert first["status"] == "confirming"
+    assert first["allowed"] is False
+    assert second["allowed"] is False
+    assert permit["status"] == "recovery_2"
+    assert permit["allowed"] is True
+    assert permit["risk_multiplier"] == 0.4
+
+
 def test_severe_live_loss_pauses_even_when_shadow_is_not_bad(monkeypatch, tmp_path):
     _prepare(monkeypatch, tmp_path)
     _seed_live("BADUSDT", "SHORT", [-0.4] * 9 + [0.01])

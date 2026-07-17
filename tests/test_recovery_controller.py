@@ -66,6 +66,26 @@ def test_recovery_permit_latches_until_candidate_arrives(monkeypatch, tmp_path):
     assert still_waiting["permit_id"] == permit["permit_id"]
 
 
+def test_emergency_stop_revokes_even_with_positive_shadow(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    result = recovery_permit_status(
+        _config(),
+        strategy_version="v4.0",
+        risk_off=True,
+        cooldown_active=False,
+        emergency_stop=True,
+        shadow_tail=_shadow(pf=2.0, net=1.0),
+        shadow_token="100:positive",
+        shadow_closed_total=100,
+        current_live={"trades": 0, "latest_net_pnl": 0},
+        now=datetime(2026, 7, 17, 2, 0, tzinfo=timezone.utc),
+    )
+
+    assert result["allowed"] is False
+    assert result["status"] == "revoked"
+    assert result["reason"] == "emergency_safety_stop"
+
+
 def test_hard_shadow_failure_revokes_latched_permit(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     now = datetime(2026, 7, 15, 2, 0, tzinfo=timezone.utc)
