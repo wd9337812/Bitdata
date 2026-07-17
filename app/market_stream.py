@@ -103,6 +103,9 @@ def stream_status(max_age_seconds: int = 15) -> dict[str, Any]:
         "raw_connected": bool(state.get("connected")),
         "age_seconds": age,
         "symbols": state.get("symbols", []),
+        "connection_count": int(state.get("connection_count") or 0),
+        "stream_count": int(state.get("stream_count") or 0),
+        "symbols_per_connection": int(state.get("symbols_per_connection") or 0),
         "ticker_count": len(state.get("tickers", {})),
         "depth_count": len(state.get("depths", {})),
         "full_orderbook_count": len(state.get("full_orderbook_symbols", []) or []),
@@ -247,7 +250,12 @@ def _dedupe_symbols(symbols: list[str]) -> list[str]:
 
 def _discover_stream_symbols(config: dict[str, Any], limit: int) -> list[str]:
     base_url = str(config.get("binance_base_url", "https://fapi.binance.com")).rstrip("/")
-    min_volume = float(config.get("min_24h_volume_usdt", 30_000_000))
+    min_volume = float(
+        config.get(
+            "market_stream_min_24h_volume_usdt",
+            config.get("min_24h_volume_usdt", 30_000_000),
+        )
+    )
     try:
         streamed = stream_tickers(max_age_seconds=15)
         before_request(estimate_weight("/fapi/v1/exchangeInfo"))
@@ -344,14 +352,19 @@ def _trade_stream_url(symbols: list[str]) -> str:
     return _combined_url("market", [f"{symbol.lower()}@aggTrade" for symbol in symbols])
 
 
-def _market_stream_url(symbols: list[str], interval: str) -> str:
-    streams: list[str] = ["!ticker@arr"]
+def _market_stream_url(symbols: list[str], interval: str, *, include_all_ticker: bool = True) -> str:
+    streams: list[str] = ["!ticker@arr"] if include_all_ticker else []
     for symbol in symbols:
         lower = symbol.lower()
         streams.append(f"{lower}@kline_{interval}")
         if interval != "1m":
             streams.append(f"{lower}@kline_1m")
     return _combined_url("market", streams)
+
+
+def _symbol_shards(symbols: list[str], size: int) -> list[list[str]]:
+    shard_size = max(1, int(size))
+    return [symbols[index : index + shard_size] for index in range(0, len(symbols), shard_size)]
 
 
 def _ticker_from_event(data: dict[str, Any]) -> dict[str, Any]:
@@ -705,7 +718,9 @@ async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
         try:
             full_orderbook_symbols = _full_orderbook_symbols(config, symbols, intent)
             partial_symbols = [symbol for symbol in symbols if symbol not in set(full_orderbook_symbols)]
-            market_url = _market_stream_url(symbols, interval)
+            symbols_per_connection = max(10, int(config.get("market_stream_symbols_per_connection", 75)))
+            market_shards = _symbol_shards(symbols, symbols_per_connection)
+            partial_shards = _symbol_shards(partial_symbols, symbols_per_connection)
             trigger_kwargs = {
                 "trigger_enabled": bool(config.get("websocket_trigger_enabled", True)),
                 "trigger_move_pct": float(config.get("websocket_trigger_move_pct", 0.35)),
@@ -713,11 +728,21 @@ async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
                 "trigger_max_events": int(config.get("websocket_trigger_max_events", 80)),
                 "persist_seconds": float(config.get("market_stream_persist_seconds", 5.0)),
             }
-            tasks = [_consume_stream(market_url, symbols, state, rebuild_seconds, **trigger_kwargs)]
-            if partial_symbols:
+            tasks = []
+            for index, shard in enumerate(market_shards):
                 tasks.append(
                     _consume_stream(
-                        _public_stream_url(partial_symbols),
+                        _market_stream_url(shard, interval, include_all_ticker=index == 0),
+                        symbols,
+                        state,
+                        rebuild_seconds,
+                        **trigger_kwargs,
+                    )
+                )
+            for shard in partial_shards:
+                tasks.append(
+                    _consume_stream(
+                        _public_stream_url(shard),
                         symbols,
                         state,
                         rebuild_seconds,
@@ -748,7 +773,19 @@ async def _run_stream(config_provider: Callable[[], dict[str, Any]]) -> None:
                         **trigger_kwargs,
                     )
                 )
-            state["full_orderbook_symbols"] = full_orderbook_symbols
+            market_stream_count = sum(
+                (1 if index == 0 else 0) + len(shard) * (1 if interval == "1m" else 2)
+                for index, shard in enumerate(market_shards)
+            )
+            state.update(
+                {
+                    "full_orderbook_symbols": full_orderbook_symbols,
+                    "connection_count": len(tasks),
+                    "stream_count": market_stream_count + len(partial_symbols) + len(full_orderbook_symbols) * 3,
+                    "symbols_per_connection": symbols_per_connection,
+                }
+            )
+            write_snapshot(state)
             await asyncio.gather(*tasks)
         except OrderBookGap as exc:
             state = read_snapshot()

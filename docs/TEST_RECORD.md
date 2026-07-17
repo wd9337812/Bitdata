@@ -252,3 +252,18 @@ This file tracks local verification for the two-stage futures system.
 - 修复后许可证：`strategy_canary_1`、`allowed=true`、`0.4x`、`pause_until=null`，最多 3 次，未主动开仓。
 - 首次维护：磁盘使用率 68% -> 55%，可用空间 9.3GB -> 14GB；旧快照保留为压缩文件，活动库未处理。
 - 部署后：机器人运行中，权益约 19.6309U，无持仓或挂单；公共/私有 WebSocket 正常，REST 无冷却，Dashboard/OpenAPI/全部静态资源 HTTP 200，版本 `0.10.1`。
+
+# v0.10.2 4G VPS 与 150 币实时行情池（2026-07-17）
+
+- 资源假设：4G 内存足以扩大公共 WebSocket 覆盖；2 核 CPU 和 REST 预算不适合把 150 个币全部送入每轮 K 线回放、精排和盘口竞价。
+- 后端：实时池流动性门槛与实盘发现门槛分离；150 币按每组 75 币拆成两组 K 线流和两组轻盘口流，全市场 ticker 只订阅一次。
+- 前端：中文显示实时币数、连接数和订阅数，并在专家设置说明 4G VPS 的 120-150 币建议值。
+- 安全边界：未修改 V4.1 评分、准入、仓位、杠杆、许可证、5U 硬停止或交易所保护单；REST 精排、深度检查和快车道并发预算保持不变。
+- Binance 公共行情实测：150 个 U 本位永续币、4 条连接、451 个订阅均成功握手并收到首包；测试不使用账户 API，也不发送订单。
+- 定向回归：`python -m pytest tests/test_market_stream.py -q`，12 passed。
+- 完整后端：`python -m pytest -q`，235 passed。
+- Python 编译：`python -m compileall -q app tests`，通过。
+- 前端：`npm run build`，通过，生成版本化静态资源。
+- Shell 语法：Git Bash `bash -n deploy.sh ops/bitdata-maintenance.sh`，通过。
+- `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
+- 本地 HTTP 冒烟：首页和 OpenAPI 返回 HTTP 200，OpenAPI 版本为 `0.10.2`，5 个版本化 JS/CSS 资源全部返回 HTTP 200。

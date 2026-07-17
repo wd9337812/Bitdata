@@ -23,6 +23,8 @@ class TradingConfig(BaseModel):
     market_stream_enabled: bool = True
     market_stream_dynamic_enabled: bool = True
     market_stream_max_symbols: int = Field(default=80, ge=1, le=200)
+    market_stream_min_24h_volume_usdt: float = Field(default=5_000_000, ge=0)
+    market_stream_symbols_per_connection: int = Field(default=75, ge=10, le=200)
     market_stream_auto_discover: bool = True
     market_stream_rebuild_seconds: int = Field(default=300, ge=15, le=1800)
     market_stream_rotation_threshold_pct: float = Field(default=20.0, ge=0, le=100)
@@ -109,8 +111,8 @@ class TradingConfig(BaseModel):
     stream_include_live_credit: bool = True
     opportunity_queue_enabled: bool = True
     opportunity_queue_ttl_seconds: int = Field(default=240, ge=10, le=3600)
-    opportunity_queue_max_events: int = Field(default=120, ge=1, le=1000)
-    opportunity_queue_scan_limit: int = Field(default=50, ge=1, le=500)
+    opportunity_queue_max_events: int = Field(default=240, ge=1, le=1000)
+    opportunity_queue_scan_limit: int = Field(default=80, ge=1, le=500)
     opportunity_queue_score_weight: float = Field(default=0.35, ge=0, le=2)
     opportunity_queue_min_score: float = Field(default=20.0, ge=0, le=200)
     symbol_trade_score: float = Field(default=75.0, ge=0, le=100)
@@ -831,7 +833,8 @@ class TradingConfig(BaseModel):
     market_state_min_volume_spike: float = Field(default=1.2, ge=0, le=20)
     min_order_filter_enabled: bool = True
     websocket_trigger_enabled: bool = True
-    websocket_trigger_max_events: int = Field(default=80, ge=1, le=500)
+    websocket_trigger_max_events: int = Field(default=240, ge=1, le=500)
+    websocket_trigger_scan_limit: int = Field(default=80, ge=1, le=500)
     websocket_trigger_move_pct: float = Field(default=0.35, ge=0, le=20)
     websocket_trigger_quote_volume_usdt: float = Field(default=250_000.0, ge=0)
     observe_breakout_enabled: bool = True

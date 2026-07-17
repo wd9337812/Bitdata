@@ -110,6 +110,70 @@ def test_stream_symbols_auto_discover_extends_manual_list(monkeypatch, tmp_path)
     assert symbols == ["SOLUSDT", "LABUSDT", "ETHUSDT"]
 
 
+def test_stream_discovery_uses_independent_low_cost_volume_floor(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    monkeypatch.setattr(market_stream, "stream_tickers", lambda **_kwargs: [])
+    monkeypatch.setattr(market_stream, "before_request", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(market_stream, "after_response", lambda *_args, **_kwargs: None)
+
+    class Response:
+        headers = {}
+
+        def __init__(self, payload):
+            self.payload = payload
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self.payload
+
+    exchange = {
+        "symbols": [
+            {
+                "symbol": symbol,
+                "contractType": "PERPETUAL",
+                "underlyingType": "COIN",
+                "status": "TRADING",
+                "quoteAsset": "USDT",
+            }
+            for symbol in ["HIGHUSDT", "MIDUSDT", "LOWUSDT"]
+        ]
+    }
+    tickers = [
+        {"symbol": "HIGHUSDT", "quoteVolume": "40000000"},
+        {"symbol": "MIDUSDT", "quoteVolume": "10000000"},
+        {"symbol": "LOWUSDT", "quoteVolume": "4000000"},
+    ]
+    responses = iter([Response(exchange), Response(tickers)])
+    monkeypatch.setattr(market_stream.requests, "get", lambda *_args, **_kwargs: next(responses))
+
+    symbols = market_stream._discover_stream_symbols(
+        {
+            "min_24h_volume_usdt": 30_000_000,
+            "market_stream_min_24h_volume_usdt": 5_000_000,
+            "binance_base_url": "https://example.test",
+        },
+        3,
+    )
+
+    assert symbols == ["HIGHUSDT", "MIDUSDT"]
+
+
+def test_market_stream_urls_can_be_sharded_without_duplicate_all_ticker():
+    symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+
+    shards = market_stream._symbol_shards(symbols, 2)
+    first_url = market_stream._market_stream_url(shards[0], "5m", include_all_ticker=True)
+    second_url = market_stream._market_stream_url(shards[1], "5m", include_all_ticker=False)
+
+    assert shards == [["BTCUSDT", "ETHUSDT"], ["SOLUSDT", "BNBUSDT"], ["XRPUSDT"]]
+    assert "!ticker@arr" in first_url
+    assert "!ticker@arr" not in second_url
+    assert "solusdt@kline_5m" in second_url
+    assert "solusdt@kline_1m" in second_url
+
+
 def test_dynamic_stream_symbols_prioritize_positions_and_hot_intent(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     monkeypatch.setattr(market_stream, "_discover_stream_symbols", lambda config, limit: ["ETHUSDT", "SOLUSDT", "AAVEUSDT"])

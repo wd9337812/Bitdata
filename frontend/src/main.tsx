@@ -504,7 +504,7 @@ function ScanSummary({ funnel, candidates, stream, opportunityQueue, runtime }: 
       <div className="metrics">
         <MetricCard title="实时快车道" value={`${fmt(runtime?.fast_lane?.elapsed_seconds, 2)} 秒`} sub={(runtime?.fast_lane?.symbols || []).join("、") || "等待 WebSocket 机会"} tone={(runtime?.fast_lane?.elapsed_seconds || 0) <= 5 ? "positive" : undefined} />
         <MetricCard title="后台全量扫描" value={`${fmt(runtime?.background_scan?.elapsed_seconds ?? funnel?.elapsed_seconds, 2)} 秒`} sub="后台更新，不阻塞实时机会" />
-        <MetricCard title="WebSocket 状态" value={stream.connected ? "实时盯盘中" : "未连接"} sub={stream.last_error || `数据年龄 ${fmt(stream.age_seconds, 0)} 秒`} tone={stream.connected ? "positive" : "negative"} />
+        <MetricCard title="WebSocket 状态" value={stream.connected ? "实时盯盘中" : "未连接"} sub={stream.last_error || `${fmt(stream.symbols?.length, 0)} 币 · ${fmt(stream.connection_count, 0)} 条连接 · 数据年龄 ${fmt(stream.age_seconds, 0)} 秒`} tone={stream.connected ? "positive" : "negative"} />
         <MetricCard title="实时订阅币数" value={`${fmt((stream.symbols || []).length, 0)} 个`} sub={`动态目标 ${fmt(stream.intent_count, 0)} 个`} />
         <MetricCard title="实时行情" value={`${fmt(stream.ticker_count, 0)} / ${fmt(stream.depth_count, 0)} / ${fmt(stream.kline_count, 0)}`} sub="Ticker / 盘口 / K线" />
         <MetricCard title="事件队列" value={`${fmt(queue.count ?? opportunityQueue.active_count, 0)} 个`} sub={queueSymbols ? `热币：${queueSymbols}` : "等待 WebSocket 异动"} />
@@ -980,7 +980,7 @@ function StageRoutePanel({ route, profiles, stream, userStream, rate, equity, st
       <div className="panel">
         <div className="panel-head"><div><h2>行情与账户数据链路</h2><p>WebSocket 承担实时数据，REST 只用于快照、交易和断线兜底，并为保护单预留请求额度。</p></div></div>
         <div className="metrics">
-          <MetricCard title="公共行情流" value={stream.connected ? "已连接" : "已断开"} sub={`${fmt(stream.ticker_count, 0)} 行情 · ${fmt(stream.depth_count, 0)} 盘口 · 年龄 ${fmt(stream.age_seconds, 0)} 秒`} tone={stream.connected ? "positive" : "negative"} />
+          <MetricCard title="公共行情流" value={stream.connected ? "已连接" : "已断开"} sub={`${fmt(stream.symbols?.length, 0)} 币 · ${fmt(stream.connection_count, 0)} 条连接 · ${fmt(stream.stream_count, 0)} 个订阅 · 年龄 ${fmt(stream.age_seconds, 0)} 秒`} tone={stream.connected ? "positive" : "negative"} />
           <MetricCard title="增量订单簿" value={`${fmt(stream.full_orderbook_count, 0)} 个`} sub={route.mode === "yolo_scalp" ? "剥头皮阶段按精选候选启用" : "当前阶段保持轻量 depth5"} />
           <MetricCard title="私有账户流" value={userStream.connected ? "已连接" : "REST 兜底"} sub={userStream.last_error || `账户年龄 ${fmt(userStream.account_age_seconds, 0)} 秒`} tone={userStream.connected ? "positive" : ""} />
           <MetricCard title="REST 本分钟" value={`${fmt(used, 0)} / ${fmt(advertised, 0)}`} sub={`交易所额度使用 ${fmt(rate.exchange_limit_used_pct, 1)}%`} tone={rate.cooldown_active ? "negative" : "positive"} />
@@ -1448,7 +1448,9 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("min_24h_volume_usdt", "最低 24h 成交额", "过滤流动性差的币")}
           {toggle("auto_discover_symbols", "自动发现加密币", "只纳入 Binance U 本位永续币")}
           {toggle("market_stream_dynamic_enabled", "动态 WebSocket 机会池", "粗排热点、候选币、持仓币会自动进入实时盯盘池")}
-          {number("market_stream_max_symbols", "实时盯盘币数上限", "2G VPS 默认 80；公共行情流承担大部分实时更新")}
+          {number("market_stream_max_symbols", "实时盯盘币数上限", "4G VPS 建议 120-150；仅扩大 WebSocket 低成本覆盖，不等于全部拉取 K 线回测")}
+          {number("market_stream_min_24h_volume_usdt", "实时池最低 24h 成交额", "4G / 150 币建议 5000000；只影响 WebSocket 召回，不降低实盘流动性硬门")}
+          {number("market_stream_symbols_per_connection", "每条行情连接币数", "建议 75；150 币分成两组 K 线流和两组轻盘口流，降低单连接故障影响")}
           {number("market_stream_rebuild_seconds", "实时盯盘重建间隔", "默认 300 秒；候选变化不足时不重连，持仓币仍会立即加入")}
           {number("stream_hot_symbols_limit", "热点进入盯盘数量", "默认 40；来自漏斗粗排和候选")}
           {toggle("fast_lane_enabled", "WebSocket 实时快车道", "异动事件独立于全量扫描，优先在数秒内完成决策")}
