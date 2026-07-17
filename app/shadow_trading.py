@@ -190,6 +190,21 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
             for row in active_rows
         }
         for row in active_rows:
+            family = str(row["strategy_family"] or "legacy_mixed")
+            if family not in {V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY}:
+                continue
+            active_keys.add(
+                (
+                    family,
+                    str(row["strategy_version"] or "legacy"),
+                    str(row["strategy_role"] or "legacy"),
+                    str(row["evidence_type"] or "decision"),
+                    str(row["symbol"]).upper(),
+                    str(row["direction"]).upper(),
+                    normalize_setup_type(row["signal_type"] or "watch"),
+                )
+            )
+        for row in active_rows:
             item = dict(row)
             price = prices.get(str(item["symbol"]).upper())
             if not price:

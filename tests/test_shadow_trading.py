@@ -1,4 +1,5 @@
 from app.shadow_trading import shadow_summary, update_shadow_trades
+from app.telemetry import connect
 
 
 def _candidate(price: float) -> dict:
@@ -120,3 +121,13 @@ def test_v4_decision_exploration_and_control_are_separate(monkeypatch, tmp_path)
     assert {row["signal_type"] for row in summary["trades"]} == {"breakout"}
     assert all("market_structure" in row["payload"] for row in summary["trades"])
     assert all("market_state" not in row["payload"] for row in summary["trades"])
+
+    with connect() as conn:
+        conn.execute(
+            "UPDATE shadow_trades SET signal_type = 'v3_breakout', "
+            "dedupe_key = REPLACE(dedupe_key, ':breakout:', ':v3_breakout:')"
+        )
+        conn.commit()
+
+    duplicate_after_upgrade = update_shadow_trades(rows, config)
+    assert duplicate_after_upgrade["opened"] == 0
