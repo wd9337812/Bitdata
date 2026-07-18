@@ -327,3 +327,18 @@ This file tracks local verification for the two-stage futures system.
 - 前端生产构建：`npm run build` 通过，生成新的版本化静态资源。
 - 本地 HTTP 冒烟：首页、OpenAPI 与 5 个版本化 JS/CSS 资源全部返回 HTTP 200，OpenAPI 版本 `0.12.1`。
 - `git diff --check` 通过，仅有 Windows LF/CRLF 转换提示。
+
+## 2026-07-19 v0.12.2 跨进程状态锁与 V4.3.1 部署验收
+
+- 首次 V4.3.1 部署提交 `b648f80`，随后在实盘验收中发现 Dashboard 与 runner 并发保存 `state.json` 时可能覆盖局部熔断持仓归因；交易所保护单始终完整，不属于裸仓故障。
+- 新增 Linux `fcntl.flock` / Windows `msvcrt.locking` 跨进程排他锁，状态读取、合并、`fsync` 和原子替换全部在同一锁周期内完成；策略、仓位、杠杆、许可证和保护阈值未改。
+- 并发回归：6 个独立 Python 进程各连续保存 20 次，最终所有进程字段均保留。
+- Python 编译：`python -m compileall -q app tests`，通过。
+- 完整后端：`python -m pytest -q`，`252 passed`；仅保留本地 `requests` 依赖兼容警告。
+- 前端：在 `frontend/` 执行 `npm run build`，通过。
+- 本地 HTTP：主页 200、OpenAPI `0.12.2`、5 个版本化 JS/CSS 资源全部 200。
+- VPS 备份：`/opt/bitdata/backups/v0.12.1-20260718T191752Z` 与 `/opt/bitdata/backups/v0.12.2-20260718T193435Z`；API 密钥和用户配置原样保留。
+- VPS 提交 `52fef20`，应用 `0.12.2`，策略 `extreme_v4_roll@v4.3.1`，机器人 `running`，S0 实盘模式，5U 硬停止保持不变。
+- 部署验收时 `BANKUSDT` 多单 120 张；止盈 `0.11488`、止损 `0.10798` 均为 Binance 端 `NEW`，保护审计为完整。未手工开仓、平仓、撤单或重建正常保护单。
+- 已从真实开仓日志回填局部组合 `quiet:LONG:pullback:RETEST`；多个并发扫描周期后字段仍保留，证明跨进程覆盖问题已修复。
+- 公共/私有 WebSocket 正常，REST 无冷却或 429，时间偏差 `-96ms`；Dashboard/API/静态资源全部 200；近端日志无 429/500/502、数据库锁、异常栈或错误。
