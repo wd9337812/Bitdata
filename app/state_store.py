@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,36 @@ DEFAULT_STATE: dict[str, Any] = {
 _STATE_LOCK = threading.RLock()
 
 
+@contextmanager
+def _interprocess_state_lock(path: Path):
+    """Serialize state read-modify-write cycles across dashboard and runner."""
+    lock_path = path.with_name(f"{path.name}.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def state_path() -> Path:
     config_path = Path(os.getenv("APP_CONFIG_PATH", "./data/config.json"))
     return config_path.with_name("state.json")
@@ -54,16 +85,19 @@ def load_state() -> dict[str, Any]:
 
 def save_state(payload: dict[str, Any]) -> dict[str, Any]:
     with _STATE_LOCK:
-        state = load_state()
-        state.update(payload)
-        state["updated_at"] = datetime.now(timezone.utc).isoformat()
         path = state_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
-        with tmp.open("w", encoding="utf-8") as file:
-            json.dump(state, file, ensure_ascii=False, indent=2)
-        tmp.replace(path)
-        return state
+        with _interprocess_state_lock(path):
+            state = load_state()
+            state.update(payload)
+            state["updated_at"] = datetime.now(timezone.utc).isoformat()
+            tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+            with tmp.open("w", encoding="utf-8") as file:
+                json.dump(state, file, ensure_ascii=False, indent=2)
+                file.flush()
+                os.fsync(file.fileno())
+            tmp.replace(path)
+            return state
 
 
 def daily_session_state_updates(
