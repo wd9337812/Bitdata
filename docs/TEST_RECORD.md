@@ -307,4 +307,11 @@ This file tracks local verification for the two-stage futures system.
 - 完整后端：`python -m pytest -q`，`243 passed`；保留一个本机 `requests` 依赖兼容警告。
 - 前端：`npm run build`，通过，生成 `index-DlDVjN-l.js` 等版本化生产资源。
 - 本地 HTTP 冒烟：首页、OpenAPI 和 5 个 JS/CSS 资源全部返回 HTTP 200；OpenAPI 版本为 `0.12.0`。
-- 部署记录将在 VPS 部署与实盘安全复核完成后补充。
+- 发布提交与标签：`e332d53`、`v0.12.0`；分支 `codex/two-stage-live-system` 已推送至 GitHub。
+- VPS 配置与状态备份：`/opt/bitdata/backups/v0.12.0-20260718T062321Z`；未复制 2.1GB 活动数据库，避免部署时额外占用磁盘，历史数据库原地保留且迁移仅新增索引。
+- 部署切换前存在受保护的 `REUSDT` 空仓；安全门确认币安端同时存在 `STOP_MARKET` 与 `TAKE_PROFIT_MARKET` 后才允许切换。部署未手工开仓、平仓或撤销保护单。
+- VPS 配置只写入 29 个 V4.3 专属版本、事件证据和动态盘口字段；5U 硬停止、S0 单笔风险上限 10%、5x 杠杆、单仓上限、API 密钥和 150 币实时池均保持不变。
+- 部署后路由为 `extreme_v4_roll@v4.3`，机器人运行；权益约 `19.5755U`，`REUSDT` 空仓 `182` 张，止盈 `0.4011`、止损 `0.4069` 均为交易所端 `NEW` 状态，保护审计无缺失。
+- 新版启动后约一分钟已记录 11 个独立 V4.3 影子事件；`idx_shadow_v4_episode` 索引存在，旧版本历史未清空或混入 V4.3 准入证据。
+- 线上公共 WebSocket 为 4 条连接、451 个订阅，私有账户流已初始化并连接；REST 无 429 冷却，NTP 同步正常，维护定时器处于 active。
+- Dashboard、OpenAPI 和 5 个版本化 JS/CSS 资源全部 HTTP 200，OpenAPI 版本 `0.12.0`；两个容器重启计数均为 0，近端日志无 429/500/502、数据库锁、异常栈或错误。
