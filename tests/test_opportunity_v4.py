@@ -115,7 +115,7 @@ def test_v4_live_selector_ignores_v3_tier_and_applies_admission_risk_once():
     assert selected["passed"] is True
     assert selected["strategy_family"] == "extreme_v4_roll"
     assert "legacy_v3_quality" not in selected
-    assert selected["symbol_quality"]["tier"] == "V4.3-CORE-CANARY"
+    assert selected["symbol_quality"]["tier"] == "V4.3.1-CORE-CANARY"
     assert selected["risk_pct"] == 4.0
     assert selected["quality_risk_multiplier"] == 1.0
     assert selected["risk_adjustment"]["multiplier"] == 1.0
@@ -360,3 +360,44 @@ def test_v43_direction_losses_reduce_risk_without_vetoing_new_local_setup(monkey
     assert v4["evidence_status"] == "canary"
     assert v4["admitted"] is True
     assert v4["risk_multiplier"] == 0.22
+
+
+def test_v431_canary_cannot_bypass_negative_blended_expectancy(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v4_strategy_version": "v4.3.1",
+        "opportunity_v4_evidence_lookback_hours": 10_000,
+        "opportunity_v431_local_block_min_trades": 8,
+    }
+    with connect() as conn:
+        ensure_shadow_tables(conn)
+        for index in range(7):
+            conn.execute(
+                """
+                INSERT INTO shadow_trades (
+                    dedupe_key, opened_at, closed_at, symbol, direction, signal_type, status,
+                    entry, stop, take_profit, last_price, notional, net_pnl, expires_at,
+                    strategy_family, strategy_version, strategy_role, opportunity_id,
+                    market_regime, evidence_type, payload
+                ) VALUES (?, '2026-07-18T00:00:00+00:00', '2026-07-18T01:00:00+00:00',
+                          ?, 'LONG', 'pullback', 'CLOSED', 100, 99, 103, 99,
+                          20, -10, '2026-07-18T02:00:00+00:00', 'extreme_v4_roll',
+                          'v4.3.1', 'active', ?, 'broad_up', 'decision',
+                          '{"admission_lane":"shadow_only","features":{"entry_phase":"RETEST"}}')
+                """,
+                (f"blend-loss-{index}", f"LOSS{index}USDT", f"blend-op-{index}"),
+            )
+        conn.commit()
+    clear_v4_evidence_cache()
+    candidate = _candidate("FRESHUSDT", 0.99, 2.5)
+    candidate["entry_type"] = "pullback"
+
+    attach_v4_rankings([candidate], config)
+
+    v4 = candidate["opportunity_v4"]
+    assert v4["model_expected_net_pct"] > 0
+    assert v4["expected_net_pct"] < 0
+    assert v4["local_circuit"]["blocked"] is False
+    assert v4["bootstrap_admitted"] is False
+    assert v4["admission_lane"] == "shadow_only"

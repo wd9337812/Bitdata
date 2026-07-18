@@ -13,6 +13,7 @@ from app.config_store import load_config
 from app.learning_report import save_daily_learning_report
 from app.live_learning import sync_live_learning_from_binance
 from app.live_reaction import sync_live_reaction_from_binance
+from app.local_circuit import record_v4_live_open
 from app.market_stream import start_market_stream_thread
 from app.opportunity_queue import read_opportunities
 from app.opportunity_v4 import V4_CONTROL_FAMILY, V4_STRATEGY_FAMILY
@@ -461,7 +462,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         decision_count = 0
         exploration_count = 0
         control_count = 0
-        v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.3")
+        v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.3.1")
         v4_shadow_role = "active" if config.get("opportunity_v4_live_enabled", False) else "challenger"
         v4_rows = list(scan.get("v4_candidates") or scan.get("candidates", []))
         decision_rows = [item for item in v4_rows if (item.get("opportunity_v4") or {}).get("decision_candidate")]
@@ -585,6 +586,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         revoke_recovery_permit("exchange_protection_confirmation_failed")
         revoke_strategy_canary("exchange_protection_confirmation_failed")
     if result.get("mode") in {"live", "rotation_live"} and decision.get("symbol"):
+        record_v4_live_open(decision, result)
         consume_recovery_permit(decision, result)
         consume_strategy_canary(decision, result)
         track_runtime_position(decision)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 
 from app.live_learning import init_live_learning_schema
 from app.performance_guard import (
@@ -56,6 +57,7 @@ def _seed_shadow(
     role: str | None = None,
     family: str = "extreme_v3_roll",
     evidence_type: str = "decision",
+    admission_lane: str | None = None,
 ) -> None:
     now = datetime.now(timezone.utc)
     with connect() as conn:
@@ -70,7 +72,7 @@ def _seed_shadow(
                     status, entry, stop, take_profit, last_price, notional, estimated_cost,
                     gross_pnl, net_pnl, outcome, expires_at, payload, evidence_type
                 ) VALUES (?, ?, ?, ?, ?, ?, 'extreme_sprint', 'CLOSED', 1, 0.99, 1.01, 1,
-                          20, 0.024, ?, ?, 'TIME_EXIT', ?, '{}', ?)
+                          20, 0.024, ?, ?, 'TIME_EXIT', ?, ?, ?)
                 """,
                 (
                     dedupe_key,
@@ -82,6 +84,7 @@ def _seed_shadow(
                     net + 0.024,
                     net,
                     closed.isoformat(),
+                    json.dumps({"admission_lane": admission_lane}) if admission_lane else "{}",
                     evidence_type,
                 ),
             )
@@ -110,7 +113,8 @@ def test_global_guard_pauses_when_live_and_shadow_are_both_bad(monkeypatch, tmp_
 
     status = global_performance_guard({}, 25)
 
-    assert status["status"] == "cooldown"
+    assert status["status"] == "hard_cooldown"
+    assert status["guard_level"] == "hard"
     assert status["allowed"] is False
     assert status["rolling_losses"] == 10
     assert status["tail_losses"] == 10
@@ -181,7 +185,8 @@ def test_severe_live_loss_pauses_even_when_shadow_is_not_bad(monkeypatch, tmp_pa
     assert status["live_severe"] is True
     assert status["shadow_bad"] is False
     assert status["allowed"] is False
-    assert "影子交易不得否决" in status["reason"]
+    assert status["hard_risk_off"] is True
+    assert "硬保护" in status["reason"]
 
 
 def test_consecutive_losses_pause_before_aggregate_profit_turns_negative(monkeypatch, tmp_path):
@@ -345,7 +350,7 @@ def test_v4_live_release_does_not_inherit_v3_negative_gate(monkeypatch, tmp_path
 
     assert status["active_strategy_family"] == "extreme_v4_roll"
     assert status["live_evidence_scope"] == "extreme_v4_roll@v4.0"
-    assert status["shadow_evidence_scope"] == "extreme_v4_roll@v4.0:decision"
+    assert status["shadow_evidence_scope"] == "extreme_v4_roll@v4.0:live_lanes"
     assert status["fallback_live"]["trades"] == 10
     assert status["fallback_live"]["net_pnl"] < 0
     assert status["release_warmup"] is False
@@ -420,7 +425,69 @@ def test_v4_guard_uses_decision_shadows_and_excludes_exploration(monkeypatch, tm
         25,
     )
 
-    assert status["shadow_evidence_scope"] == "extreme_v4_roll@v4.0:decision"
+    assert status["shadow_evidence_scope"] == "extreme_v4_roll@v4.0:live_lanes"
     assert status["shadow"]["trades"] == 20
     assert status["shadow"]["net_pnl"] > 0
+
+
+def test_v431_guard_excludes_shadow_only_decisions_from_recovery(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _seed_shadow(
+        "DIAGNOSTICUSDT",
+        "LONG",
+        [0.5] * 30,
+        version="v4.3.1",
+        role="active",
+        family="extreme_v4_roll",
+        admission_lane="shadow_only",
+    )
+    _seed_shadow(
+        "ELIGIBLEUSDT",
+        "LONG",
+        [-0.1] * 8,
+        version="v4.3.1",
+        role="active",
+        family="extreme_v4_roll",
+        admission_lane="core_canary",
+    )
+    clear_performance_cache()
+
+    status = global_performance_guard(
+        {
+            "opportunity_v4_live_enabled": True,
+            "opportunity_v4_strategy_version": "v4.3.1",
+            "performance_guard_current_release_only": True,
+        },
+        25,
+    )
+
+    assert status["shadow_evidence_scope"] == "extreme_v4_roll@v4.3.1:live_lanes"
+    assert status["shadow"]["trades"] == 8
+    assert status["shadow"]["net_pnl"] < 0
+
+
+def test_four_losses_use_soft_observation_before_hard_cooldown(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _seed_live("SOFTUSDT", "LONG", [-0.1] * 4)
+    clear_performance_cache()
+
+    status = global_performance_guard({}, 25)
+
+    assert status["status"] == "soft_observation"
+    assert status["guard_level"] == "soft"
+    assert status["hard_risk_off"] is False
+    assert status["cooldown_minutes"] == 20
     assert status["shadow_bad"] is False
+
+
+def test_five_losses_use_hard_global_cooldown(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _seed_live("HARDUSDT", "LONG", [-0.1] * 5)
+    clear_performance_cache()
+
+    status = global_performance_guard({}, 25)
+
+    assert status["status"] == "hard_cooldown"
+    assert status["guard_level"] == "hard"
+    assert status["hard_risk_off"] is True
+    assert status["cooldown_minutes"] == 60

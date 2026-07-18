@@ -354,6 +354,31 @@ def build_stage1_decision(
     if equity is None:
         return {"symbol": symbol, "action": "WAIT", "signal": signal, "risk": {"allowed": False, "reason": "account_unavailable"}}
     entry_type = (scan_candidate or {}).get("entry_type", signal.get("entry_type", "standard"))
+    hard_stop_equity = float(config.get("hard_stop_equity", config.get("tournament_stop_equity", 5.0)))
+    if hard_stop_equity > 0 and float(equity) <= hard_stop_equity:
+        return {
+            "symbol": symbol,
+            "action": "WAIT",
+            "direction": direction,
+            "signal": signal,
+            "risk": {"allowed": False, "reason": "hard_stop_equity", "max_notional": 0.0, "max_margin": 0.0},
+            "quantity": 0.0,
+            "estimated_notional": 0.0,
+            "mode": active_mode["mode"],
+            "strategy": active_mode["strategy"],
+            "entry_type": entry_type,
+            "decision_reason": (
+                f"账户权益触发硬停止线：当前 {float(equity):.4f}U，停止线 {hard_stop_equity:.2f}U"
+            ),
+            "primary_block_reason": "hard_stop_equity",
+            "risk_warning": {
+                "active": True,
+                "warning_equity": float(config.get("risk_warning_equity", 30.0)),
+                "hard_stop_equity": hard_stop_equity,
+                "current_equity": float(equity),
+            },
+            "equity": float(equity),
+        }
     if (
         active_mode.get("mode") == "yolo_scalp"
         and config.get("yolo_scalp_orderbook_only_enabled", True)
@@ -421,7 +446,7 @@ def build_stage1_decision(
                     "mode": active_mode["mode"],
                     "strategy": active_mode["strategy"],
                     "entry_type": entry_type,
-                    "decision_reason": "V4.3 试运行许可证继续保留：当前候选未通过同版本方向、成本和质量门槛",
+                    "decision_reason": "V4.3.1 试运行许可证继续保留：当前候选未通过融合期望、局部证据、成本或流动性硬门",
                     "primary_block_reason": canary_reason,
                     "performance_guard": performance_guard,
                     "protection_plan": protection_plan,

@@ -5,7 +5,13 @@ from datetime import datetime, timezone
 
 from app.live_learning import init_live_learning_schema, rebuild_symbol_scores
 from app.shadow_trading import ensure_shadow_tables
-from app.strategy_releases import list_strategy_releases, migrate_shadow_release_metadata
+from app.strategy_releases import (
+    CHALLENGER_ROLE,
+    V4_FAMILY,
+    list_strategy_releases,
+    migrate_shadow_release_metadata,
+    parameter_fingerprint,
+)
 from app.telemetry import connect
 
 
@@ -41,7 +47,7 @@ def test_release_registry_and_legacy_migration(monkeypatch, tmp_path):
     assert row["release_id"] == "extreme_v31_challenger@v3.1"
     assert ("v3.2", "active") in roles
     assert ("v3.3-candidate", "archived") in roles
-    assert ("v4.3", "challenger") in roles
+    assert ("v4.3.1", "challenger") in roles
     assert ("v3.1-legacy", "archived") in roles
 
 
@@ -80,6 +86,28 @@ def test_new_v4_release_archives_older_v4_release(monkeypatch, tmp_path):
 
     assert ("v4.2", "active", "live") in roles
     assert ("v4.1", "archived", "retired") in roles
+
+
+def test_v431_local_circuit_and_reissue_settings_are_version_fingerprinted():
+    base = {
+        "opportunity_v431_local_block_min_trades": 8,
+        "strategy_canary_reissue_min_shadow_trades": 8,
+    }
+
+    first = parameter_fingerprint(base, CHALLENGER_ROLE, V4_FAMILY)
+    second = parameter_fingerprint(
+        {**base, "opportunity_v431_local_block_min_trades": 9},
+        CHALLENGER_ROLE,
+        V4_FAMILY,
+    )
+    third = parameter_fingerprint(
+        {**base, "strategy_canary_reissue_min_shadow_trades": 9},
+        CHALLENGER_ROLE,
+        V4_FAMILY,
+    )
+
+    assert first != second
+    assert first != third
 
 
 def test_live_legacy_placeholder_is_backfilled_from_exact_open_decision(monkeypatch, tmp_path):

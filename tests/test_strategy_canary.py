@@ -99,3 +99,81 @@ def test_canary_waits_for_eligible_candidate_and_promotes_on_live_evidence(monke
     assert consumed and consumed["status"] == "probe_open"
     assert promoted["level"] == 2
     assert promoted["risk_multiplier"] == 0.7
+
+
+def test_canary_loss_revocation_reissues_after_observation_and_fresh_shadow_evidence(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        **_config(),
+        "strategy_canary_reissue_observation_minutes": 60,
+        "strategy_canary_reissue_min_shadow_trades": 8,
+        "strategy_canary_reissue_min_symbols": 3,
+        "strategy_canary_reissue_min_profit_factor": 1.15,
+        "strategy_canary_reissue_multiplier": 0.3,
+        "strategy_canary_reissue_max_opportunities": 2,
+    }
+    now = datetime(2026, 7, 17, 3, 0, tzinfo=timezone.utc)
+    candidate = {
+        "symbol": "ALTUSDT",
+        "direction": "LONG",
+        "strategy_family": "extreme_v4_roll",
+        "strategy_version": "v4.1",
+        "signal": {"signal": "LONG", "entry_phase": "RETEST"},
+        "market_state": {"state": "quiet"},
+        "entry_type": "pullback",
+        "opportunity_v4": {"canary_eligible": True},
+    }
+    protected = {"mode": "live", "stop_order": {"id": 1}, "take_profit_order": {"id": 2}}
+
+    strategy_canary_status(
+        config,
+        active_release_id="extreme_v4_roll@v4.1",
+        risk_off=True,
+        cooldown_active=False,
+        emergency_stop=False,
+        current_live=_live(),
+        now=now,
+    )
+    for index in range(2):
+        consume_strategy_canary(
+            {"symbol": "ALTUSDT", "direction": "LONG", "candidate": candidate},
+            protected,
+            now=now + timedelta(minutes=index * 5 + 1),
+        )
+        revoked = strategy_canary_status(
+            config,
+            active_release_id="extreme_v4_roll@v4.1",
+            risk_off=True,
+            cooldown_active=False,
+            emergency_stop=False,
+            current_live=_live(closed=index + 1, net=-0.2 * (index + 1), pf=0, latest=-0.2),
+            eligible_shadow_rows=[{"id": 10, "closed_at": now.isoformat(), "symbol": "BASEUSDT", "net_pnl": 0.1}],
+            now=now + timedelta(minutes=index * 5 + 2),
+        )
+
+    fresh = [
+        {
+            "id": 11 + index,
+            "closed_at": (now + timedelta(minutes=70 + index)).isoformat(),
+            "symbol": f"WIN{index % 3}USDT",
+            "net_pnl": 0.2,
+        }
+        for index in range(8)
+    ]
+    reissued = strategy_canary_status(
+        config,
+        active_release_id="extreme_v4_roll@v4.1",
+        risk_off=True,
+        cooldown_active=False,
+        emergency_stop=False,
+        current_live=_live(closed=2, net=-0.4, pf=0, latest=-0.2),
+        eligible_shadow_rows=fresh,
+        now=now + timedelta(minutes=80),
+    )
+
+    assert revoked["status"] == "revoked"
+    assert reissued["status"] == "waiting_candidate"
+    assert reissued["allowed"] is True
+    assert reissued["risk_multiplier"] == 0.3
+    assert reissued["max_opportunities"] == 2
+    assert reissued["reissue_count"] == 1

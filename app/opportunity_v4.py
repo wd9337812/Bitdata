@@ -8,13 +8,14 @@ from datetime import datetime, timedelta, timezone
 from statistics import mean, pstdev
 from typing import Any
 
+from app.local_circuit import candidate_local_circuit_status, local_circuit_state
 from app.market_structure import MARKET_STRUCTURE_SCHEMA, market_structure, normalize_setup_type
 from app.telemetry import connect, db_path
 
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.3"
+V4_FEATURE_SCHEMA = "v4.3.1"
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -56,7 +57,7 @@ def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "AND closed_at >= ? ORDER BY id DESC LIMIT ?",
                 (
                     V4_STRATEGY_FAMILY,
-                    str(config.get("opportunity_v4_strategy_version") or "v4.3"),
+                    str(config.get("opportunity_v4_strategy_version") or "v4.3.1"),
                     cutoff,
                     limit,
                 ),
@@ -94,6 +95,7 @@ def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "medium_trend_aligned": bool(payload_features.get("medium_trend_aligned", payload.get("medium_trend_aligned"))),
                 "opportunity_id": opportunity_id,
                 "rank_bucket": str(payload.get("rank_bucket") or "unknown"),
+                "admission_lane": str(payload.get("admission_lane") or "shadow_only"),
                 "cost_pct": abs(float(item.get("estimated_cost") or 0)) / notional * 100,
                 "net_pct": float(item.get("net_pnl") or 0) / notional * 100,
             }
@@ -102,7 +104,7 @@ def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def evidence_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
-    key = f"{db_path()}:{config.get('opportunity_v4_strategy_version', 'v4.3')}"
+    key = f"{db_path()}:{config.get('opportunity_v4_strategy_version', 'v4.3.1')}"
     now = time.monotonic()
     ttl = float(config.get("opportunity_v4_evidence_cache_seconds", 60))
     cached = _CACHE.get(key)
@@ -476,7 +478,7 @@ def _regime_policy(candidate: dict[str, Any]) -> dict[str, Any]:
             "canary_scope": False,
             "exploration_scope": False,
             "trend_aligned": trend_aligned,
-            "reason": "V4.2 样本显示广泛下跌追空仍为负期望，V4.3 暂只记录影子",
+            "reason": "V4.2 样本显示广泛下跌追空仍为负期望，V4.3.1 暂只记录影子",
         }
     return {
         "scope": "shadow_only",
@@ -484,7 +486,7 @@ def _regime_policy(candidate: dict[str, Any]) -> dict[str, Any]:
         "canary_scope": False,
         "exploration_scope": False,
         "trend_aligned": trend_aligned,
-        "reason": "方向或结构未达到 V4.3 实盘通道，继续积累影子证据",
+        "reason": "方向或结构未达到 V4.3.1 实盘通道，继续积累影子证据",
     }
 
 
@@ -520,7 +522,7 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
     min_time_blocks = int(config.get("opportunity_v41_validation_min_time_blocks", 2))
     min_symbols = int(config.get("opportunity_v41_validation_min_symbols", 3))
     prior_trades = float(config.get("opportunity_v41_empirical_prior_trades", 40))
-    version = str(config.get("opportunity_v4_strategy_version") or "v4.3")
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.3.1")
     decision_limit = int(config.get("opportunity_v4_decision_shadow_limit", 3))
     bootstrap_rank = float(config.get("opportunity_v4_bootstrap_min_rank_percentile", 0.85))
     bootstrap_quality = float(config.get("opportunity_v4_bootstrap_min_quality_score", 58.0)) / 100
@@ -529,8 +531,6 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         float(config.get("opportunity_v4_bootstrap_min_model_expectancy_pct", 0.10)),
     )
     min_cost_ratio = float(config.get("opportunity_v41_min_cost_ratio", 2.0))
-    negative_min_trades = int(config.get("opportunity_v43_local_negative_min_trades", 30))
-    negative_pf = float(config.get("opportunity_v43_local_negative_profit_factor", 0.50))
     require_alignment = bool(config.get("opportunity_v41_medium_alignment_required", True))
     live_enabled = bool(config.get("opportunity_v4_live_enabled", False))
     exploration_enabled = bool(
@@ -582,6 +582,8 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         )
     )
     ranked: list[tuple[float, dict[str, Any]]] = []
+    circuit_state = local_circuit_state(f"{V4_STRATEGY_FAMILY}@{version}")
+    loaded_evidence = evidence_rows(config)
 
     for candidate, features, model in prepared:
         rank = _percentile_rank(model_values, model["expected_net_pct"])
@@ -605,19 +607,21 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         medium_aligned = bool(structure.get("medium_trend_aligned"))
         alignment_ok = medium_aligned or bool(policy["trend_aligned"]) or not require_alignment
         cost_ok = model["cost_ratio"] >= min_cost_ratio
-        model_ok = model["expected_net_pct"] >= min_expected and model["lower_expected_net_pct"] > min_lower
+        blended_model_ok = expected >= min_expected and lower > min_lower
         shadow_eligible = bool(setup_type != "unknown" and model["reward_pct"] > model["cost_pct"])
         evidence_risk_multiplier = _direction_evidence_multiplier(evidence, config)
-        negative_evidence = bool(
-            selected["trades"] >= negative_min_trades
-            and selected["net_pct"] < 0
-            and selected["profit_factor"] < negative_pf
+        local_circuit = candidate_local_circuit_status(
+            candidate,
+            loaded_evidence,
+            config,
+            state=circuit_state,
         )
+        negative_evidence = bool(local_circuit.get("blocked"))
         validated_liquidity = _liquidity_gate(candidate, config, validated_risk * evidence_risk_multiplier)
         provisional_liquidity = _liquidity_gate(candidate, config, provisional_risk * evidence_risk_multiplier)
         canary_liquidity = _liquidity_gate(candidate, config, bootstrap_risk * evidence_risk_multiplier)
         exploration_liquidity = _liquidity_gate(candidate, config, exploration_risk * evidence_risk_multiplier)
-        common_gates = executable and alignment_ok and cost_ok and model_ok and not negative_evidence
+        common_gates = executable and alignment_ok and cost_ok and blended_model_ok and not negative_evidence
         validated = bool(
             live_enabled
             and policy["live_scope"]
@@ -754,7 +758,12 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         if not exploring and not alignment_ok:
             blockers.append("中周期方向未对齐")
         if negative_evidence:
-            blockers.append(f"同形态局部证据持续转负：{selected['trades']} 笔，PF {selected['profit_factor']:.2f}")
+            circuit_reason = str(local_circuit.get("reason") or "local_shadow_negative")
+            blockers.append(
+                "同市场/方向/形态/阶段局部熔断：连续实盘净亏损"
+                if circuit_reason == "two_consecutive_live_losses"
+                else "同市场/方向/形态/阶段局部影子证据为负"
+            )
         if not executable:
             blockers.append("当前权益下不满足交易所最小下单量")
         if not selected_liquidity["passed"]:
@@ -799,6 +808,7 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             "cost_ratio": round(model["cost_ratio"], 4),
             "features": {key: round(value, 6) for key, value in features.items()},
             "evidence": evidence,
+            "local_circuit": local_circuit,
             "evidence_risk_multiplier": round(evidence_risk_multiplier, 4),
             "evidence_status": status,
             "regime_policy": policy,
@@ -821,15 +831,15 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             "liquidity_gate": selected_liquidity,
             "blockers": blockers,
             "reason": (
-                "V4.3 局部证据充分，允许标准实盘"
+                "V4.3.1 局部证据充分，允许标准实盘"
                 if validated
-                else "V4.3 局部证据初步达标，允许受限实盘"
+                else "V4.3.1 局部证据初步达标，允许受限实盘"
                 if provisional
-                else "V4.3 顺势核心候选可使用限次许可证试单"
+                else "V4.3.1 顺势核心候选可使用限次许可证试单"
                 if bootstrap_admitted
-                else "V4.3 顺势机会通过受限探索通道"
+                else "V4.3.1 顺势机会通过受限探索通道"
                 if exploration_admitted
-                else "；".join(blockers or ["继续积累 V4.3 事件级独立影子证据"])
+                else "；".join(blockers or ["继续积累 V4.3.1 事件级独立影子证据"])
             ),
         }
         candidate["opportunity_v4"] = opportunity

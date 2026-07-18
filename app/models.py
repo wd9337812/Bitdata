@@ -72,6 +72,14 @@ class TradingConfig(BaseModel):
     performance_guard_peak_lookback_hours: int = Field(default=24, ge=1, le=720)
     performance_guard_peak_drawdown_pct: float = Field(default=12.0, ge=0, le=100)
     performance_guard_pause_minutes: int = Field(default=120, ge=1, le=1440)
+    performance_guard_soft_consecutive_losses: int = Field(default=4, ge=1, le=50)
+    performance_guard_soft_window_loss_equity_pct: float = Field(default=8.0, ge=0, le=100)
+    performance_guard_soft_peak_drawdown_pct: float = Field(default=12.0, ge=0, le=100)
+    performance_guard_soft_observation_minutes: int = Field(default=20, ge=0, le=1440)
+    performance_guard_hard_consecutive_losses: int = Field(default=5, ge=1, le=50)
+    performance_guard_hard_window_loss_equity_pct: float = Field(default=12.0, ge=0, le=100)
+    performance_guard_hard_peak_drawdown_pct: float = Field(default=15.0, ge=0, le=100)
+    performance_guard_hard_pause_minutes: int = Field(default=60, ge=1, le=1440)
     performance_guard_recovery_risk_multiplier: float = Field(default=0.20, ge=0.01, le=1)
     performance_guard_recovery_level_1_multiplier: float = Field(default=0.20, ge=0.01, le=1)
     performance_guard_recovery_level_2_multiplier: float = Field(default=0.40, ge=0.01, le=1)
@@ -574,7 +582,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v4.3"
+    opportunity_v4_strategy_version: str = "v4.3.1"
     opportunity_v4_decision_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
     opportunity_v4_bootstrap_enabled: bool = True
     opportunity_v4_bootstrap_min_rank_percentile: float = Field(default=0.85, ge=0, le=1)
@@ -646,15 +654,22 @@ class TradingConfig(BaseModel):
     opportunity_v43_max_order_book_share_pct: float = Field(default=8.0, ge=0.01, le=100)
     opportunity_v43_episode_dedupe_minutes: int = Field(default=30, ge=1, le=1440)
     opportunity_v43_episode_reset_risk_multiple: float = Field(default=1.0, ge=0.1, le=20)
+    opportunity_v431_local_circuit_enabled: bool = True
+    opportunity_v431_local_live_loss_streak: int = Field(default=2, ge=1, le=20)
+    opportunity_v431_local_block_min_trades: int = Field(default=8, ge=2, le=10000)
+    opportunity_v431_local_block_profit_factor: float = Field(default=0.80, ge=0, le=100)
+    opportunity_v431_local_restore_min_trades: int = Field(default=8, ge=2, le=10000)
+    opportunity_v431_local_restore_min_symbols: int = Field(default=3, ge=1, le=10000)
+    opportunity_v431_local_restore_profit_factor: float = Field(default=1.05, ge=0, le=100)
     opportunity_v4_evidence_lookback_hours: float = Field(default=168, ge=1, le=8760)
     opportunity_v4_evidence_max_trades: int = Field(default=5000, ge=100, le=100000)
     opportunity_v4_evidence_cache_seconds: int = Field(default=60, ge=1, le=3600)
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
-    strategy_canary_release_id: str = "extreme_v4_roll@v4.3"
+    strategy_canary_release_id: str = "extreme_v4_roll@v4.3.1"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
     strategy_canary_level_1_multiplier: float = Field(default=0.40, ge=0, le=1)
-    strategy_canary_level_1_max_opportunities: int = Field(default=3, ge=1, le=100)
+    strategy_canary_level_1_max_opportunities: int = Field(default=5, ge=1, le=100)
     strategy_canary_level_2_min_trades: int = Field(default=3, ge=1, le=100)
     strategy_canary_level_2_min_profit_factor: float = Field(default=1.05, ge=0, le=100)
     strategy_canary_level_2_multiplier: float = Field(default=0.70, ge=0, le=1)
@@ -664,6 +679,13 @@ class TradingConfig(BaseModel):
     strategy_canary_level_3_multiplier: float = Field(default=1.0, ge=0, le=1)
     strategy_canary_level_3_max_opportunities: int = Field(default=12, ge=1, le=100)
     strategy_canary_max_losses: int = Field(default=2, ge=1, le=20)
+    strategy_canary_reissue_enabled: bool = True
+    strategy_canary_reissue_observation_minutes: int = Field(default=60, ge=0, le=1440)
+    strategy_canary_reissue_min_shadow_trades: int = Field(default=8, ge=1, le=1000)
+    strategy_canary_reissue_min_symbols: int = Field(default=3, ge=1, le=1000)
+    strategy_canary_reissue_min_profit_factor: float = Field(default=1.15, ge=0, le=100)
+    strategy_canary_reissue_multiplier: float = Field(default=0.30, ge=0, le=1)
+    strategy_canary_reissue_max_opportunities: int = Field(default=2, ge=1, le=100)
     v3_credit_score_weight: float = Field(default=0.15, ge=0, le=2)
     v3_credit_quick_stop_seconds: int = Field(default=300, ge=30, le=3600)
     v3_credit_win_reward: float = Field(default=4.0, ge=0, le=30)

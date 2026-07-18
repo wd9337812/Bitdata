@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+from app.local_circuit import LIVE_ELIGIBLE_LANES, reconcile_v4_local_circuit
 from app.recovery_controller import recovery_permit_status
 from app.strategy_canary import strategy_canary_status
 from app.strategy_releases import (
@@ -47,6 +49,29 @@ def _stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _live_eligible_shadow_rows(rows: list[dict[str, Any]], *, allow_legacy: bool) -> list[dict[str, Any]]:
+    """Keep only shadows that were actually eligible for a V4 live lane."""
+    result: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in rows:
+        item = dict(row)
+        try:
+            payload = json.loads(item.get("payload") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            payload = {}
+        lane = str(payload.get("admission_lane") or "")
+        if lane not in LIVE_ELIGIBLE_LANES and not (allow_legacy and not lane):
+            continue
+        opportunity_id = str(item.get("opportunity_id") or "").strip()
+        dedupe_key = opportunity_id or f"row:{item.get('id')}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        item["admission_lane"] = lane or "legacy_decision"
+        result.append(item)
+    return result
+
+
 def _cached(key: str, ttl_seconds: float, loader: Any) -> Any:
     cache_key = f"{db_path()}:{key}"
     now = time.monotonic()
@@ -86,7 +111,8 @@ def global_performance_guard(
                 scoped_live = [
                     dict(row)
                     for row in conn.execute(
-                        "SELECT close_time, net_pnl, commission, funding_fee FROM live_trade_records "
+                        "SELECT symbol, direction, open_time, close_time, net_pnl, commission, funding_fee "
+                        "FROM live_trade_records "
                         "WHERE strategy_family = ? AND strategy_version = ? AND strategy_role = ? "
                         "ORDER BY close_time DESC LIMIT ?",
                         (current_family, current_version, ACTIVE_ROLE, live_limit),
@@ -102,7 +128,8 @@ def global_performance_guard(
                 fallback_live = [
                     dict(row)
                     for row in conn.execute(
-                        "SELECT close_time, net_pnl, commission, funding_fee FROM live_trade_records "
+                        "SELECT symbol, direction, open_time, close_time, net_pnl, commission, funding_fee "
+                        "FROM live_trade_records "
                         "ORDER BY close_time DESC LIMIT ?",
                         (live_limit,),
                     ).fetchall()
@@ -123,35 +150,35 @@ def global_performance_guard(
             try:
                 ensure_shadow_release_columns(conn)
                 migrate_shadow_release_metadata(conn, config)
-                # V4 records broad exploration shadows to audit missed opportunities.
-                # Those samples are intentionally outside the live decision policy and
-                # must not decide whether a paused live release has recovered.
+                # Diagnostic-only V4 shadows must never grant or veto a live permit.
+                # Fetch a bounded release slice, then keep one independent opportunity
+                # from a lane that could actually have reached live execution.
                 decision_only = current_family == V4_FAMILY
                 shadow_evidence_clause = (
                     " AND COALESCE(evidence_type, 'decision') = 'decision'"
                     if decision_only
                     else ""
                 )
-                scoped_shadow = [
+                shadow_fetch_limit = max(2_000, max(shadow_limit, recovery_shadow_limit) * 20)
+                scoped_shadow_raw = [
                     dict(row)
                     for row in conn.execute(
-                        "SELECT id, closed_at, net_pnl, estimated_cost FROM shadow_trades "
+                        "SELECT id, closed_at, symbol, direction, net_pnl, estimated_cost, "
+                        "opportunity_id, payload FROM shadow_trades "
                         "WHERE status = 'CLOSED' AND strategy_family = ? AND strategy_version = ? "
                         f"AND strategy_role = ?{shadow_evidence_clause} ORDER BY id DESC LIMIT ?",
-                        (current_family, current_version, ACTIVE_ROLE, max(shadow_limit, recovery_shadow_limit)),
+                        (current_family, current_version, ACTIVE_ROLE, shadow_fetch_limit),
                     ).fetchall()
                 ]
-                scoped_shadow_total = int(
-                    conn.execute(
-                        "SELECT COUNT(*) FROM shadow_trades WHERE status = 'CLOSED' AND strategy_family = ? "
-                        f"AND strategy_version = ? AND strategy_role = ?{shadow_evidence_clause}",
-                        (current_family, current_version, ACTIVE_ROLE),
-                    ).fetchone()[0]
+                scoped_shadow = _live_eligible_shadow_rows(
+                    scoped_shadow_raw,
+                    allow_legacy=current_version != "v4.3.1",
                 )
+                scoped_shadow_total = len(scoped_shadow)
                 if release_only and (current_family == V4_FAMILY or scoped_shadow):
                     shadow = scoped_shadow
                     shadow_scope = (
-                        f"{current_family}@{current_version}:decision"
+                        f"{current_family}@{current_version}:live_lanes"
                         if decision_only
                         else f"{current_family}@{current_version}"
                     )
@@ -159,7 +186,8 @@ def global_performance_guard(
                     shadow = [
                         dict(row)
                         for row in conn.execute(
-                            "SELECT id, closed_at, net_pnl, estimated_cost FROM shadow_trades "
+                            "SELECT id, closed_at, symbol, direction, net_pnl, estimated_cost, "
+                            "opportunity_id, payload FROM shadow_trades "
                             "WHERE status = 'CLOSED' ORDER BY id DESC LIMIT ?",
                             (max(shadow_limit, recovery_shadow_limit),),
                         ).fetchall()
@@ -234,16 +262,28 @@ def global_performance_guard(
         if equity
         else 0.0
     )
-    severe_loss_streak = tail_losses >= int(config.get("performance_guard_severe_consecutive_losses", 4))
+    soft_loss_streak = tail_losses >= int(
+        config.get(
+            "performance_guard_soft_consecutive_losses",
+            config.get("performance_guard_severe_consecutive_losses", 4),
+        )
+    )
+    soft_window_loss = window_loss_pct >= float(
+        config.get(
+            "performance_guard_soft_window_loss_equity_pct",
+            config.get("performance_guard_severe_window_loss_equity_pct", 8.0),
+        )
+    )
     live_severe = bool(
-        severe_loss_streak
+        soft_loss_streak
+        or (live["net_pnl"] < 0 and soft_window_loss)
         or (
             live["trades"] >= min_live
             and live["net_pnl"] < 0
             and (
                 live["profit_factor"] < float(config.get("performance_guard_severe_profit_factor", 0.5))
                 or live["win_rate"] < float(config.get("performance_guard_severe_win_rate", 20.0))
-                or window_loss_pct >= float(config.get("performance_guard_severe_window_loss_equity_pct", 8.0))
+                or soft_window_loss
             )
         )
     )
@@ -273,7 +313,13 @@ def global_performance_guard(
         if peak_equity > 0 and equity is not None
         else 0.0
     )
-    peak_drawdown_severe = peak_drawdown_pct >= float(config.get("performance_guard_peak_drawdown_pct", 12.0))
+    soft_peak_threshold = float(
+        config.get(
+            "performance_guard_soft_peak_drawdown_pct",
+            config.get("performance_guard_peak_drawdown_pct", 12.0),
+        )
+    )
+    peak_drawdown_severe = peak_drawdown_pct >= soft_peak_threshold
     warmup_trades = int(config.get("performance_recovery_current_live_warmup_trades", 8))
     normal_live_pf = float(config.get("performance_recovery_normal_live_profit_factor", 1.05))
     current_live_ready = (
@@ -289,10 +335,32 @@ def global_performance_guard(
         and not current_live_ready
         and fallback_live_severe
     )
-    risk_off = live_severe or release_warmup or peak_drawdown_severe or (live_bad and shadow_bad)
+    hard_stop = float(config.get("hard_stop_equity", config.get("tournament_stop_equity", 5.0)))
+    emergency_stop = equity is not None and float(equity) <= hard_stop
+    hard_loss_streak = tail_losses >= int(config.get("performance_guard_hard_consecutive_losses", 5))
+    hard_window_loss = bool(
+        live["net_pnl"] < 0
+        and window_loss_pct >= float(config.get("performance_guard_hard_window_loss_equity_pct", 12.0))
+    )
+    hard_peak_drawdown = peak_drawdown_pct >= float(
+        config.get("performance_guard_hard_peak_drawdown_pct", 15.0)
+    )
+    hard_risk_off = bool(emergency_stop or hard_loss_streak or hard_window_loss or hard_peak_drawdown)
+    soft_risk_off = bool(
+        hard_risk_off
+        or live_severe
+        or release_warmup
+        or peak_drawdown_severe
+        or (live_bad and shadow_bad)
+    )
+    risk_off = soft_risk_off
     latest_close_ms = int(live_rows[0].get("close_time") or 0) if live_rows else 0
     latest_close = datetime.fromtimestamp(latest_close_ms / 1000, timezone.utc) if latest_close_ms else None
-    pause_minutes = float(config.get("performance_guard_pause_minutes", 60))
+    pause_minutes = float(
+        config.get("performance_guard_hard_pause_minutes", 60)
+        if hard_risk_off
+        else config.get("performance_guard_soft_observation_minutes", 20)
+    )
     # A cooldown must be anchored to an actual close. Using ``now`` when a
     # freshly released strategy has no live trades renews the deadline on every
     # guard check and permanently prevents its version-scoped canary.
@@ -305,8 +373,12 @@ def global_performance_guard(
     if shadow_recovery_rows:
         newest_shadow = shadow_recovery_rows[0]
         shadow_token = f"{newest_shadow.get('id')}:{newest_shadow.get('closed_at')}"
-    hard_stop = float(config.get("hard_stop_equity", config.get("tournament_stop_equity", 5.0)))
-    emergency_stop = equity is not None and float(equity) <= hard_stop
+    local_circuit = reconcile_v4_local_circuit(
+        config,
+        release_id=f"{current_family}@{current_version}",
+        live_rows=current_live_rows,
+        now=now,
+    )
     permit = recovery_permit_status(
         config,
         strategy_version=current_version,
@@ -329,6 +401,7 @@ def global_performance_guard(
         cooldown_active=cooldown_active,
         emergency_stop=emergency_stop,
         current_live=current_live,
+        eligible_shadow_rows=shadow_rows,
         now=now,
     )
     canary_allowed = bool(canary.get("allowed"))
@@ -358,8 +431,10 @@ def global_performance_guard(
         if recovery_level >= 3
         else "recovery_2"
         if allowed
-        else "cooldown"
-        if permit_state == "cooldown"
+        else "hard_cooldown"
+        if cooldown_active and hard_risk_off
+        else "soft_observation"
+        if cooldown_active
         else "confirming"
         if permit_state == "confirming"
         else "probe_open"
@@ -368,15 +443,16 @@ def global_performance_guard(
     )
     labels = {
         "normal": "正常实盘",
-        "cooldown": "强制冷却中",
+        "soft_observation": "局部降级观察中",
+        "hard_cooldown": "全局硬冷却中",
         "risk_off": "等待影子验证恢复",
         "confirming": "恢复条件确认中",
         "probe_open": "恢复试单持仓中",
         "recovery_2": "已取得恢复试单资格",
         "recovery_3": "三级受限恢复",
-        "strategy_canary_1": "V4.3 新策略一级试运行",
-        "strategy_canary_2": "V4.3 新策略二级试运行",
-        "strategy_canary_3": "V4.3 新策略已验证",
+        "strategy_canary_1": "V4.3.1 新策略一级试运行",
+        "strategy_canary_2": "V4.3.1 新策略二级试运行",
+        "strategy_canary_3": "V4.3.1 新策略已验证",
     }
     reason = "当前版本滚动表现正常"
     if canary_allowed and risk_off:
@@ -387,8 +463,10 @@ def global_performance_guard(
         reason = "影子数据已达门槛，正在确认其稳定性"
     elif permit_state == "probe_open":
         reason = "恢复许可证已用于当前受保护试单，等待平仓结果"
+    elif hard_risk_off:
+        reason = "实盘触发硬保护，完成全局冷却后仍需当前版本合格影子证据才可小仓恢复"
     elif live_severe or release_warmup:
-        reason = "历史实盘严重恶化，影子交易不得否决紧急暂停；冷却后可签发限时恢复许可证"
+        reason = "实盘触发软保护；短时观察后仅放行局部证据合格的低倍率候选"
     elif peak_drawdown_severe:
         reason = f"24小时权益高点回撤 {peak_drawdown_pct:.2f}% 已触发保护"
     elif live_bad and shadow_bad:
@@ -420,6 +498,33 @@ def global_performance_guard(
         "live_bad": live_bad,
         "shadow_bad": shadow_bad,
         "live_severe": live_severe,
+        "guard_level": "hard" if hard_risk_off else "soft" if soft_risk_off else "normal",
+        "soft_risk_off": soft_risk_off and not hard_risk_off,
+        "hard_risk_off": hard_risk_off,
+        "cooldown_active": cooldown_active,
+        "cooldown_minutes": pause_minutes if risk_off else 0.0,
+        "soft_thresholds": {
+            "consecutive_losses": int(
+                config.get(
+                    "performance_guard_soft_consecutive_losses",
+                    config.get("performance_guard_severe_consecutive_losses", 4),
+                )
+            ),
+            "window_loss_equity_pct": float(
+                config.get(
+                    "performance_guard_soft_window_loss_equity_pct",
+                    config.get("performance_guard_severe_window_loss_equity_pct", 8.0),
+                )
+            ),
+            "peak_drawdown_pct": soft_peak_threshold,
+            "observation_minutes": float(config.get("performance_guard_soft_observation_minutes", 20)),
+        },
+        "hard_thresholds": {
+            "consecutive_losses": int(config.get("performance_guard_hard_consecutive_losses", 5)),
+            "window_loss_equity_pct": float(config.get("performance_guard_hard_window_loss_equity_pct", 12.0)),
+            "peak_drawdown_pct": float(config.get("performance_guard_hard_peak_drawdown_pct", 15.0)),
+            "cooldown_minutes": float(config.get("performance_guard_hard_pause_minutes", 60)),
+        },
         "release_warmup": release_warmup,
         "current_live_ready": current_live_ready,
         "window_loss_equity_pct": round(window_loss_pct, 4),
@@ -428,7 +533,8 @@ def global_performance_guard(
         "peak_drawdown_severe": peak_drawdown_severe,
         "rolling_losses": rolling_losses,
         "tail_losses": tail_losses,
-        "severe_loss_streak": severe_loss_streak,
+        "severe_loss_streak": soft_loss_streak,
+        "hard_loss_streak": hard_loss_streak,
         "equity": equity,
         "active_strategy_family": current_family,
         "active_strategy_version": current_version,
@@ -436,6 +542,7 @@ def global_performance_guard(
         "shadow_evidence_scope": raw.get("shadow_scope"),
         "recovery_permit": permit,
         "strategy_canary_permit": canary,
+        "local_circuit": local_circuit,
         "recovery_requirements": {
             "shadow_trades": recovery_shadow_limit,
             "shadow_net_positive": True,

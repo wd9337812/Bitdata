@@ -35,6 +35,10 @@ _ACTIVE_FINGERPRINT_KEYS = (
 
 _CHALLENGER_FINGERPRINT_KEYS = _ACTIVE_FINGERPRINT_KEYS + (
     "opportunity_v4_decision_min_rank_percentile",
+    "opportunity_v4_bootstrap_min_rank_percentile",
+    "opportunity_v4_bootstrap_min_quality_score",
+    "opportunity_v4_bootstrap_min_model_expectancy_pct",
+    "opportunity_v4_bootstrap_risk_multiplier",
     "opportunity_v4_admission_min_trades",
     "opportunity_v4_admission_min_profit_factor",
     "opportunity_v4_admission_min_lower_expectancy_pct",
@@ -84,6 +88,30 @@ _CHALLENGER_FINGERPRINT_KEYS = _ACTIVE_FINGERPRINT_KEYS + (
     "opportunity_v43_max_order_book_share_pct",
     "opportunity_v43_episode_dedupe_minutes",
     "opportunity_v43_episode_reset_risk_multiple",
+    "opportunity_v431_local_circuit_enabled",
+    "opportunity_v431_local_live_loss_streak",
+    "opportunity_v431_local_block_min_trades",
+    "opportunity_v431_local_block_profit_factor",
+    "opportunity_v431_local_restore_min_trades",
+    "opportunity_v431_local_restore_min_symbols",
+    "opportunity_v431_local_restore_profit_factor",
+    "performance_guard_soft_consecutive_losses",
+    "performance_guard_soft_window_loss_equity_pct",
+    "performance_guard_soft_peak_drawdown_pct",
+    "performance_guard_soft_observation_minutes",
+    "performance_guard_hard_consecutive_losses",
+    "performance_guard_hard_window_loss_equity_pct",
+    "performance_guard_hard_peak_drawdown_pct",
+    "performance_guard_hard_pause_minutes",
+    "strategy_canary_level_1_multiplier",
+    "strategy_canary_level_1_max_opportunities",
+    "strategy_canary_max_losses",
+    "strategy_canary_reissue_observation_minutes",
+    "strategy_canary_reissue_min_shadow_trades",
+    "strategy_canary_reissue_min_symbols",
+    "strategy_canary_reissue_min_profit_factor",
+    "strategy_canary_reissue_multiplier",
+    "strategy_canary_reissue_max_opportunities",
 )
 
 
@@ -92,7 +120,7 @@ def active_version(config: dict[str, Any]) -> str:
 
 
 def challenger_version(config: dict[str, Any]) -> str:
-    return str(config.get("opportunity_v4_strategy_version") or "v4.3")
+    return str(config.get("opportunity_v4_strategy_version") or "v4.3.1")
 
 
 def active_family(config: dict[str, Any]) -> str:

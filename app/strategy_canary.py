@@ -5,6 +5,7 @@ from functools import wraps
 import threading
 from typing import Any
 
+from app.local_circuit import cohort_key
 from app.state_store import load_state, save_state
 from app.telemetry import record_event
 
@@ -51,6 +52,11 @@ def _base_state(release_id: str) -> dict[str, Any]:
         "probe_open": False,
         "probe_symbol": None,
         "probe_direction": None,
+        "probe_cohort_key": None,
+        "revoked_at": None,
+        "reissue_shadow_baseline_id": 0,
+        "reissue_count": 0,
+        "recovery": {},
         "last_transition_at": None,
         "reason": "not_required",
     }
@@ -83,6 +89,98 @@ def _target_release(config: dict[str, Any], active_release_id: str) -> bool:
     return bool(configured and configured == active_release_id)
 
 
+def _shadow_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    values = [float(row.get("net_pnl") or 0) for row in rows]
+    positive = sum(value for value in values if value > 0)
+    negative = sum(value for value in values if value < 0)
+    return {
+        "trades": len(values),
+        "symbols": len({str(row.get("symbol") or "").upper() for row in rows if row.get("symbol")}),
+        "net_pnl": round(sum(values), 8),
+        "profit_factor": round(positive / abs(negative), 4) if negative < 0 else (999.0 if positive > 0 else 0.0),
+        "latest_id": max((int(row.get("id") or 0) for row in rows), default=0),
+    }
+
+
+def _reissue_evidence(
+    state: dict[str, Any],
+    rows: list[dict[str, Any]],
+    config: dict[str, Any],
+    now: datetime,
+) -> dict[str, Any]:
+    baseline_id = int(state.get("reissue_shadow_baseline_id") or 0)
+    revoked_at = _parse_time(state.get("revoked_at"))
+    fresh = [
+        row
+        for row in rows
+        if int(row.get("id") or 0) > baseline_id
+        and (not revoked_at or (_parse_time(row.get("closed_at")) or now) > revoked_at)
+    ]
+    stats = _shadow_stats(fresh)
+    observation_minutes = float(config.get("strategy_canary_reissue_observation_minutes", 60))
+    observation_complete = bool(
+        revoked_at and (now - revoked_at).total_seconds() >= observation_minutes * 60
+    )
+    ready = bool(
+        config.get("strategy_canary_reissue_enabled", True)
+        and observation_complete
+        and stats["trades"] >= int(config.get("strategy_canary_reissue_min_shadow_trades", 8))
+        and stats["symbols"] >= int(config.get("strategy_canary_reissue_min_symbols", 3))
+        and stats["net_pnl"] > 0
+        and stats["profit_factor"] >= float(config.get("strategy_canary_reissue_min_profit_factor", 1.15))
+    )
+    return {
+        **stats,
+        "ready": ready,
+        "observation_complete": observation_complete,
+        "observation_minutes": observation_minutes,
+        "seconds_until_observation_complete": max(
+            0,
+            int(observation_minutes * 60 - (now - revoked_at).total_seconds()),
+        )
+        if revoked_at
+        else int(observation_minutes * 60),
+        "required_trades": int(config.get("strategy_canary_reissue_min_shadow_trades", 8)),
+        "required_symbols": int(config.get("strategy_canary_reissue_min_symbols", 3)),
+        "required_profit_factor": float(config.get("strategy_canary_reissue_min_profit_factor", 1.15)),
+    }
+
+
+def _issued_state(
+    config: dict[str, Any],
+    *,
+    active_release_id: str,
+    closed_total: int,
+    now: datetime,
+    reissued: bool,
+    previous: dict[str, Any],
+) -> dict[str, Any]:
+    duration = float(config.get("strategy_canary_permit_hours", 24))
+    base = _base_state(active_release_id)
+    return {
+        **base,
+        "status": "waiting_candidate",
+        "permit_id": f"{active_release_id}:{int(now.timestamp())}",
+        "issued_at": now.isoformat(),
+        "expires_at": (now + timedelta(hours=duration)).isoformat(),
+        "level": 1,
+        "risk_multiplier": float(
+            config.get("strategy_canary_reissue_multiplier", 0.30)
+            if reissued
+            else config.get("strategy_canary_level_1_multiplier", 0.40)
+        ),
+        "max_opportunities": int(
+            config.get("strategy_canary_reissue_max_opportunities", 2)
+            if reissued
+            else config.get("strategy_canary_level_1_max_opportunities", 5)
+        ),
+        "live_trades_at_issue": closed_total,
+        "last_live_closed_total": closed_total,
+        "reissue_count": int(previous.get("reissue_count") or 0) + (1 if reissued else 0),
+        "reason": "shadow_evidence_reissued_canary" if reissued else "new_strategy_release_canary",
+    }
+
+
 @_synchronized
 def strategy_canary_status(
     config: dict[str, Any],
@@ -92,6 +190,7 @@ def strategy_canary_status(
     cooldown_active: bool,
     emergency_stop: bool,
     current_live: dict[str, Any],
+    eligible_shadow_rows: list[dict[str, Any]] | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return a version-scoped live canary permit without weakening account safeguards."""
@@ -108,21 +207,16 @@ def strategy_canary_status(
         return {**state, "enabled": True, "allowed": False}
 
     closed_total = int(current_live.get("closed_total") or current_live.get("trades") or 0)
+    eligible_shadow_rows = eligible_shadow_rows or []
     if not state.get("permit_id") and config.get("strategy_canary_auto_issue", True):
-        duration = float(config.get("strategy_canary_permit_hours", 24))
-        state = {
-            **_base_state(active_release_id),
-            "status": "waiting_candidate",
-            "permit_id": f"{active_release_id}:{int(now.timestamp())}",
-            "issued_at": now.isoformat(),
-            "expires_at": (now + timedelta(hours=duration)).isoformat(),
-            "level": 1,
-            "risk_multiplier": float(config.get("strategy_canary_level_1_multiplier", 0.40)),
-            "max_opportunities": int(config.get("strategy_canary_level_1_max_opportunities", 3)),
-            "live_trades_at_issue": closed_total,
-            "last_live_closed_total": closed_total,
-            "reason": "new_strategy_release_canary",
-        }
+        state = _issued_state(
+            config,
+            active_release_id=active_release_id,
+            closed_total=closed_total,
+            now=now,
+            reissued=False,
+            previous=state,
+        )
 
     if emergency_stop:
         revoked = {
@@ -134,6 +228,29 @@ def strategy_canary_status(
         }
         state = _save_if_changed(previous, revoked, now)
         return {**state, "enabled": True, "allowed": False}
+
+    if state.get("status") == "revoked":
+        if state.get("reason") != "canary_loss_budget_exhausted":
+            return {**state, "enabled": True, "allowed": False}
+        recovery = _reissue_evidence(state, eligible_shadow_rows, config, now)
+        state = {**state, "recovery": recovery}
+        if recovery["ready"] and not cooldown_active:
+            state = _issued_state(
+                config,
+                active_release_id=active_release_id,
+                closed_total=closed_total,
+                now=now,
+                reissued=True,
+                previous=state,
+            )
+        else:
+            state = _save_if_changed(previous, state, now)
+            return {
+                **state,
+                "enabled": True,
+                "allowed": False,
+                "reason": "mandatory_cooldown" if cooldown_active else "waiting_for_reissue_shadow_evidence",
+            }
 
     expires_at = _parse_time(state.get("expires_at"))
     if expires_at is None or now >= expires_at:
@@ -159,15 +276,32 @@ def strategy_canary_status(
                 if value > 0:
                     break
                 trailing_losses += 1
-            state["consecutive_losses"] = trailing_losses
+            state["consecutive_losses"] = trailing_losses + (
+                int(state.get("consecutive_losses") or 0)
+                if trailing_losses == len(recent_values)
+                else 0
+            )
         state["last_live_closed_total"] = closed_total
         state["probe_open"] = False
         state["probe_symbol"] = None
         state["probe_direction"] = None
+        state["probe_cohort_key"] = None
 
     max_losses = int(config.get("strategy_canary_max_losses", 2))
     if int(state.get("losses") or 0) >= max_losses:
-        revoked = {**state, "status": "revoked", "risk_multiplier": 0.0, "reason": "canary_loss_budget_exhausted"}
+        revoked = {
+            **state,
+            "status": "revoked",
+            "risk_multiplier": 0.0,
+            "probe_open": False,
+            "revoked_at": now.isoformat(),
+            "reissue_shadow_baseline_id": max(
+                (int(row.get("id") or 0) for row in eligible_shadow_rows),
+                default=0,
+            ),
+            "recovery": {},
+            "reason": "canary_loss_budget_exhausted",
+        }
         state = _save_if_changed(previous, revoked, now)
         return {**state, "enabled": True, "allowed": False}
 
@@ -259,6 +393,7 @@ def consume_strategy_canary(
         "probe_open": True,
         "probe_symbol": str(decision.get("symbol") or "").upper(),
         "probe_direction": str(decision.get("direction") or "").upper(),
+        "probe_cohort_key": cohort_key(candidate),
         "reason": "protected_canary_position_open",
     }
     return _save_if_changed(stored, current, now)
@@ -270,5 +405,12 @@ def revoke_strategy_canary(reason: str, *, now: datetime | None = None) -> dict[
     stored = load_state().get(CANARY_STATE_KEY)
     if not isinstance(stored, dict):
         return None
-    current = {**stored, "status": "revoked", "risk_multiplier": 0.0, "probe_open": False, "reason": reason}
+    current = {
+        **stored,
+        "status": "revoked",
+        "risk_multiplier": 0.0,
+        "probe_open": False,
+        "revoked_at": now.isoformat(),
+        "reason": reason,
+    }
     return _save_if_changed(stored, current, now)
