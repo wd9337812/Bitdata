@@ -59,6 +59,31 @@ _CHALLENGER_FINGERPRINT_KEYS = _ACTIVE_FINGERPRINT_KEYS + (
     "opportunity_v42_exploration_min_cost_ratio",
     "opportunity_v42_exploration_min_confirmations",
     "opportunity_v42_exploration_risk_multiplier",
+    "opportunity_v43_exploration_enabled",
+    "opportunity_v43_exploration_min_rank_percentile",
+    "opportunity_v43_exploration_min_quality_score",
+    "opportunity_v43_exploration_min_expected_net_pct",
+    "opportunity_v43_exploration_min_lower_expectancy_pct",
+    "opportunity_v43_exploration_min_cost_ratio",
+    "opportunity_v43_exploration_min_confirmations",
+    "opportunity_v43_exploration_risk_multiplier",
+    "opportunity_v43_hierarchy_prior_trades",
+    "opportunity_v43_local_negative_min_trades",
+    "opportunity_v43_local_negative_profit_factor",
+    "opportunity_v43_direction_risk_min_trades",
+    "opportunity_v43_direction_low_pf",
+    "opportunity_v43_direction_medium_pf",
+    "opportunity_v43_direction_full_pf",
+    "opportunity_v43_direction_low_multiplier",
+    "opportunity_v43_direction_medium_multiplier",
+    "opportunity_v43_direction_caution_multiplier",
+    "opportunity_v43_dynamic_liquidity_enabled",
+    "opportunity_v43_min_depth_floor_usdt",
+    "opportunity_v43_depth_to_order_multiple",
+    "opportunity_v43_max_required_depth_usdt",
+    "opportunity_v43_max_order_book_share_pct",
+    "opportunity_v43_episode_dedupe_minutes",
+    "opportunity_v43_episode_reset_risk_multiple",
 )
 
 
@@ -67,7 +92,7 @@ def active_version(config: dict[str, Any]) -> str:
 
 
 def challenger_version(config: dict[str, Any]) -> str:
-    return str(config.get("opportunity_v4_strategy_version") or "v4.2")
+    return str(config.get("opportunity_v4_strategy_version") or "v4.3")
 
 
 def active_family(config: dict[str, Any]) -> str:

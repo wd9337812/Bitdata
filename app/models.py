@@ -574,7 +574,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v4.2"
+    opportunity_v4_strategy_version: str = "v4.3"
     opportunity_v4_decision_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
     opportunity_v4_bootstrap_enabled: bool = True
     opportunity_v4_bootstrap_min_rank_percentile: float = Field(default=0.85, ge=0, le=1)
@@ -621,12 +621,37 @@ class TradingConfig(BaseModel):
     opportunity_v42_exploration_min_cost_ratio: float = Field(default=1.60, ge=0, le=1000)
     opportunity_v42_exploration_min_confirmations: int = Field(default=2, ge=1, le=4)
     opportunity_v42_exploration_risk_multiplier: float = Field(default=0.40, ge=0, le=1)
+    opportunity_v43_exploration_enabled: bool = True
+    opportunity_v43_exploration_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
+    opportunity_v43_exploration_min_quality_score: float = Field(default=55.0, ge=0, le=100)
+    opportunity_v43_exploration_min_expected_net_pct: float = Field(default=0.04, ge=-100, le=100)
+    opportunity_v43_exploration_min_lower_expectancy_pct: float = Field(default=-0.03, ge=-100, le=100)
+    opportunity_v43_exploration_min_cost_ratio: float = Field(default=1.60, ge=0, le=1000)
+    opportunity_v43_exploration_min_confirmations: int = Field(default=2, ge=1, le=4)
+    opportunity_v43_exploration_risk_multiplier: float = Field(default=0.40, ge=0, le=1)
+    opportunity_v43_hierarchy_prior_trades: int = Field(default=30, ge=1, le=10000)
+    opportunity_v43_local_negative_min_trades: int = Field(default=30, ge=5, le=10000)
+    opportunity_v43_local_negative_profit_factor: float = Field(default=0.50, ge=0, le=100)
+    opportunity_v43_direction_risk_min_trades: int = Field(default=20, ge=5, le=10000)
+    opportunity_v43_direction_low_pf: float = Field(default=0.55, ge=0, le=100)
+    opportunity_v43_direction_medium_pf: float = Field(default=0.75, ge=0, le=100)
+    opportunity_v43_direction_full_pf: float = Field(default=1.0, ge=0, le=100)
+    opportunity_v43_direction_low_multiplier: float = Field(default=0.55, ge=0, le=1)
+    opportunity_v43_direction_medium_multiplier: float = Field(default=0.70, ge=0, le=1)
+    opportunity_v43_direction_caution_multiplier: float = Field(default=0.85, ge=0, le=1)
+    opportunity_v43_dynamic_liquidity_enabled: bool = True
+    opportunity_v43_min_depth_floor_usdt: float = Field(default=750.0, ge=0, le=10000000)
+    opportunity_v43_depth_to_order_multiple: float = Field(default=12.5, ge=1, le=1000)
+    opportunity_v43_max_required_depth_usdt: float = Field(default=50_000.0, ge=0, le=100000000)
+    opportunity_v43_max_order_book_share_pct: float = Field(default=8.0, ge=0.01, le=100)
+    opportunity_v43_episode_dedupe_minutes: int = Field(default=30, ge=1, le=1440)
+    opportunity_v43_episode_reset_risk_multiple: float = Field(default=1.0, ge=0.1, le=20)
     opportunity_v4_evidence_lookback_hours: float = Field(default=168, ge=1, le=8760)
-    opportunity_v4_evidence_max_trades: int = Field(default=2500, ge=100, le=100000)
+    opportunity_v4_evidence_max_trades: int = Field(default=5000, ge=100, le=100000)
     opportunity_v4_evidence_cache_seconds: int = Field(default=60, ge=1, le=3600)
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
-    strategy_canary_release_id: str = "extreme_v4_roll@v4.2"
+    strategy_canary_release_id: str = "extreme_v4_roll@v4.3"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
     strategy_canary_level_1_multiplier: float = Field(default=0.40, ge=0, le=1)
     strategy_canary_level_1_max_opportunities: int = Field(default=3, ge=1, le=100)

@@ -89,7 +89,7 @@ def test_v4_live_selector_ignores_v3_tier_and_applies_admission_risk_once():
                 "bootstrap_admitted": True,
                 "validated": False,
                 "risk_multiplier": 0.4,
-                "strategy_version": "v4.2",
+                "strategy_version": "v4.3",
                 "score": 75,
                 "rank_percentile": 0.95,
                 "evidence_status": "bootstrap",
@@ -115,18 +115,18 @@ def test_v4_live_selector_ignores_v3_tier_and_applies_admission_risk_once():
     assert selected["passed"] is True
     assert selected["strategy_family"] == "extreme_v4_roll"
     assert "legacy_v3_quality" not in selected
-    assert selected["symbol_quality"]["tier"] == "V4.2-CORE-CANARY"
+    assert selected["symbol_quality"]["tier"] == "V4.3-CORE-CANARY"
     assert selected["risk_pct"] == 4.0
     assert selected["quality_risk_multiplier"] == 1.0
     assert selected["risk_adjustment"]["multiplier"] == 1.0
     assert effective["final_risk_pct"] == 4.0
 
 
-def test_v4_candidate_admission_uses_its_own_cohort(monkeypatch, tmp_path):
+def test_v43_candidate_admission_normalizes_setup_aliases(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     config = {
         "opportunity_v4_live_enabled": True,
-        "opportunity_v4_strategy_version": "v4.1",
+        "opportunity_v4_strategy_version": "v4.3",
         "opportunity_v4_decision_min_rank_percentile": 0,
         "opportunity_v4_admission_min_trades": 10,
         "opportunity_v4_admission_min_profit_factor": 1.1,
@@ -149,18 +149,17 @@ def test_v4_candidate_admission_uses_its_own_cohort(monkeypatch, tmp_path):
                     strategy_family, strategy_version, strategy_role, opportunity_id,
                     market_regime, evidence_type, payload
                 ) VALUES (?, '2026-07-01T00:00:00+00:00', '2026-07-01T01:00:00+00:00',
-                          'ALTUSDT', 'SHORT', 'v3_pullback', 'CLOSED', 100, 101, 97, 97,
+                          'ALTUSDT', 'LONG', 'pullback', 'CLOSED', 100, 99, 103, 103,
                           20, ?, '2026-07-01T02:00:00+00:00', 'extreme_v4_roll',
-                          'v4.1', 'active', ?, 'quiet', 'decision', '{}')
+                          'v4.3', 'active', ?, 'quiet', 'decision',
+                          '{"features":{"entry_phase":"RETEST","medium_trend_aligned":true}}')
                 """,
                 (f"v4-{index}", net, f"op-{index}"),
             )
         conn.commit()
     clear_v4_evidence_cache()
     candidate = _candidate("ALTUSDT", 0.9, 1.8)
-    candidate["direction"] = "SHORT"
     candidate["entry_type"] = "v3_pullback"
-    candidate["signal"].update({"signal": "SHORT", "stop": 101, "take_profit": 97})
     candidate["market_state"] = {"state": "quiet"}
     candidate["opportunity_v3"]["market_regime"] = "quiet"
 
@@ -168,6 +167,7 @@ def test_v4_candidate_admission_uses_its_own_cohort(monkeypatch, tmp_path):
 
     evidence = candidate["opportunity_v4"]
     assert evidence["evidence"]["selected"]["trades"] == 12
+    assert evidence["evidence"]["scope"] == "regime_direction_setup_phase"
     assert evidence["admitted"] is True
     assert evidence["evidence_status"] == "validated"
 
@@ -252,7 +252,7 @@ def _momentum_candidate(symbol: str, direction: str, regime: str) -> dict:
     return candidate
 
 
-def test_v42_broad_down_short_momentum_uses_limited_exploration(monkeypatch, tmp_path):
+def test_v43_broad_down_short_momentum_waits_for_new_shadow_evidence(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     clear_v4_evidence_cache()
     candidate = _momentum_candidate("DOWNUSDT", "SHORT", "broad_down")
@@ -260,12 +260,12 @@ def test_v42_broad_down_short_momentum_uses_limited_exploration(monkeypatch, tmp
     attach_v4_rankings([candidate], {"opportunity_v4_live_enabled": True})
 
     v4 = candidate["opportunity_v4"]
-    assert v4["admitted"] is True
-    assert v4["exploration_admitted"] is True
-    assert v4["admission_lane"] == "limited_exploration"
-    assert v4["risk_multiplier"] == 0.4
-    assert v4["canary_eligible"] is True
-    assert v4["momentum_confirmations"] >= 2
+    assert v4["admitted"] is False
+    assert v4["exploration_admitted"] is False
+    assert v4["admission_lane"] == "shadow_only"
+    assert v4["risk_multiplier"] == 0.0
+    assert v4["canary_eligible"] is False
+    assert v4["regime_policy"]["scope"] == "broad_down_short_shadow_only"
 
 
 def test_v42_countertrend_and_panic_remain_shadow_only(monkeypatch, tmp_path):
@@ -280,3 +280,83 @@ def test_v42_countertrend_and_panic_remain_shadow_only(monkeypatch, tmp_path):
     assert countertrend["opportunity_v4"]["admission_lane"] == "shadow_only"
     assert panic["opportunity_v4"]["admitted"] is False
     assert panic["opportunity_v4"]["regime_policy"]["scope"] == "panic_shadow_only"
+
+
+def test_v43_broad_down_short_pullback_stays_shadow_after_negative_replay(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    clear_v4_evidence_cache()
+    candidate = _candidate("PULLBACKUSDT", 0.95, 2.0)
+    candidate["direction"] = "SHORT"
+    candidate["entry_type"] = "v3_pullback"
+    candidate["signal"].update({"signal": "SHORT", "stop": 101, "take_profit": 97, "entry_phase": "RETEST"})
+    candidate["market_state"] = {"state": "broad_down"}
+    candidate["opportunity_v3"].update({"market_regime": "broad_down", "medium_trend_aligned": False})
+
+    attach_v4_rankings([candidate], {"opportunity_v4_live_enabled": True})
+
+    v4 = candidate["opportunity_v4"]
+    assert v4["regime_policy"]["scope"] == "broad_down_short_shadow_only"
+    assert v4["bootstrap_admitted"] is False
+    assert v4["admission_lane"] == "shadow_only"
+
+
+def test_v43_dynamic_liquidity_uses_expected_probe_notional(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    clear_v4_evidence_cache()
+    candidate = _candidate("SHALLOWUSDT", 0.95, 2.0)
+    candidate["depth"] = {"spread_pct": 0.02, "depth_notional": 1_000}
+    candidate["execution_filter"] = {
+        "enabled": True,
+        "executable": True,
+        "raw_quantity": 1.0,
+        "max_quantity": 1.0,
+        "notional": 100.0,
+        "min_notional": 5.0,
+    }
+
+    attach_v4_rankings([candidate], {"opportunity_v4_live_enabled": True})
+
+    gate = candidate["opportunity_v4"]["liquidity_gate"]
+    assert gate["estimated_order_notional"] == 40.0
+    assert gate["required_depth_notional"] == 750.0
+    assert gate["passed"] is True
+    assert candidate["opportunity_v4"]["bootstrap_admitted"] is True
+
+
+def test_v43_direction_losses_reduce_risk_without_vetoing_new_local_setup(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v4_strategy_version": "v4.3",
+        "opportunity_v4_evidence_lookback_hours": 10_000,
+    }
+    with connect() as conn:
+        ensure_shadow_tables(conn)
+        for index in range(20):
+            conn.execute(
+                """
+                INSERT INTO shadow_trades (
+                    dedupe_key, opened_at, closed_at, symbol, direction, signal_type, status,
+                    entry, stop, take_profit, last_price, notional, net_pnl, expires_at,
+                    strategy_family, strategy_version, strategy_role, opportunity_id,
+                    market_regime, evidence_type, payload
+                ) VALUES (?, '2026-07-17T00:00:00+00:00', '2026-07-17T01:00:00+00:00',
+                          ?, 'LONG', 'momentum', 'CLOSED', 100, 99, 103, 99,
+                          20, -0.2, '2026-07-17T02:00:00+00:00', 'extreme_v4_roll',
+                          'v4.3', 'active', ?, 'mixed', 'decision',
+                          '{"features":{"entry_phase":"ARMED"}}')
+                """,
+                (f"direction-loss-{index}", f"LOSS{index}USDT", f"direction-op-{index}"),
+            )
+        conn.commit()
+    clear_v4_evidence_cache()
+    candidate = _candidate("NEWSETUPUSDT", 0.95, 2.0)
+
+    attach_v4_rankings([candidate], config)
+
+    v4 = candidate["opportunity_v4"]
+    assert v4["evidence"]["scope"] == "model_only"
+    assert v4["evidence_risk_multiplier"] == 0.55
+    assert v4["evidence_status"] == "canary"
+    assert v4["admitted"] is True
+    assert v4["risk_multiplier"] == 0.22

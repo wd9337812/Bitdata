@@ -79,6 +79,10 @@ def ensure_shadow_tables(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN estimated_slippage REAL DEFAULT 0")
     ensure_release_schema(conn)
     ensure_shadow_release_columns(conn)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_shadow_v4_episode ON shadow_trades("
+        "strategy_family, strategy_version, evidence_type, symbol, direction, signal_type, opened_at)"
+    )
 
 
 def _candidate_price(candidate: dict[str, Any]) -> float:
@@ -127,6 +131,65 @@ def _opportunity_id(candidate: dict[str, Any], bucket_minutes: int) -> str:
     )
 
 
+def _same_v4_episode(
+    conn: sqlite3.Connection,
+    candidate: dict[str, Any],
+    config: dict[str, Any],
+    now: datetime,
+) -> bool:
+    family = str(candidate.get("strategy_family") or "")
+    if family not in {V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY}:
+        return False
+    window_minutes = int(config.get("opportunity_v43_episode_dedupe_minutes", 30))
+    if window_minutes <= 0:
+        return False
+    signal_type = _candidate_signal_type(candidate)
+    row = conn.execute(
+        "SELECT opened_at, entry, stop, payload FROM shadow_trades "
+        "WHERE strategy_family = ? AND strategy_version = ? AND evidence_type = ? "
+        "AND symbol = ? AND direction = ? AND signal_type = ? "
+        "ORDER BY id DESC LIMIT 1",
+        (
+            family,
+            str(candidate.get("strategy_version") or "legacy"),
+            str(candidate.get("evidence_type") or "decision"),
+            str(candidate.get("symbol") or "").upper(),
+            str(candidate.get("direction") or "LONG").upper(),
+            signal_type,
+        ),
+    ).fetchone()
+    if not row:
+        return False
+    try:
+        opened_at = datetime.fromisoformat(str(row["opened_at"]).replace("Z", "+00:00"))
+        if opened_at.tzinfo is None:
+            opened_at = opened_at.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return False
+    if now - opened_at > timedelta(minutes=window_minutes):
+        return False
+
+    try:
+        payload = json.loads(row["payload"] or "{}")
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    previous_structure = payload.get("market_structure") if isinstance(payload.get("market_structure"), dict) else {}
+    current_structure = market_structure(candidate)
+    previous_regime = str(previous_structure.get("market_regime") or "unknown").lower()
+    current_regime = str(current_structure.get("market_regime") or "unknown").lower()
+    previous_phase = str(previous_structure.get("entry_phase") or "UNKNOWN").upper()
+    current_phase = str(current_structure.get("entry_phase") or "UNKNOWN").upper()
+    if previous_regime != current_regime or previous_phase != current_phase:
+        return False
+
+    previous_entry = float(row["entry"] or 0.0)
+    previous_stop = float(row["stop"] or 0.0)
+    current_entry = _candidate_price(candidate)
+    risk_distance = max(abs(previous_entry - previous_stop), previous_entry * 0.001)
+    reset_multiple = float(config.get("opportunity_v43_episode_reset_risk_multiple", 1.0))
+    return abs(current_entry - previous_entry) < risk_distance * max(reset_multiple, 0.1)
+
+
 def _fresh_stream_item(item: dict[str, Any] | None, max_age_seconds: int) -> bool:
     if not item or not item.get("updated_at"):
         return False
@@ -152,7 +215,7 @@ def active_shadow_symbols(limit: int = 100) -> list[str]:
 def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, int]:
     """Maintain paper-only trades from scan data. This function never calls Binance."""
     if not config.get("shadow_trading_enabled", True):
-        return {"opened": 0, "closed": 0, "active": 0}
+        return {"opened": 0, "closed": 0, "active": 0, "episode_skipped": 0}
     initialize_strategy_releases(config)
     now = datetime.now(timezone.utc)
     snapshot = read_snapshot()
@@ -173,6 +236,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
     ) / 100
     opened = 0
     closed = 0
+    episode_skipped = 0
     with connect() as conn:
         ensure_shadow_tables(conn)
         migrate_shadow_release_metadata(conn, config)
@@ -311,6 +375,9 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
             )
             if active_key in active_keys:
                 continue
+            if _same_v4_episode(conn, candidate, config, now):
+                episode_skipped += 1
+                continue
             try:
                 strategy_family = str(candidate.get("strategy_family") or "legacy_mixed")
                 structure = market_structure(candidate)
@@ -394,13 +461,18 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                                 "entry_type": signal_type,
                                 "evidence_type": evidence_type,
                                 "rank_bucket": v4.get("rank_bucket"),
+                                "rank_percentile": v4.get("rank_percentile"),
                                 "admission_lane": v4.get("admission_lane"),
                                 "exploration_admitted": v4.get("exploration_admitted"),
                                 "regime_policy": v4.get("regime_policy"),
                                 "blockers": v4.get("blockers"),
+                                "liquidity_gate": v4.get("liquidity_gate"),
+                                "evidence_scope": (v4.get("evidence") or {}).get("scope"),
+                                "evidence_risk_multiplier": v4.get("evidence_risk_multiplier"),
                                 "model_expected_net_pct": v4.get("model_expected_net_pct"),
                                 "expected_net_pct": v4.get("expected_net_pct"),
                                 "lower_expected_net_pct": v4.get("lower_expected_net_pct"),
+                                "model_features": v4.get("features"),
                                 "features": {
                                     "spread_pct": (candidate.get("depth") or {}).get("spread_pct"),
                                     "depth_notional": (candidate.get("depth") or {}).get("depth_notional"),
@@ -425,7 +497,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 pass
         conn.commit()
         active = conn.execute("SELECT COUNT(*) FROM shadow_trades WHERE status = 'OPEN'").fetchone()[0]
-    return {"opened": opened, "closed": closed, "active": int(active)}
+    return {"opened": opened, "closed": closed, "active": int(active), "episode_skipped": episode_skipped}
 
 
 def _shadow_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:

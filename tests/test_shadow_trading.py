@@ -80,7 +80,7 @@ def test_v32_and_v33_paired_shadow_trades_can_coexist(monkeypatch, tmp_path):
     assert {row["strategy_role"] for row in summary["trades"]} == {"active", "challenger"}
     assert len({row["opportunity_id"] for row in summary["trades"]}) == 1
     assert summary["active_release"]["strategy_version"] == "v3.2"
-    assert summary["challenger_release"]["strategy_version"] == "v4.2"
+    assert summary["challenger_release"]["strategy_version"] == "v4.3"
 
 
 def test_v4_decision_exploration_and_control_are_separate(monkeypatch, tmp_path):
@@ -131,3 +131,55 @@ def test_v4_decision_exploration_and_control_are_separate(monkeypatch, tmp_path)
 
     duplicate_after_upgrade = update_shadow_trades(rows, config)
     assert duplicate_after_upgrade["opened"] == 0
+
+
+def test_v43_shadow_counts_one_continuous_episode_until_price_resets(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    candidate = {
+        **_candidate(100),
+        "entry_type": "v3_breakout",
+        "signal": {
+            "signal": "LONG",
+            "last_price": 100,
+            "stop": 95,
+            "take_profit": 110,
+            "entry_phase": "RETEST",
+        },
+        "strategy_family": "extreme_v4_roll",
+        "strategy_version": "v4.3",
+        "strategy_role": "active",
+        "evidence_type": "decision",
+        "market_state": {"state": "broad_up"},
+        "opportunity_v3": {
+            "market_regime": "broad_up",
+            "medium_trend_aligned": True,
+            "medium_ready": True,
+        },
+        "opportunity_v4": {"shadow_eligible": True, "score": 80, "feature_schema_version": "v4.3"},
+    }
+    config = {
+        "shadow_trading_enabled": True,
+        "opportunity_v4_strategy_version": "v4.3",
+        "shadow_dedupe_minutes": 10,
+        "shadow_max_hold_minutes": 120,
+        "shadow_reference_notional_usdt": 20,
+        "shadow_round_trip_cost_pct": 0.12,
+        "opportunity_v43_episode_dedupe_minutes": 30,
+        "opportunity_v43_episode_reset_risk_multiple": 1.0,
+    }
+
+    first = update_shadow_trades([candidate], config)
+    with connect() as conn:
+        conn.execute(
+            "UPDATE shadow_trades SET status = 'CLOSED', closed_at = opened_at, dedupe_key = 'closed-episode'"
+        )
+        conn.commit()
+    duplicate = update_shadow_trades([candidate], config)
+
+    reset = {**candidate, "signal": {**candidate["signal"], "last_price": 106}}
+    restarted = update_shadow_trades([reset], config)
+
+    assert first["opened"] == 1
+    assert duplicate["opened"] == 0
+    assert duplicate["episode_skipped"] == 1
+    assert restarted["opened"] == 1

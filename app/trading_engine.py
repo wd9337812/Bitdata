@@ -421,7 +421,7 @@ def build_stage1_decision(
                     "mode": active_mode["mode"],
                     "strategy": active_mode["strategy"],
                     "entry_type": entry_type,
-                    "decision_reason": "V4.2 试运行许可证继续保留：当前候选未通过同版本方向、成本和质量门槛",
+                    "decision_reason": "V4.3 试运行许可证继续保留：当前候选未通过同版本方向、成本和质量门槛",
                     "primary_block_reason": canary_reason,
                     "performance_guard": performance_guard,
                     "protection_plan": protection_plan,

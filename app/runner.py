@@ -461,7 +461,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         decision_count = 0
         exploration_count = 0
         control_count = 0
-        v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.2")
+        v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.3")
         v4_shadow_role = "active" if config.get("opportunity_v4_live_enabled", False) else "challenger"
         v4_rows = list(scan.get("v4_candidates") or scan.get("candidates", []))
         decision_rows = [item for item in v4_rows if (item.get("opportunity_v4") or {}).get("decision_candidate")]

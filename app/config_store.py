@@ -591,7 +591,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v4.2",
+    "opportunity_v4_strategy_version": "v4.3",
     "opportunity_v4_decision_min_rank_percentile": 0.75,
     "opportunity_v4_bootstrap_enabled": True,
     "opportunity_v4_bootstrap_min_rank_percentile": 0.85,
@@ -638,12 +638,37 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v42_exploration_min_cost_ratio": 1.60,
     "opportunity_v42_exploration_min_confirmations": 2,
     "opportunity_v42_exploration_risk_multiplier": 0.40,
+    "opportunity_v43_exploration_enabled": True,
+    "opportunity_v43_exploration_min_rank_percentile": 0.75,
+    "opportunity_v43_exploration_min_quality_score": 55.0,
+    "opportunity_v43_exploration_min_expected_net_pct": 0.04,
+    "opportunity_v43_exploration_min_lower_expectancy_pct": -0.03,
+    "opportunity_v43_exploration_min_cost_ratio": 1.60,
+    "opportunity_v43_exploration_min_confirmations": 2,
+    "opportunity_v43_exploration_risk_multiplier": 0.40,
+    "opportunity_v43_hierarchy_prior_trades": 30,
+    "opportunity_v43_local_negative_min_trades": 30,
+    "opportunity_v43_local_negative_profit_factor": 0.50,
+    "opportunity_v43_direction_risk_min_trades": 20,
+    "opportunity_v43_direction_low_pf": 0.55,
+    "opportunity_v43_direction_medium_pf": 0.75,
+    "opportunity_v43_direction_full_pf": 1.0,
+    "opportunity_v43_direction_low_multiplier": 0.55,
+    "opportunity_v43_direction_medium_multiplier": 0.70,
+    "opportunity_v43_direction_caution_multiplier": 0.85,
+    "opportunity_v43_dynamic_liquidity_enabled": True,
+    "opportunity_v43_min_depth_floor_usdt": 750.0,
+    "opportunity_v43_depth_to_order_multiple": 12.5,
+    "opportunity_v43_max_required_depth_usdt": 50_000.0,
+    "opportunity_v43_max_order_book_share_pct": 8.0,
+    "opportunity_v43_episode_dedupe_minutes": 30,
+    "opportunity_v43_episode_reset_risk_multiple": 1.0,
     "opportunity_v4_evidence_lookback_hours": 168,
-    "opportunity_v4_evidence_max_trades": 2500,
+    "opportunity_v4_evidence_max_trades": 5000,
     "opportunity_v4_evidence_cache_seconds": 60,
     "strategy_canary_enabled": True,
     "strategy_canary_auto_issue": True,
-    "strategy_canary_release_id": "extreme_v4_roll@v4.2",
+    "strategy_canary_release_id": "extreme_v4_roll@v4.3",
     "strategy_canary_permit_hours": 24.0,
     "strategy_canary_level_1_multiplier": 0.40,
     "strategy_canary_level_1_max_opportunities": 3,
@@ -922,7 +947,7 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         with path.open("r", encoding="utf-8") as file:
             loaded = json.load(file)
             config.update(loaded)
-    # V4.2 uses strategy-neutral execution names while accepting older saved files.
+    # V4.3 uses strategy-neutral execution names while accepting older saved files.
     if "execution_max_spread_pct" not in loaded and "opportunity_v3_max_spread_pct" in loaded:
         config["execution_max_spread_pct"] = loaded["opportunity_v3_max_spread_pct"]
     if "execution_min_depth_notional_usdt" not in loaded and "opportunity_v3_min_depth_notional_usdt" in loaded:
