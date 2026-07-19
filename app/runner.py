@@ -140,6 +140,8 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
     candidate = decision.get("candidate") or {}
     strategy_family = str(candidate.get("strategy_family") or decision.get("strategy_family") or "")
     opportunity_v4 = candidate.get("opportunity_v4") or {}
+    performance_guard = candidate.get("global_performance_guard") or {}
+    strategy_canary = performance_guard.get("strategy_canary_permit") or {}
     effective_risk = decision.get("effective_risk") or {}
     entry_order = (result or {}).get("entry_order") or {}
     initial_quantity = float(
@@ -164,6 +166,8 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
         "initial_risk_pct": float(effective_risk.get("final_risk_pct") or decision.get("risk_pct") or 0.0),
         "leverage": float(decision.get("leverage") or 1.0),
         "position_confidence": dict(opportunity_v4.get("position_confidence") or {}),
+        "strategy_canary_permit_id": strategy_canary.get("permit_id"),
+        "strategy_canary_multiplier": strategy_canary.get("risk_multiplier"),
         "add_on_attempted": False,
         "add_on_executed": False,
     }
@@ -375,6 +379,12 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     config["_release_fallback_active"] = bool(release_equity_guard.get("fallback_active"))
     state = {**state, "strategy_release_equity_guard": release_equity_guard}
     performance_status = global_performance_guard(config, account.get("equity"))
+    state = {
+        **state,
+        "strategy_canary": performance_status.get("strategy_canary_permit")
+        or state.get("strategy_canary")
+        or {},
+    }
     maybe_sync_live_reaction(client, config, state, account, symbols_override)
     if not fast_lane:
         maybe_sync_live_learning(client, config, state)

@@ -1431,7 +1431,8 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {toggle("opportunity_v43_exploration_enabled", "开启顺势受限探索", "只允许顺势动量、确认回踩或确认突破，不放宽硬风控")}
             {number("opportunity_v43_exploration_min_rank_percentile", "受限探索最低排名分位", "默认 0.75，即只考虑本轮前 25%")}
             {number("opportunity_v43_exploration_risk_multiplier", "受限探索仓位倍率", "默认 0.4 倍；本版本不同时增加杠杆")}
-            {toggle("strategy_canary_enabled", "启用新策略试运行许可证", "risk_off 时给新版本少量真实机会；不绕过 5U 硬停止、保护单、成本和流动性门槛")}
+            {toggle("strategy_canary_enabled", "启用新策略试运行许可证", "新版本首 24 小时限制风险和次数；risk_off 时仍只放行同版本合格候选")}
+            {toggle("strategy_canary_startup_cap_enabled", "首日试运行强制封顶", "推荐开启；0.70 倍风险、最多 5 个独立机会、2 次净亏后停止到首日窗口结束")}
             {number("strategy_canary_level_1_max_opportunities", "一级试运行最多机会", "默认 5 次；每次只能有一笔受保护试单")}
             {number("execution_max_spread_pct", "V4 盘口最大点差%", "流动性硬门，超过后不实盘")}
             {number("execution_min_depth_notional_usdt", "V4 最低盘口深度 U", "流动性硬门，低于后不实盘")}
@@ -1719,7 +1720,8 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("opportunity_v41_min_expected_net_pct", "V4 核心最低扣费后模型期望%", "默认 0.10%")}
           {number("opportunity_v41_min_cost_ratio", "V4 核心最低毛利成本比", "默认 2.0 倍")}
           {toggle("opportunity_v41_medium_alignment_required", "要求中周期方向一致", "推荐开启；历史中方向一致样本显著更稳")}
-          {toggle("strategy_canary_enabled", "新策略限次许可证", "仅在 risk_off 且版本精确匹配时生效，不会绕过硬风控")}
+          {toggle("strategy_canary_enabled", "新策略限次许可证", "精确绑定当前版本；不会绕过 5U 硬停止、交易所保护单、成本或流动性硬门")}
+          {toggle("strategy_canary_startup_cap_enabled", "新版本首日强制封顶", "默认开启；首 24 小时始终执行 0.70 倍、最多 5 个机会、2 次净亏停止")}
           {text("strategy_canary_release_id", "许可证授权版本", "默认 extreme_v4_roll@v4.3.2；必须精确匹配")}
           {number("strategy_canary_permit_hours", "许可证有效小时", "默认 24 小时")}
           {number("strategy_canary_level_1_max_opportunities", "一级最多机会", "默认 5 次，倍率 0.70x；两次净亏损后撤销")}

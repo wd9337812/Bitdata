@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
 import app.runtime_protection as runtime_protection
 from app.runtime_protection import (
@@ -161,6 +162,68 @@ def test_v432_add_on_plan_caps_total_nominal_risk_and_quantity():
     assert plan["allowed"] is True
     assert plan["quantity"] <= 7.5
     assert plan["total_nominal_risk_pct"] <= 15.0
+
+
+def test_v432_startup_canary_scales_add_on_cap_and_rejects_prepermit_position():
+    now = datetime.now(timezone.utc)
+    position = {"symbol": "TESTUSDT", "positionAmt": "10", "positionSide": "BOTH", "entryPrice": "100", "markPrice": "105"}
+    action = {
+        "direction": "LONG",
+        "action": "move_break_even",
+        "executed": True,
+        "management_status": "stop_tightened_with_reduce_only_bridge",
+        "mark": 105,
+        "desired_stop": 100.1,
+        "pnl_pct": 5.0,
+        "atr_pct": 2.0,
+    }
+    config = {
+        "hard_stop_equity": 5,
+        "effective_min_order_notional_usdt": 10,
+        "opportunity_v432_add_on_total_risk_cap_pct": 15,
+        "opportunity_v432_add_on_max_initial_quantity_ratio": 0.75,
+    }
+    canary = {
+        "permit_kind": "release_startup",
+        "status": "probe_open",
+        "issued_at": now.isoformat(),
+        "expires_at": (now + timedelta(hours=24)).isoformat(),
+        "risk_multiplier": 0.70,
+    }
+    tracked = {
+        "strategy_version": "v4.3.2",
+        "opened_at": (now + timedelta(seconds=1)).isoformat(),
+        "position_confidence": {"add_on_eligible": True},
+        "initial_risk_pct": 5.25,
+        "initial_quantity": 10,
+        "leverage": 5,
+    }
+
+    plan = build_v432_add_on_plan(
+        position,
+        action,
+        tracked,
+        {"equity": 100, "available_balance": 100},
+        config,
+        Filters(),
+        {"drawdown_pct": 0, "fallback_active": False},
+        canary,
+    )
+    predating = build_v432_add_on_plan(
+        position,
+        action,
+        {**tracked, "opened_at": (now - timedelta(seconds=1)).isoformat()},
+        {"equity": 100, "available_balance": 100},
+        config,
+        Filters(),
+        {"drawdown_pct": 0, "fallback_active": False},
+        canary,
+    )
+
+    assert plan["allowed"] is True
+    assert plan["total_risk_cap_pct"] == 10.5
+    assert plan["startup_canary_multiplier"] == 0.7
+    assert "position_predates_startup_canary" in predating["blockers"]
 
 
 def test_v432_add_on_plan_accepts_confirmed_trailing_stop_after_fast_move():

@@ -13,6 +13,7 @@ from app.performance_guard import (
     update_release_equity_guard,
 )
 from app.shadow_trading import ensure_shadow_tables
+from app.state_store import save_state
 from app.telemetry import connect
 
 
@@ -533,3 +534,50 @@ def test_release_sizing_fallback_does_not_create_global_risk_off(monkeypatch, tm
     assert status["release_drawdown_fallback"] is True
     assert status["status"] == "normal"
     assert status["risk_multiplier"] == 1.0
+
+
+def test_v432_startup_canary_caps_normal_trading_then_expires_cleanly(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    now = datetime(2026, 7, 19, 12, 0, tzinfo=timezone.utc)
+    config = {
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v4_strategy_version": "v4.3.2",
+        "performance_guard_current_release_only": True,
+        "strategy_canary_enabled": True,
+        "strategy_canary_auto_issue": True,
+        "strategy_canary_startup_cap_enabled": True,
+        "strategy_canary_release_id": "extreme_v4_roll@v4.3.2",
+        "strategy_canary_permit_hours": 24,
+        "strategy_canary_level_1_multiplier": 0.70,
+        "strategy_canary_level_1_max_opportunities": 5,
+        "strategy_canary_max_losses": 2,
+    }
+
+    startup = global_performance_guard(config, 20, now=now)
+    save_state(
+        {
+            "strategy_canary": {
+                **startup["strategy_canary_permit"],
+                "status": "revoked",
+                "risk_multiplier": 0.0,
+                "losses": 2,
+                "reason": "canary_loss_budget_exhausted",
+            }
+        }
+    )
+    clear_performance_cache()
+    revoked = global_performance_guard(config, 20, now=now + timedelta(hours=1))
+    clear_performance_cache()
+    after_window = global_performance_guard(config, 20, now=now + timedelta(hours=25))
+
+    assert startup["guard_level"] == "normal"
+    assert startup["status"] == "strategy_canary_1"
+    assert startup["allowed"] is True
+    assert startup["risk_multiplier"] == 0.70
+    assert startup["strategy_canary_permit"]["max_opportunities"] == 5
+    assert revoked["allowed"] is False
+    assert revoked["risk_multiplier"] == 0.0
+    assert after_window["status"] == "normal"
+    assert after_window["allowed"] is True
+    assert after_window["risk_multiplier"] == 1.0
+    assert after_window["strategy_canary_permit"]["status"] == "expired"

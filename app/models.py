@@ -684,6 +684,7 @@ class TradingConfig(BaseModel):
     opportunity_v4_evidence_cache_seconds: int = Field(default=60, ge=1, le=3600)
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
+    strategy_canary_startup_cap_enabled: bool = True
     strategy_canary_release_id: str = "extreme_v4_roll@v4.3.2"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
     strategy_canary_level_1_multiplier: float = Field(default=0.70, ge=0, le=1)

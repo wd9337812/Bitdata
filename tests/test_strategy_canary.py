@@ -5,6 +5,7 @@ from app.strategy_canary import (
     consume_strategy_canary,
     strategy_canary_status,
 )
+from app.state_store import save_state
 
 
 def _config() -> dict:
@@ -29,6 +30,112 @@ def _config() -> dict:
 
 def _live(closed: int = 0, net: float = 0.0, pf: float = 0.0, latest: float = 0.0) -> dict:
     return {"closed_total": closed, "trades": closed, "net_pnl": net, "profit_factor": pf, "latest_net_pnl": latest}
+
+
+def _startup_config() -> dict:
+    return {
+        **_config(),
+        "strategy_canary_release_id": "extreme_v4_roll@v4.3.2",
+        "strategy_canary_startup_cap_enabled": True,
+        "strategy_canary_level_1_multiplier": 0.70,
+        "strategy_canary_level_1_max_opportunities": 5,
+    }
+
+
+def test_startup_canary_caps_normal_guard_and_adopts_existing_protected_position(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    now = datetime(2026, 7, 19, 10, 0, tzinfo=timezone.utc)
+    save_state(
+        {
+            "runtime_protection_positions": {
+                "BUSDT:LONG": {"strategy_version": "v4.3.2", "opened_at": (now - timedelta(minutes=5)).isoformat()}
+            }
+        }
+    )
+
+    permit = strategy_canary_status(
+        _startup_config(),
+        active_release_id="extreme_v4_roll@v4.3.2",
+        risk_off=False,
+        cooldown_active=False,
+        emergency_stop=False,
+        current_live=_live(),
+        now=now,
+    )
+    candidate = {
+        "strategy_family": "extreme_v4_roll",
+        "strategy_version": "v4.3.2",
+        "opportunity_v4": {"admitted": True, "canary_eligible": False},
+    }
+    candidate_allowed, candidate_reason = candidate_can_use_canary(candidate, permit)
+
+    assert permit["permit_kind"] == "release_startup"
+    assert permit["startup_window_active"] is True
+    assert permit["status"] == "probe_open"
+    assert permit["used_opportunities"] == 1
+    assert permit["allowed"] is False
+    assert permit["blocks_new_entries"] is True
+    assert candidate_allowed is True
+    assert candidate_reason == "startup_canary_candidate_allowed"
+
+
+def test_startup_canary_resets_after_close_revokes_at_two_losses_and_releases_after_expiry(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = _startup_config()
+    now = datetime(2026, 7, 19, 11, 0, tzinfo=timezone.utc)
+    candidate = {
+        "symbol": "ALTUSDT",
+        "strategy_family": "extreme_v4_roll",
+        "strategy_version": "v4.3.2",
+        "opportunity_v4": {"admitted": True},
+    }
+    protected = {"mode": "live", "stop_order": {"id": 1}, "take_profit_order": {"id": 2}}
+
+    permit = strategy_canary_status(
+        config,
+        active_release_id="extreme_v4_roll@v4.3.2",
+        risk_off=False,
+        cooldown_active=False,
+        emergency_stop=False,
+        current_live=_live(),
+        now=now,
+    )
+    assert permit["allowed"] is True
+    for index in range(2):
+        consume_strategy_canary(
+            {"symbol": "ALTUSDT", "direction": "LONG", "candidate": candidate},
+            protected,
+            now=now + timedelta(minutes=index * 5 + 1),
+        )
+        permit = strategy_canary_status(
+            config,
+            active_release_id="extreme_v4_roll@v4.3.2",
+            risk_off=False,
+            cooldown_active=False,
+            emergency_stop=False,
+            current_live={**_live(closed=index + 1, net=-0.2 * (index + 1), pf=0, latest=-0.2), "recent_net_pnls": [-0.2]},
+            now=now + timedelta(minutes=index * 5 + 2),
+        )
+        if index == 0:
+            assert permit["status"] == "waiting_candidate"
+            assert permit["allowed"] is True
+
+    expired = strategy_canary_status(
+        config,
+        active_release_id="extreme_v4_roll@v4.3.2",
+        risk_off=False,
+        cooldown_active=False,
+        emergency_stop=False,
+        current_live=_live(closed=2, net=-0.4),
+        now=now + timedelta(hours=25),
+    )
+
+    assert permit["status"] == "revoked"
+    assert permit["losses"] == 2
+    assert permit["blocks_new_entries"] is True
+    assert expired["status"] == "expired"
+    assert expired["startup_window_active"] is False
+    assert expired["blocks_new_entries"] is False
 
 
 def test_canary_is_exact_release_scoped_and_keeps_hard_stop(monkeypatch, tmp_path):

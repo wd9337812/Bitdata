@@ -18,6 +18,16 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_time(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
 def _position_amount(position: dict[str, Any]) -> float:
     try:
         return float(position.get("positionAmt") or position.get("position_amt") or 0.0)
@@ -356,6 +366,7 @@ def build_v432_add_on_plan(
     config: dict[str, Any],
     filters: ExchangeFilters,
     release_guard: dict[str, Any] | None = None,
+    strategy_canary: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one protected V4.3.2 add-on without changing exchange state."""
     symbol = _position_symbol(position)
@@ -364,6 +375,7 @@ def build_v432_add_on_plan(
     strategy_version = str(tracked_item.get("strategy_version") or "")
     confidence = tracked_item.get("position_confidence") or {}
     release_guard = release_guard or {}
+    strategy_canary = strategy_canary or {}
     blockers: list[str] = []
     if not config.get("opportunity_v432_add_on_enabled", True):
         blockers.append("add_on_disabled")
@@ -402,10 +414,25 @@ def build_v432_add_on_plan(
         blockers.append("price_or_stop_missing")
 
     initial_risk = max(0.0, float(tracked_item.get("initial_risk_pct") or 0.0))
+    canary_expires = _parse_time(strategy_canary.get("expires_at"))
+    startup_canary_active = bool(
+        strategy_canary.get("permit_kind") == "release_startup"
+        and canary_expires
+        and _now() < canary_expires
+    )
+    canary_multiplier = 1.0
+    if startup_canary_active:
+        canary_multiplier = max(0.0, min(1.0, float(strategy_canary.get("risk_multiplier") or 0.0)))
+        issued_at = _parse_time(strategy_canary.get("issued_at"))
+        opened_at = _parse_time(tracked_item.get("opened_at"))
+        if issued_at and opened_at and opened_at < issued_at:
+            blockers.append("position_predates_startup_canary")
+        if str(strategy_canary.get("status") or "") not in {"probe_open", "waiting_candidate"}:
+            blockers.append("startup_canary_not_active_for_position")
     total_cap = min(
         15.0,
         max(0.0, float(config.get("opportunity_v432_add_on_total_risk_cap_pct", 15.0))),
-    )
+    ) * canary_multiplier
     remaining_risk = max(0.0, total_cap - initial_risk)
     if remaining_risk < float(config.get("opportunity_v432_add_on_min_risk_budget_pct", 0.5)):
         blockers.append("risk_budget_exhausted")
@@ -422,6 +449,7 @@ def build_v432_add_on_plan(
             "initial_risk_pct": round(initial_risk, 6),
             "remaining_risk_budget_pct": round(remaining_risk, 6),
             "total_risk_cap_pct": round(total_cap, 6),
+            "startup_canary_multiplier": round(canary_multiplier, 6),
         }
 
     distance = abs(mark - stop)
@@ -455,6 +483,7 @@ def build_v432_add_on_plan(
         "total_nominal_risk_pct": round(initial_risk + add_on_risk_pct, 6),
         "remaining_risk_budget_pct": round(remaining_risk, 6),
         "total_risk_cap_pct": round(total_cap, 6),
+        "startup_canary_multiplier": round(canary_multiplier, 6),
         "release_drawdown_pct": round(release_drawdown, 6),
         "blockers": blockers,
     }
@@ -493,6 +522,7 @@ def _execute_v432_add_on(
         config,
         filters,
         release_guard=state.get("strategy_release_equity_guard") or {},
+        strategy_canary=state.get("strategy_canary") or {},
     )
     if not plan.get("allowed"):
         return plan

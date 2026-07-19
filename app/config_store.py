@@ -701,6 +701,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v4_evidence_cache_seconds": 60,
     "strategy_canary_enabled": True,
     "strategy_canary_auto_issue": True,
+    "strategy_canary_startup_cap_enabled": True,
     "strategy_canary_release_id": "extreme_v4_roll@v4.3.2",
     "strategy_canary_permit_hours": 24.0,
     "strategy_canary_level_1_multiplier": 0.70,

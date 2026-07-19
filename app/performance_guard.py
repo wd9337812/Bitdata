@@ -447,8 +447,12 @@ def global_performance_guard(
         now=now,
     )
     canary_allowed = bool(canary.get("allowed"))
+    startup_canary_active = bool(canary.get("startup_window_active"))
     recovery_allowed = bool(permit.get("allowed"))
-    allowed = recovery_allowed or canary_allowed
+    # During a new release's startup window, the release canary is an account-wide
+    # cap for that exact version. Recovery permits must not bypass its one-position,
+    # loss, opportunity, or duration budget.
+    allowed = canary_allowed if startup_canary_active else recovery_allowed or canary_allowed
     recovery_level = int(permit.get("recovery_level") or 0)
     recovery_multiplier = float(permit.get("risk_multiplier") or 0.0)
     both_recovering = (
@@ -465,7 +469,9 @@ def global_performance_guard(
         recovery_multiplier = float(config.get("performance_guard_recovery_level_3_multiplier", 0.70))
     permit_state = str(permit.get("status") or "accumulating")
     status = (
-        "normal"
+        f"strategy_canary_{max(1, int(canary.get('level') or 1))}"
+        if startup_canary_active
+        else "normal"
         if not risk_off
         else f"strategy_canary_{max(1, int(canary.get('level') or 1))}"
         if canary_allowed
@@ -497,7 +503,11 @@ def global_performance_guard(
         "strategy_canary_3": "V4.3.2 新策略已验证",
     }
     reason = "当前版本滚动表现正常"
-    if canary_allowed and risk_off:
+    if startup_canary_active and canary_allowed:
+        reason = "V4.3.2 正在执行首 24 小时限次试运行：风险按 0.70 倍封顶，最多 5 个独立机会"
+    elif startup_canary_active:
+        reason = "V4.3.2 首日试运行暂不放行新仓：已有试运行持仓，或机会/亏损预算已用完"
+    elif canary_allowed and risk_off:
         reason = "旧版本风险背景仍保留；当前精确版本可用限次许可证验证合格候选"
     elif allowed and risk_off:
         reason = "影子恢复证据已锁定，等待首个满足成本和质量要求的候选"
@@ -529,7 +539,7 @@ def global_performance_guard(
             0.0
             if not allowed
             else float(canary.get("risk_multiplier") or 0.0)
-            if risk_off and canary_allowed
+            if startup_canary_active or (risk_off and canary_allowed)
             else recovery_multiplier
             if risk_off
             else 1.0
