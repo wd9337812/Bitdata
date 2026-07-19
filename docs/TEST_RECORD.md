@@ -212,6 +212,18 @@ This file tracks local verification for the two-stage futures system.
 - 前端：`npm run build`，通过。
 - 本地静态冒烟：首页及 5 个 JS/CSS 资源全部返回 HTTP 200。
 - `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
+
+## 2026-07-20 V4.4 VPS 实盘部署验收
+
+- 发布提交 `f63cab7`，标签 `v0.14.0`；部署前线上提交为 `6d7f028`，机器人正常运行。
+- 部署前 Binance 实盘权益约 `21.9221U`，空仓、普通挂单 0、条件单 0；停止 runner 后再次复核仍为空仓且无残留订单，没有主动平仓或撤销保护单。
+- 配置与状态备份为 `/opt/bitdata/backups/v0.14.0-20260719T200547Z`；VPS 原生 `bash -n deploy.sh` 与 `bash -n ops/bitdata-maintenance.sh` 均通过。
+- 线上配置原子升级为 V4.4：S0 风险上限 15%、保证金计划 90%、动态杠杆 3x-10x、单仓；常规扫描 120 币、WebSocket 监控 150 币。
+- 新版本许可证精确绑定 `extreme_v4_roll@v4.4`，状态 `waiting_candidate`、倍率 `1.0x`、已用 `0/6`、亏损 `0`；旧 V4.3.2 许可证没有参与 V4.4 放行。
+- 部署后 Dashboard 与 runner 均为 `0.14.0` / `f63cab7`，容器重启 0、OOM 0；机器人保持实盘运行。
+- 公共 WebSocket 在线，覆盖 150 币、4 条连接、451 个流；私有账户流在线。REST 无冷却或 429，交易所时间偏差约 `-76ms`。
+- Dashboard 首页、OpenAPI 和 5 个版本化 JS/CSS 资源全部 HTTP 200；近三分钟无 429/500/502、数据库锁、异常栈或错误日志。
+- 完整扫描与实时快车道均已运行，后台扫描约 10-19 秒；最新候选使用 `v4.4`，因当前为 `shadow_only` 未开仓，证明新版本没有绕过准入硬门制造交易。
 - VPS 部署前：权益约 19.63U，无持仓、普通挂单或条件单。
 - VPS 已部署提交 `5f338be`；机器人为 `running`，S0 路由为 `extreme_v4_roll@v4.0`，公共/私有 WebSocket 正常，REST 未限流。
 - 部署后：Binance 仍无持仓、普通挂单或条件单；Dashboard 首页及 5 个静态资源全部返回 HTTP 200，近 3 分钟无 429/500/502、数据库锁或异常日志。
