@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.s0_full_bet import is_s0_full_bet
+
 from app.performance_guard import observed_round_trip_cost_pct
 
 
@@ -172,9 +174,10 @@ def effective_position_risk(
     target = target or {}
     raw_risk = max(0.0, float(candidate_risk_pct))
     v4 = candidate.get("opportunity_v4") or {}
+    full_bet_applied = is_s0_full_bet(candidate, config) and bool(v4.get("full_bet_admitted"))
     position_confidence = v4.get("position_confidence") or {}
     continuous_target = position_confidence.get("target_initial_risk_pct")
-    release_fallback_active = bool(config.get("_release_fallback_active"))
+    release_fallback_active = bool(config.get("_release_fallback_active")) and not full_bet_applied
     continuous_applied = bool(
         position_confidence.get("applied")
         and continuous_target is not None
@@ -186,13 +189,21 @@ def effective_position_risk(
     target_multiplier = max(0.0, float(target.get("effective_risk_multiplier", 1.0)))
     guard_floor = 0.0
     risk_floor = 0.0
-    if config.get("effective_position_sizing_enabled", True) and mode in {"extreme_sprint", "yolo_scalp"}:
+    if (
+        config.get("effective_position_sizing_enabled", True)
+        and mode in {"extreme_sprint", "yolo_scalp"}
+        and not full_bet_applied
+    ):
         guard_floor = float(config.get(f"effective_guard_{tier}_min_multiplier", 0.2))
         guard_multiplier = max(guard_multiplier, guard_floor)
         risk_floor = float(config.get(f"effective_{tier}_min_risk_pct", 0.0))
     calculated = sizing_input_risk * guard_multiplier * target_multiplier
     yolo_profile = yolo_scalp_execution_profile(candidate, config) if mode == "yolo_scalp" else {"enabled": False}
-    scalp_tier = extreme_scalp_tier(candidate, config) if mode in {"extreme_sprint", "yolo_scalp"} else "none"
+    scalp_tier = (
+        extreme_scalp_tier(candidate, config)
+        if mode in {"extreme_sprint", "yolo_scalp"} and not full_bet_applied
+        else "none"
+    )
     scalp_multiplier = 1.0
     if scalp_tier == "high":
         key_prefix = "yolo_scalp" if mode == "yolo_scalp" else "extreme_scalp"
@@ -212,6 +223,8 @@ def effective_position_risk(
         # V4.3.2 uses its own continuous range rather than the legacy score-tier
         # caps. The stage route remains the final hard ceiling below.
         max_risk = max(max_risk, float(config.get("opportunity_v432_initial_max_risk_pct", 7.5)))
+    if full_bet_applied:
+        max_risk = max(max_risk, float(config.get("opportunity_v44_max_risk_pct", 15.0)))
     if scalp_tier != "none":
         key_prefix = "yolo_scalp" if mode == "yolo_scalp" else "extreme_scalp"
         scalp_cap = float(config.get(f"{key_prefix}_max_risk_pct", config.get("extreme_scalp_max_risk_pct", 18.0)))
@@ -241,6 +254,7 @@ def effective_position_risk(
         "scalp_multiplier": round(scalp_multiplier, 6),
         "candidate_risk_pct": round(raw_risk, 8),
         "continuous_quality_applied": continuous_applied,
+        "full_bet_applied": full_bet_applied,
         "release_fallback_active": release_fallback_active,
         "continuous_confidence": round(float(position_confidence.get("confidence") or 0.0), 6),
         "continuous_target_risk_pct": round(sizing_input_risk, 8),

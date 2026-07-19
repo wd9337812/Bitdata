@@ -90,6 +90,11 @@ def _target_release(config: dict[str, Any], active_release_id: str) -> bool:
     return bool(configured and configured == active_release_id)
 
 
+def _is_v44_release(release_id: str) -> bool:
+    _, _, version = str(release_id or "").lower().partition("@")
+    return version.startswith("v4.4")
+
+
 def _shadow_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
     values = [float(row.get("net_pnl") or 0) for row in rows]
     positive = sum(value for value in values if value > 0)
@@ -251,6 +256,7 @@ def strategy_canary_status(
     stored = persisted_state.get(CANARY_STATE_KEY)
     previous = dict(stored) if isinstance(stored, dict) else {}
     state = dict(previous) if previous.get("release_id") == active_release_id else _base_state(active_release_id)
+    v44_release = _is_v44_release(active_release_id)
     if not enabled:
         return _result(state, enabled=False, allowed=False, now=now, reason="release_not_authorized")
 
@@ -290,21 +296,41 @@ def strategy_canary_status(
         return _result(state, enabled=True, allowed=False, now=now)
 
     expires_at = _parse_time(state.get("expires_at"))
-    if expires_at is None or now >= expires_at:
-        expired = {
-            **state,
-            "status": "expired",
-            "risk_multiplier": 0.0,
-            "probe_open": False,
-            "reason": "canary_permit_expired",
-        }
-        state = _save_if_changed(previous, expired, now)
-        return _result(state, enabled=True, allowed=False, now=now)
+    if (expires_at is None or now >= expires_at) and not (v44_release and state.get("status") == "validated"):
+        if v44_release:
+            expired = {
+                **state,
+                "status": "revoked",
+                "risk_multiplier": 0.0,
+                "probe_open": False,
+                "revoked_at": now.isoformat(),
+                "reissue_shadow_baseline_id": max(
+                    (int(row.get("id") or 0) for row in eligible_shadow_rows),
+                    default=0,
+                ),
+                "recovery": {},
+                "reason": "canary_permit_expired",
+            }
+            state = _save_if_changed(previous, expired, now)
+        else:
+            expired = {
+                **state,
+                "status": "expired",
+                "risk_multiplier": 0.0,
+                "probe_open": False,
+                "reason": "canary_permit_expired",
+            }
+            state = _save_if_changed(previous, expired, now)
+            return _result(state, enabled=True, allowed=False, now=now)
 
     if state.get("status") == "revoked":
-        if state.get("permit_kind") == "release_startup":
+        if state.get("permit_kind") == "release_startup" and not v44_release:
             return _result(state, enabled=True, allowed=False, now=now)
-        if state.get("reason") != "canary_loss_budget_exhausted":
+        if state.get("reason") not in {
+            "canary_loss_budget_exhausted",
+            "canary_opportunity_budget_exhausted",
+            "canary_permit_expired",
+        }:
             return _result(state, enabled=True, allowed=False, now=now)
         recovery = _reissue_evidence(state, eligible_shadow_rows, config, now)
         state = {**state, "recovery": recovery}
@@ -317,6 +343,8 @@ def strategy_canary_status(
                 reissued=True,
                 previous=state,
             )
+            if v44_release:
+                save_state({"consecutive_losses": 0})
         else:
             state = _save_if_changed(previous, state, now)
             return _result(
@@ -379,7 +407,8 @@ def strategy_canary_status(
     live_pf = float(current_live.get("profit_factor") or 0)
     live_since_issue = max(0, closed_total - int(state.get("live_trades_at_issue") or 0))
     startup_cap = state.get("permit_kind") == "release_startup"
-    if not startup_cap and (
+    can_promote = not startup_cap or v44_release
+    if can_promote and (
         live_since_issue >= int(config.get("strategy_canary_level_3_min_trades", 8))
         and live_net > 0
         and live_pf >= float(config.get("strategy_canary_level_3_min_profit_factor", 1.15))
@@ -388,12 +417,13 @@ def strategy_canary_status(
             {
                 "status": "validated",
                 "level": 3,
+                "permit_kind": "validated" if v44_release else state.get("permit_kind"),
                 "risk_multiplier": float(config.get("strategy_canary_level_3_multiplier", 1.0)),
                 "max_opportunities": int(config.get("strategy_canary_level_3_max_opportunities", 12)),
                 "reason": "canary_live_evidence_validated",
             }
         )
-    elif not startup_cap and (
+    elif can_promote and (
         live_since_issue >= int(config.get("strategy_canary_level_2_min_trades", 3))
         and live_net > 0
         and live_pf >= float(config.get("strategy_canary_level_2_min_profit_factor", 1.05))
@@ -412,8 +442,19 @@ def strategy_canary_status(
 
     used = int(state.get("used_opportunities") or 0)
     maximum = int(state.get("max_opportunities") or 0)
-    if used >= maximum and not state.get("probe_open"):
-        exhausted = {**state, "status": "exhausted", "risk_multiplier": 0.0, "reason": "canary_opportunity_budget_exhausted"}
+    if used >= maximum and not state.get("probe_open") and state.get("status") != "validated":
+        exhausted = {
+            **state,
+            "status": "revoked" if v44_release else "exhausted",
+            "risk_multiplier": 0.0,
+            "revoked_at": now.isoformat() if v44_release else state.get("revoked_at"),
+            "reissue_shadow_baseline_id": max(
+                (int(row.get("id") or 0) for row in eligible_shadow_rows),
+                default=0,
+            ) if v44_release else int(state.get("reissue_shadow_baseline_id") or 0),
+            "recovery": {} if v44_release else state.get("recovery", {}),
+            "reason": "canary_opportunity_budget_exhausted",
+        }
         state = _save_if_changed(previous, exhausted, now)
         return _result(state, enabled=True, allowed=False, now=now)
 
@@ -437,6 +478,10 @@ def candidate_can_use_canary(candidate: dict[str, Any] | None, permit: dict[str,
         if not (opportunity.get("admitted") or opportunity.get("passed")):
             return False, "candidate_not_admitted_by_release"
         return True, "startup_canary_candidate_allowed"
+    if _is_v44_release(release_id):
+        if not (opportunity.get("full_bet_admitted") or opportunity.get("admitted") or opportunity.get("passed")):
+            return False, "candidate_not_admitted_by_release"
+        return True, "v44_canary_candidate_allowed"
     if not opportunity.get("canary_eligible"):
         return False, "candidate_not_canary_eligible"
     return True, "canary_candidate_allowed"

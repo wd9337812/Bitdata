@@ -25,6 +25,7 @@ from app.opportunity_engine import (
 from app.opportunity_queue import read_opportunities
 from app.opportunity_v4 import V4_STRATEGY_FAMILY, attach_v4_rankings
 from app.position_sizing import effective_position_risk
+from app.s0_full_bet import s0_full_bet_profile_active
 from app.scalp_engine import build_scalp_signal
 from app.shadow_trading import active_shadow_symbols
 from app.strategy import StrategyParams, atr, ema
@@ -1791,10 +1792,17 @@ def _finalize_candidate(
     exchange_filters: ExchangeFilters | None,
     equity: float | None,
 ) -> dict[str, Any]:
-    candidate = apply_live_credit_to_candidate(candidate, config)
-    candidate = apply_live_reaction_to_candidate(candidate, config)
-    candidate = apply_strategy_evidence_to_candidate(candidate, config)
+    v44_full_bet = s0_full_bet_profile_active(config)
+    if not v44_full_bet:
+        candidate = apply_live_credit_to_candidate(candidate, config)
+        candidate = apply_live_reaction_to_candidate(candidate, config)
+        candidate = apply_strategy_evidence_to_candidate(candidate, config)
     viability_risk_pct = float(candidate.get("risk_pct") or 0)
+    if v44_full_bet:
+        viability_risk_pct = max(
+            viability_risk_pct,
+            float(config.get("opportunity_v44_max_risk_pct", 13.0)),
+        )
     if config.get("effective_position_sizing_enabled", True):
         viability_risk_pct = float(
             effective_position_risk(
@@ -1847,22 +1855,28 @@ def _apply_v4_live_selection(
     admitted = bool(v4.get("admitted"))
     risk_multiplier = float(v4.get("risk_multiplier") or 0.0)
     base_risk = float(candidate.get("base_risk_pct") or mode.get("risk_pct") or 0.0)
+    version = str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.3.2")
+    full_bet = bool(version.lower().startswith("v4.4") and v4.get("full_bet_admitted"))
     signal = dict(candidate.get("signal") or {})
     if v4.get("protection_profile"):
         signal["protection_profile"] = dict(v4["protection_profile"])
     result.update(
         {
-            "strategy": "opportunity_v432_continuous_roll",
+            "strategy": "opportunity_v44_full_bet" if full_bet else "opportunity_v432_continuous_roll",
             "strategy_family": V4_STRATEGY_FAMILY,
-            "strategy_version": str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.3.2"),
+            "strategy_version": version,
             "strategy_role": "active",
-            "strategy_generation": "v4.3.2",
+            "strategy_generation": version,
             "signal": signal,
             "score": float(v4.get("score") or 0),
             "passed": admitted,
             "reason": "passed" if admitted else "opportunity_v4_not_ready",
             "decision_reason": str(v4.get("reason") or "V4 候选未达到实盘准入"),
-            "risk_pct": min(float(mode.get("risk_pct") or base_risk), base_risk * risk_multiplier),
+            "risk_pct": (
+                float(mode.get("risk_pct") or base_risk)
+                if full_bet
+                else min(float(mode.get("risk_pct") or base_risk), base_risk * risk_multiplier)
+            ),
             # risk_pct already contains the V4 admission multiplier. Keep the legacy
             # sizing multipliers neutral so execution cannot apply it a second time.
             "quality_risk_multiplier": 1.0,
@@ -1914,6 +1928,26 @@ def _apply_v4_live_selection(
             },
         }
     )
+    if full_bet:
+        result["quality_risk_reasons"] = ["V4.4 当前轮相对排名与五项确认通过"]
+        result["symbol_quality"] = {
+            **(result.get("symbol_quality") or {}),
+            "tier": "V4.4-FULL-BET",
+            "quality_risk_multiplier": 1.0,
+            "quality_risk_reasons": [str(v4.get("reason") or "V4.4 独立排序")],
+            "continuous_position_confidence": v4.get("position_confidence") or {},
+            "simulation": {
+                "passed": None,
+                "diagnostic": "只使用 V4.4 当前版本影子和实盘证据，旧版本信用不参与准入",
+            },
+        }
+        result["risk_adjustment"] = {
+            **(result.get("risk_adjustment") or {}),
+            "type": "v44_full_bet_dynamic_risk",
+            "multiplier": 1.0,
+            "v4_admission_multiplier": 1.0,
+            "admission_lane": "full_bet",
+        }
     return result
 
 
@@ -2180,7 +2214,7 @@ def scan_growth_candidates(
                             "eligible": False,
                             "expected_profit_pct": expected,
                             "cost_ratio": expected / observed_cost_pct if observed_cost_pct > 0 else 999.0,
-                            "reason": "中性市场结构已生成，交由 V4.3.2 独立排序",
+                            "reason": "中性市场结构已生成，交由当前 V4 版本独立排序",
                         }
                         challenger = {"enabled": False, "reason": "旧 V3 实验已归档"}
                     tier = str(opportunity.get("tier") or "WATCH")
@@ -2706,7 +2740,16 @@ def scan_growth_candidates(
         for candidate in candidates
         if candidate.get("passed") and (candidate.get("opportunity_v4") or {}).get("admitted")
     )
-    v43_canary_ready = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("canary_eligible"))
+    v44_active = s0_full_bet_profile_active(config)
+    v43_canary_ready = sum(
+        1
+        for candidate in candidates
+        if (
+            (candidate.get("opportunity_v4") or {}).get("full_bet_admitted")
+            if v44_active
+            else (candidate.get("opportunity_v4") or {}).get("canary_eligible")
+        )
+    )
     v43_validated = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("validated"))
     v43_provisional = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("provisional"))
     v43_exploration = sum(1 for candidate in candidates if (candidate.get("opportunity_v4") or {}).get("exploration_admitted"))
@@ -2737,7 +2780,7 @@ def scan_growth_candidates(
         blocked_reasons[key] = blocked_reasons.get(key, 0) + 1
         blocker_text = " ".join(str(item) for item in v4_blockers)
         policy = v4.get("regime_policy") or {}
-        if v4.get("evidence_status") == "blocked_negative":
+        if not v44_active and v4.get("evidence_status") == "blocked_negative":
             category = "同形态局部负证据"
         elif not any(policy.get(name) for name in ("live_scope", "canary_scope", "exploration_scope")):
             category = "市场方向或入场结构"
@@ -2832,7 +2875,11 @@ def scan_growth_candidates(
                 if ((candidate.get("opportunity_v4") or {}).get("liquidity_gate") or {}).get("passed")
             ),
             "live_enabled": bool(config.get("opportunity_v4_live_enabled", False)),
-            "label": "V4.3.2 连续质量仓位、局部熔断与顺势双通道排序",
+            "label": (
+                "V4.4 单仓全进全出、相对排名与五项确认"
+                if v44_active
+                else "V4.3.2 连续质量仓位、局部熔断与顺势双通道排序"
+            ),
         },
         "opportunity_queue": {
             "enabled": bool(config.get("opportunity_queue_enabled", True)),

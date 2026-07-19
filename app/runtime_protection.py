@@ -826,7 +826,14 @@ def _manage_runtime_protection(
         actions.append(action)
         if action["action"] not in {"close_fast_invalid", "close_time_stop", "close_orderbook_invalid"}:
             continue
-        if not (live_trading_allowed(config) and config.get("dynamic_protection_runtime_trade_enabled", False)):
+        v44_runtime_exit = bool(
+            str(tracked_item.get("strategy_version") or "").lower().startswith("v4.4")
+            and config.get("opportunity_v44_runtime_exit_enabled", True)
+        )
+        if not (
+            live_trading_allowed(config)
+            and (config.get("dynamic_protection_runtime_trade_enabled", False) or v44_runtime_exit)
+        ):
             record_event("info", "runtime_protection", "runtime protection signal generated", action)
             continue
         if filters is None:
@@ -839,10 +846,28 @@ def _manage_runtime_protection(
                 position_side = direction
         except Exception:
             position_side = None
-        client.cancel_all_open_algo_orders(symbol)
-        close_order = client.place_market_order(symbol, close_side, quantity, position_side=position_side)
+        close_order = client.place_market_order(
+            symbol,
+            close_side,
+            quantity,
+            reduce_only=position_side is None,
+            position_side=position_side,
+        )
+        cleanup_error = None
+        try:
+            client.cancel_all_open_algo_orders(symbol)
+        except Exception as exc:
+            cleanup_error = str(exc)
+            record_event_throttled(
+                "warning",
+                "runtime_protection",
+                f"position closed but stale protection cleanup failed for {symbol}",
+                {"symbol": symbol, "error": cleanup_error},
+                throttle_seconds=60,
+            )
         action["executed"] = True
         action["close_order"] = close_order
+        action["cleanup_error"] = cleanup_error
         record_event("warning", "runtime_protection", "runtime protection closed position", action)
     for key in list(tracked.keys()):
         if key not in active_keys:

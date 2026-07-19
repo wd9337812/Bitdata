@@ -39,7 +39,16 @@ def equity_guard_status(
     high_watermark = max(float(state.get(high_watermark_key) or equity), float(equity))
     drawdown_pct = max(0.0, (high_watermark - float(equity)) / high_watermark * 100) if high_watermark > 0 else 0.0
     pause_key = "yolo_scalp_equity_guard_pause_drawdown_pct" if mode == "yolo_scalp" else "extreme_equity_guard_pause_drawdown_pct" if mode == "extreme_sprint" else "equity_guard_pause_drawdown_pct"
-    pause_pct = float(config.get(pause_key, config.get("equity_guard_pause_drawdown_pct", 35.0)))
+    v44_full_bet = bool(
+        mode == "extreme_sprint"
+        and str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.4")
+        and config.get("opportunity_v44_full_bet_enabled", True)
+    )
+    pause_pct = float(
+        config.get("opportunity_v44_release_pause_drawdown_pct", 35.0)
+        if v44_full_bet
+        else config.get(pause_key, config.get("equity_guard_pause_drawdown_pct", 35.0))
+    )
     if drawdown_pct >= pause_pct:
         return {
             "enabled": True,
@@ -47,6 +56,16 @@ def equity_guard_status(
             "risk_multiplier": 0.0,
             "drawdown_pct": round(drawdown_pct, 4),
             "reason": "equity_guard_pause",
+            "baseline_mode": baseline_mode,
+            "high_watermark": round(high_watermark, 8),
+        }
+    if v44_full_bet:
+        return {
+            "enabled": True,
+            "allowed": True,
+            "risk_multiplier": 1.0,
+            "drawdown_pct": round(drawdown_pct, 4),
+            "reason": "v44_full_bet_until_hard_pause",
             "baseline_mode": baseline_mode,
             "high_watermark": round(high_watermark, 8),
         }

@@ -85,12 +85,27 @@ def build_protection_plan(
         if is_short
         else price * (1 + take_profit_pct / 100)
     ) if take_profit_pct > 0 else (price - atr * take_profit_atr if is_short else price + atr * take_profit_atr)
-    fast_invalid_atr = _float(config.get("protection_fast_invalid_atr", 0.35))
+    fast_invalid_atr = _float(
+        profile.get("fast_invalid_atr"),
+        _float(config.get("protection_fast_invalid_atr", 0.35)),
+    )
     fast_invalid_price = price + atr * fast_invalid_atr if is_short else price - atr * fast_invalid_atr
-    break_even_trigger_atr = _float(config.get("protection_break_even_trigger_atr", 0.55))
-    trailing_trigger_atr = _float(config.get("protection_trailing_trigger_atr", 0.9))
-    trailing_distance_atr = _float(config.get("protection_trailing_distance_atr", 0.55))
-    break_even_buffer_pct = _float(config.get("protection_break_even_buffer_pct", 0.08))
+    break_even_trigger_atr = _float(
+        profile.get("break_even_trigger_atr"),
+        _float(config.get("protection_break_even_trigger_atr", 0.55)),
+    )
+    trailing_trigger_atr = _float(
+        profile.get("trailing_trigger_atr"),
+        _float(config.get("protection_trailing_trigger_atr", 0.9)),
+    )
+    trailing_distance_atr = _float(
+        profile.get("trailing_distance_atr"),
+        _float(config.get("protection_trailing_distance_atr", 0.55)),
+    )
+    break_even_buffer_pct = _float(
+        profile.get("break_even_buffer_pct"),
+        _float(config.get("protection_break_even_buffer_pct", 0.08)),
+    )
     break_even_price = (
         price * (1 - break_even_buffer_pct / 100)
         if is_short
@@ -110,7 +125,7 @@ def build_protection_plan(
         "initial_stop": initial_stop,
         "initial_take_profit": initial_take_profit,
         "fast_invalid": {
-            "seconds": int(config.get("protection_fast_invalid_seconds", 90)),
+            "seconds": int(profile.get("fast_invalid_seconds") or config.get("protection_fast_invalid_seconds", 90)),
             "atr": fast_invalid_atr,
             "price": fast_invalid_price,
         },
@@ -126,7 +141,10 @@ def build_protection_plan(
             "distance_atr": trailing_distance_atr,
         },
         "max_hold_bars": max_hold_bars,
-        "min_profit_after_cost_pct": _float(config.get("protection_min_profit_after_cost_pct", 0.08)),
+        "min_profit_after_cost_pct": _float(
+            profile.get("min_profit_after_cost_pct"),
+            _float(config.get("protection_min_profit_after_cost_pct", 0.08)),
+        ),
         "reason": "dynamic_plan_ready",
     }
 
@@ -146,5 +164,8 @@ def apply_initial_protection_to_signal(signal: dict[str, Any], plan: dict[str, A
         "stop_pct": plan.get("stop_pct"),
         "take_profit_pct": plan.get("take_profit_pct"),
         "max_hold_bars": plan.get("max_hold_bars"),
+        "break_even_atr": (plan.get("break_even") or {}).get("trigger_atr"),
+        "trailing_trigger_atr": (plan.get("trailing") or {}).get("trigger_atr"),
+        "trailing_distance_atr": (plan.get("trailing") or {}).get("distance_atr"),
     }
     return updated

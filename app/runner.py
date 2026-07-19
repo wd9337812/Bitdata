@@ -143,6 +143,7 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
     performance_guard = candidate.get("global_performance_guard") or {}
     strategy_canary = performance_guard.get("strategy_canary_permit") or {}
     effective_risk = decision.get("effective_risk") or {}
+    full_bet_sizing = decision.get("full_bet_sizing") or {}
     entry_order = (result or {}).get("entry_order") or {}
     initial_quantity = float(
         entry_order.get("executedQty")
@@ -165,6 +166,9 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
         "initial_quantity": initial_quantity,
         "initial_risk_pct": float(effective_risk.get("final_risk_pct") or decision.get("risk_pct") or 0.0),
         "leverage": float(decision.get("leverage") or 1.0),
+        "full_bet_profile": full_bet_sizing.get("profile"),
+        "margin_utilization_pct": full_bet_sizing.get("margin_utilization_pct"),
+        "stressed_risk_pct": full_bet_sizing.get("stressed_risk_pct"),
         "position_confidence": dict(opportunity_v4.get("position_confidence") or {}),
         "strategy_canary_permit_id": strategy_canary.get("permit_id"),
         "strategy_canary_multiplier": strategy_canary.get("risk_multiplier"),

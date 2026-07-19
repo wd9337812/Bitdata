@@ -105,7 +105,12 @@ def update_release_equity_guard(
     baseline = current_equity if reset else max(0.0, float(previous.get("baseline_equity") or current_equity))
     peak = current_equity if reset else max(current_equity, float(previous.get("peak_equity") or current_equity))
     drawdown = max(0.0, (peak - current_equity) / peak * 100) if peak > 0 else 0.0
-    threshold = float(config.get("opportunity_v432_release_fallback_drawdown_pct", 8.0))
+    version = active_release_version(config).lower()
+    threshold = float(
+        config.get("opportunity_v44_release_pause_drawdown_pct", 35.0)
+        if version.startswith("v4.4")
+        else config.get("opportunity_v432_release_fallback_drawdown_pct", 8.0)
+    )
     fallback_active = bool(False if reset else previous.get("fallback_active")) or drawdown >= threshold
     result = {
         "release_id": release_id,
@@ -489,6 +494,7 @@ def global_performance_guard(
         if permit_state == "probe_open"
         else "risk_off"
     )
+    release_label = active_release_version(config).upper()
     labels = {
         "normal": "正常实盘",
         "soft_observation": "局部降级观察中",
@@ -498,15 +504,15 @@ def global_performance_guard(
         "probe_open": "恢复试单持仓中",
         "recovery_2": "已取得恢复试单资格",
         "recovery_3": "三级受限恢复",
-        "strategy_canary_1": "V4.3.2 新策略一级试运行",
-        "strategy_canary_2": "V4.3.2 新策略二级试运行",
-        "strategy_canary_3": "V4.3.2 新策略已验证",
+        "strategy_canary_1": f"{release_label} 新策略一级试运行",
+        "strategy_canary_2": f"{release_label} 新策略二级试运行",
+        "strategy_canary_3": f"{release_label} 新策略已验证",
     }
     reason = "当前版本滚动表现正常"
     if startup_canary_active and canary_allowed:
-        reason = "V4.3.2 正在执行首 24 小时限次试运行：风险按 0.70 倍封顶，最多 5 个独立机会"
+        reason = f"{release_label} 正在执行首 24 小时限次试运行：单仓保护不变，最多验证 6 个独立机会"
     elif startup_canary_active:
-        reason = "V4.3.2 首日试运行暂不放行新仓：已有试运行持仓，或机会/亏损预算已用完"
+        reason = f"{release_label} 首日试运行暂不放行新仓：已有持仓，或机会/亏损预算已用完"
     elif canary_allowed and risk_off:
         reason = "旧版本风险背景仍保留；当前精确版本可用限次许可证验证合格候选"
     elif allowed and risk_off:

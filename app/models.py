@@ -14,7 +14,7 @@ class TradingConfig(BaseModel):
     auction_pool_limit: int = Field(default=15, ge=0, le=50)
     scan_degrade_seconds: int = Field(default=18, ge=5, le=300)
     scan_min_rank_symbols: int = Field(default=8, ge=1, le=200)
-    max_scan_symbols: int = Field(default=40, ge=1, le=120)
+    max_scan_symbols: int = Field(default=120, ge=1, le=200)
     min_24h_volume_usdt: float = Field(default=30_000_000, ge=0)
     max_observation_symbols: int = Field(default=45, ge=1, le=150)
     max_trade_pool_symbols: int = Field(default=20, ge=1, le=50)
@@ -22,7 +22,7 @@ class TradingConfig(BaseModel):
     depth_check_min_current_score: float = Field(default=38.0, ge=0, le=200)
     market_stream_enabled: bool = True
     market_stream_dynamic_enabled: bool = True
-    market_stream_max_symbols: int = Field(default=80, ge=1, le=200)
+    market_stream_max_symbols: int = Field(default=150, ge=1, le=250)
     market_stream_min_24h_volume_usdt: float = Field(default=5_000_000, ge=0)
     market_stream_symbols_per_connection: int = Field(default=75, ge=10, le=200)
     market_stream_auto_discover: bool = True
@@ -319,9 +319,9 @@ class TradingConfig(BaseModel):
     stage_switch_up_buffer_pct: float = Field(default=5.0, ge=0, le=100)
     stage_switch_down_buffer_pct: float = Field(default=10.0, ge=0, le=100)
     stage_switch_confirmations: int = Field(default=3, ge=1, le=100)
-    stage_s0_risk_pct: float = Field(default=10.0, ge=0.01, le=100)
+    stage_s0_risk_pct: float = Field(default=15.0, ge=0.01, le=100)
     stage_s0_margin_pct: float = Field(default=90.0, ge=1, le=100)
-    stage_s0_max_leverage: float = Field(default=5.0, ge=1, le=50)
+    stage_s0_max_leverage: float = Field(default=10.0, ge=1, le=50)
     stage_s0_max_open_positions: int = Field(default=1, ge=1, le=20)
     stage_s0_daily_loss_limit_pct: float = Field(default=30.0, ge=0.1, le=100)
     stage_s1_risk_pct: float = Field(default=7.0, ge=0.01, le=100)
@@ -582,7 +582,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v4.3.2"
+    opportunity_v4_strategy_version: str = "v4.4"
     opportunity_v4_decision_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
     opportunity_v4_bootstrap_enabled: bool = True
     opportunity_v4_bootstrap_min_rank_percentile: float = Field(default=0.85, ge=0, le=1)
@@ -669,8 +669,8 @@ class TradingConfig(BaseModel):
     opportunity_v432_confidence_cost_ratio_full: float = Field(default=10.0, ge=0, le=1000)
     opportunity_v432_initial_min_risk_pct: float = Field(default=4.0, ge=0.01, le=100)
     opportunity_v432_initial_max_risk_pct: float = Field(default=7.5, ge=0.01, le=100)
-    opportunity_v432_add_on_enabled: bool = True
-    opportunity_v432_add_on_live_enabled: bool = True
+    opportunity_v432_add_on_enabled: bool = False
+    opportunity_v432_add_on_live_enabled: bool = False
     opportunity_v432_add_on_trigger_atr: float = Field(default=0.55, ge=0.05, le=20)
     opportunity_v432_add_on_min_confidence: float = Field(default=0.75, ge=0, le=1)
     opportunity_v432_add_on_min_lower_cost_multiple: float = Field(default=2.0, ge=-100, le=100)
@@ -679,32 +679,58 @@ class TradingConfig(BaseModel):
     opportunity_v432_add_on_max_initial_quantity_ratio: float = Field(default=0.75, ge=0, le=5)
     opportunity_v432_add_on_min_risk_budget_pct: float = Field(default=0.50, ge=0, le=100)
     opportunity_v432_release_fallback_drawdown_pct: float = Field(default=8.0, ge=0.1, le=100)
+    opportunity_v44_full_bet_enabled: bool = True
+    opportunity_v44_min_rank_percentile: float = Field(default=0.80, ge=0, le=1)
+    opportunity_v44_min_quality_score: float = Field(default=52.0, ge=0, le=100)
+    opportunity_v44_min_expected_net_pct: float = Field(default=0.02, ge=-100, le=100)
+    opportunity_v44_min_lower_expectancy_pct: float = Field(default=-0.05, ge=-100, le=100)
+    opportunity_v44_min_cost_ratio: float = Field(default=1.50, ge=0, le=1000)
+    opportunity_v44_min_confirmations: int = Field(default=3, ge=1, le=5)
+    opportunity_v44_margin_pct: float = Field(default=90.0, ge=1, le=99)
+    opportunity_v44_min_risk_pct: float = Field(default=8.0, ge=0.01, le=100)
+    opportunity_v44_max_risk_pct: float = Field(default=15.0, ge=0.01, le=100)
+    opportunity_v44_stressed_risk_cap_pct: float = Field(default=15.0, ge=0.01, le=100)
+    opportunity_v44_min_leverage: int = Field(default=3, ge=1, le=50)
+    opportunity_v44_max_leverage: int = Field(default=10, ge=1, le=50)
+    opportunity_v44_cost_stress_multiplier: float = Field(default=1.50, ge=1, le=10)
+    opportunity_v44_stop_atr: float = Field(default=0.85, ge=0.05, le=20)
+    opportunity_v44_take_profit_r: float = Field(default=1.05, ge=0.1, le=20)
+    opportunity_v44_break_even_trigger_r: float = Field(default=0.45, ge=0.05, le=5)
+    opportunity_v44_max_hold_bars: int = Field(default=6, ge=1, le=200)
+    opportunity_v44_runtime_exit_enabled: bool = True
+    opportunity_v44_loss_reduced_after: int = Field(default=2, ge=1, le=20)
+    opportunity_v44_loss_reduced_risk_pct: float = Field(default=8.0, ge=0.01, le=100)
+    opportunity_v44_max_consecutive_losses: int = Field(default=5, ge=1, le=20)
+    opportunity_v44_rotation_min_edge_r: float = Field(default=0.35, ge=0, le=10)
+    opportunity_v44_rotation_min_cost_ratio: float = Field(default=1.25, ge=0, le=1000)
+    opportunity_v44_release_pause_drawdown_pct: float = Field(default=35.0, ge=0.1, le=100)
+    opportunity_v44_global_pf_soft_context: bool = True
     opportunity_v4_evidence_lookback_hours: float = Field(default=168, ge=1, le=8760)
     opportunity_v4_evidence_max_trades: int = Field(default=5000, ge=100, le=100000)
     opportunity_v4_evidence_cache_seconds: int = Field(default=60, ge=1, le=3600)
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
     strategy_canary_startup_cap_enabled: bool = True
-    strategy_canary_release_id: str = "extreme_v4_roll@v4.3.2"
+    strategy_canary_release_id: str = "extreme_v4_roll@v4.4"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
-    strategy_canary_level_1_multiplier: float = Field(default=0.70, ge=0, le=1)
-    strategy_canary_level_1_max_opportunities: int = Field(default=5, ge=1, le=100)
+    strategy_canary_level_1_multiplier: float = Field(default=1.0, ge=0, le=1)
+    strategy_canary_level_1_max_opportunities: int = Field(default=6, ge=1, le=100)
     strategy_canary_level_2_min_trades: int = Field(default=3, ge=1, le=100)
     strategy_canary_level_2_min_profit_factor: float = Field(default=1.05, ge=0, le=100)
-    strategy_canary_level_2_multiplier: float = Field(default=0.70, ge=0, le=1)
+    strategy_canary_level_2_multiplier: float = Field(default=1.0, ge=0, le=1)
     strategy_canary_level_2_max_opportunities: int = Field(default=8, ge=1, le=100)
     strategy_canary_level_3_min_trades: int = Field(default=8, ge=1, le=100)
     strategy_canary_level_3_min_profit_factor: float = Field(default=1.15, ge=0, le=100)
     strategy_canary_level_3_multiplier: float = Field(default=1.0, ge=0, le=1)
     strategy_canary_level_3_max_opportunities: int = Field(default=12, ge=1, le=100)
-    strategy_canary_max_losses: int = Field(default=2, ge=1, le=20)
+    strategy_canary_max_losses: int = Field(default=3, ge=1, le=20)
     strategy_canary_reissue_enabled: bool = True
     strategy_canary_reissue_observation_minutes: int = Field(default=60, ge=0, le=1440)
     strategy_canary_reissue_min_shadow_trades: int = Field(default=8, ge=1, le=1000)
     strategy_canary_reissue_min_symbols: int = Field(default=3, ge=1, le=1000)
     strategy_canary_reissue_min_profit_factor: float = Field(default=1.15, ge=0, le=100)
-    strategy_canary_reissue_multiplier: float = Field(default=0.30, ge=0, le=1)
-    strategy_canary_reissue_max_opportunities: int = Field(default=2, ge=1, le=100)
+    strategy_canary_reissue_multiplier: float = Field(default=1.0, ge=0, le=1)
+    strategy_canary_reissue_max_opportunities: int = Field(default=4, ge=1, le=100)
     v3_credit_score_weight: float = Field(default=0.15, ge=0, le=2)
     v3_credit_quick_stop_seconds: int = Field(default=300, ge=30, le=3600)
     v3_credit_win_reward: float = Field(default=4.0, ge=0, le=30)

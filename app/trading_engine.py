@@ -18,6 +18,7 @@ from app.strategy_canary import candidate_can_use_canary
 from app.protection_audit import audit_position_protection, enrich_positions_with_prices
 from app.protection import apply_initial_protection_to_signal, build_protection_plan
 from app.risk import assess_new_position, equity_guard_status, live_trading_allowed, position_size_from_risk
+from app.s0_full_bet import build_s0_full_bet_sizing, full_bet_rotation_required_edge_r, is_s0_full_bet
 from app.scalp_engine import ORDERBOOK_SCALP_ENTRY_TYPES
 from app.scanner import latest_strategy_signal, mode_config, scan_growth_candidates, strategy_params_for_mode
 from app.stage_modes import resolve_stage_route, stage_route_state_updates
@@ -218,10 +219,28 @@ def build_position_rotation_plan(
     current_type = rotation_candidate_type(weakest.get("scan_candidate"))
     min_delta = rotation_required_delta(config, mode, current_pnl_pct, current_type)
     cost_metrics = rotation_cost_metrics(candidate, config)
+    opportunity = candidate.get("opportunity_v4") or {}
+    v44_rotation = str(opportunity.get("strategy_version") or "").lower().startswith("v4.4")
+    if v44_rotation:
+        min_cost_ratio = float(config.get("opportunity_v44_min_cost_ratio", 1.50))
+        min_net_cost_ratio = max(1.0, float(config.get("opportunity_v44_rotation_min_cost_ratio", 1.25)))
+    current_opportunity = (weakest.get("scan_candidate") or {}).get("opportunity_v4") or {}
+    new_expected_net_pct = float(opportunity.get("expected_net_pct") or 0.0)
+    current_expected_net_pct = float(current_opportunity.get("expected_net_pct") or 0.0)
+    signal = candidate.get("signal") or {}
+    entry = float(signal.get("last_price") or 0.0)
+    stop = float(signal.get("stop") or 0.0)
+    risk_unit_pct = abs(entry - stop) / entry * 100 if entry > 0 and stop > 0 else 0.0
+    net_edge_after_rotation_pct = (
+        new_expected_net_pct - current_expected_net_pct - float(cost_metrics.get("extra_close_cost_pct") or 0.0)
+    )
+    required_v44_edge_pct = risk_unit_pct * full_bet_rotation_required_edge_r(config)
 
-    if new_score < min_new_score:
+    if v44_rotation and net_edge_after_rotation_pct < required_v44_edge_pct:
+        reason = "v44_net_edge_below_rotation_threshold"
+    elif not v44_rotation and new_score < min_new_score:
         reason = "new_score_below_rotation_threshold"
-    elif score_delta < min_delta:
+    elif not v44_rotation and score_delta < min_delta:
         reason = "score_delta_too_small"
     elif cost_ratio < min_cost_ratio:
         reason = "cost_ratio_too_low"
@@ -262,6 +281,9 @@ def build_position_rotation_plan(
             "min_net_cost_ratio": min_net_cost_ratio,
             "keep_winner_profit_pct": keep_winner_profit_pct,
             "max_current_loss_pct": max_current_loss_pct,
+            "v44_required_edge_r": full_bet_rotation_required_edge_r(config),
+            "v44_required_edge_pct": round(required_v44_edge_pct, 6),
+            "v44_net_edge_after_rotation_pct": round(net_edge_after_rotation_pct, 6),
         },
         "score_delta": score_delta,
         "costs": cost_metrics,
@@ -396,7 +418,8 @@ def build_stage1_decision(
             "decision_reason": "极限模式仅允许盘口剥头皮引擎信号执行",
             "equity": equity,
         }
-    scalp_tier = extreme_scalp_tier(scan_candidate, config)
+    full_bet_candidate = is_s0_full_bet(scan_candidate, config)
+    scalp_tier = "none" if full_bet_candidate else extreme_scalp_tier(scan_candidate, config)
     if scalp_tier != "none":
         mode_prefix = "yolo_scalp" if active_mode.get("mode") == "yolo_scalp" else "extreme_scalp"
         signal = dict(signal)
@@ -446,7 +469,7 @@ def build_stage1_decision(
                     "mode": active_mode["mode"],
                     "strategy": active_mode["strategy"],
                     "entry_type": entry_type,
-                    "decision_reason": "V4.3.2 试运行许可证继续保留：当前候选未通过融合期望、局部证据、成本或流动性硬门",
+                    "decision_reason": "V4.4 试运行许可证继续保留：当前候选未通过相对排名、确认项、成本或流动性硬门",
                     "primary_block_reason": canary_reason,
                     "performance_guard": performance_guard,
                     "protection_plan": protection_plan,
@@ -540,7 +563,9 @@ def build_stage1_decision(
         "ignore_max_drawdown": active_mode["mode"] in {"tournament", "tournament_sprint", "extreme_sprint", "yolo_scalp"},
         "max_open_positions": max_open_positions,
         "max_consecutive_losses": (
-            config.get("extreme_sprint_max_consecutive_losses", config.get("max_consecutive_losses", 2))
+            config.get("opportunity_v44_max_consecutive_losses", 5)
+            if full_bet_candidate
+            else config.get("extreme_sprint_max_consecutive_losses", config.get("max_consecutive_losses", 2))
             if active_mode["mode"] in {"extreme_sprint", "yolo_scalp"}
             else
             config.get("tournament_sprint_max_consecutive_losses", config.get("max_consecutive_losses", 2))
@@ -595,14 +620,36 @@ def build_stage1_decision(
             "protection_plan": protection_plan,
             "equity": equity,
         }
-    quantity = position_size_from_risk(
-        equity=equity,
-        risk_pct=float(active_mode["risk_pct"]),
+    full_bet_sizing = build_s0_full_bet_sizing(
+        equity=float(equity),
+        available_balance=account_summary.get("available_balance"),
         entry=float(signal["last_price"]),
         stop=float(signal["stop"]),
+        requested_risk_pct=float(active_mode["risk_pct"]),
+        candidate=scan_candidate,
+        config=config,
+        consecutive_losses=int(state.get("consecutive_losses") or 0),
     )
-    max_qty = risk.max_notional / float(signal["last_price"]) if signal.get("last_price") else 0
-    quantity = min(quantity, max_qty)
+    if full_bet_sizing.get("applied"):
+        quantity = float(full_bet_sizing["quantity"])
+        active_mode["risk_pct"] = float(full_bet_sizing["target_risk_pct"])
+        active_mode["leverage"] = int(full_bet_sizing["leverage"])
+        risk_dict = {
+            **risk.__dict__,
+            "max_notional": float(full_bet_sizing["notional"]),
+            "max_margin": float(full_bet_sizing["margin_used"]),
+            "full_bet": full_bet_sizing,
+        }
+    else:
+        quantity = position_size_from_risk(
+            equity=equity,
+            risk_pct=float(active_mode["risk_pct"]),
+            entry=float(signal["last_price"]),
+            stop=float(signal["stop"]),
+        )
+        max_qty = risk.max_notional / float(signal["last_price"]) if signal.get("last_price") else 0
+        quantity = min(quantity, max_qty)
+        risk_dict = risk.__dict__
     estimated_notional = quantity * float(signal["last_price"])
     order_viability = effective_order_viability(
         notional=estimated_notional,
@@ -619,7 +666,7 @@ def build_stage1_decision(
     if lift_candidate:
         order_viability = {**order_viability, "min_order_lift_candidate": True}
     if config.get("effective_position_sizing_enabled", True) and not order_viability["allowed"] and not lift_candidate:
-        risk_dict = risk.__dict__
+        risk_dict = dict(risk_dict)
         viability_summary = order_viability.get("summary") or "订单预期净收益不足以覆盖交易成本和噪声"
         return {
             "symbol": symbol,
@@ -640,7 +687,6 @@ def build_stage1_decision(
             "protection_plan": protection_plan,
             "equity": equity,
         }
-    risk_dict = risk.__dict__
     sizing = explain_position_sizing(
         base_risk_pct=float((scan_candidate or {}).get("base_risk_pct") or (scan_candidate or {}).get("risk_pct") or active_mode["risk_pct"]),
         candidate=scan_candidate,
@@ -680,6 +726,7 @@ def build_stage1_decision(
         "equity_guard": guard,
         "target_progress": target,
         "protection_plan": protection_plan,
+        "full_bet_sizing": full_bet_sizing,
         "scalp_tier": scalp_tier,
         "risk_pct": active_mode["risk_pct"],
         "leverage": active_mode["leverage"],

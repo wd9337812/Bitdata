@@ -210,7 +210,7 @@ function App() {
     funnel?.opportunity_v4?.local_circuit_blocked
       ?? Object.values(localCircuit.cohorts || {}).filter((item: any) => item?.blocked_at).length,
   );
-  const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v4_roll"}@${performanceGuard.active_strategy_version || "v4.3.2"}`;
+  const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v4_roll"}@${performanceGuard.active_strategy_version || "v4.4"}`;
   const liveEvidenceIsCurrent = performanceGuard.live_evidence_scope === currentPerformanceScope;
   const target = status?.target_progress || {};
   const stageProfile = status?.stage_profile || {};
@@ -431,7 +431,7 @@ function App() {
                 tone={recoveryPermit.status === "waiting_candidate" ? "positive" : recoveryPermit.status === "normal" ? "positive" : "negative"}
               />
               <MetricCard
-                title="V4.3.2 新策略试运行许可证"
+                title="V4.4 新策略试运行许可证"
                 value={recoveryStatusLabel[strategyCanary.status] || strategyCanary.status || "等待状态"}
                 sub={
                   strategyCanary.status === "revoked" && strategyCanary.recovery
@@ -449,9 +449,9 @@ function App() {
                 tone={activeLocalCircuitBlocks > 0 ? "negative" : "positive"}
               />
               <MetricCard
-                title="V4.3.2 版本回退"
-                value={performanceGuard.release_equity_guard?.fallback_active ? "已回到基础仓位" : "连续仓位生效"}
-                sub={`版本高点 ${fmt(performanceGuard.release_equity_guard?.peak_equity, 4)}U · 回撤 ${fmt(performanceGuard.release_equity_guard?.drawdown_pct, 2)}% / ${fmt(performanceGuard.release_equity_guard?.fallback_threshold_pct ?? 8, 2)}%`}
+                title="V4.4 版本风险线"
+                value={performanceGuard.release_equity_guard?.fallback_active ? "已停止新开仓" : "全仓短打可用"}
+                sub={`版本高点 ${fmt(performanceGuard.release_equity_guard?.peak_equity, 4)}U · 回撤 ${fmt(performanceGuard.release_equity_guard?.drawdown_pct, 2)}% / ${fmt(performanceGuard.release_equity_guard?.fallback_threshold_pct ?? 35, 2)}%`}
                 tone={performanceGuard.release_equity_guard?.fallback_active ? "negative" : "positive"}
               />
               <MetricCard
@@ -477,7 +477,7 @@ function App() {
               <div className="panel-head">
                 <div>
                   <h2>机会漏斗</h2>
-                  <p>系统先大范围召回，再逐层粗排、精排和竞价；V4.3.2 统一信号口径，按市场结构、方向、事件级证据与成本计算扣费后净期望，只对精选币检查盘口。</p>
+                  <p>系统先大范围召回，再逐层粗排、精排和竞价；V4.4 按本轮相对排名、方向、五项确认和扣费后期望选币，只对精选币检查盘口。</p>
                 </div>
               </div>
               <FunnelPanel funnel={funnel} />
@@ -487,7 +487,7 @@ function App() {
               <div className="panel-head">
                 <div>
                   <h2>候选币排名</h2>
-                  <p>V4.3.2 是当前实盘排序器；核心机会用连续置信度计算仓位，受限探索仍保持小倍率，不再用 A+/A/B 标签硬切仓位。</p>
+                  <p>V4.4 是当前实盘排序器；通过本轮相对排名和三项以上确认后，S0 使用单仓全进全出与动态杠杆，旧版本信用不参与准入。</p>
                 </div>
               </div>
               <CandidateTable rows={candidates} />
@@ -648,16 +648,16 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>离触发价</span><strong>{fmt(signal.distance_to_trigger_pct, 3)}%</strong></div>
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
         <div><span>V4 本轮排名</span><strong>{v4.enabled ? `前 ${fmt((1 - Number(v4.rank_percentile || 0)) * 100, 0)}%` : "-"}</strong></div>
-        <div><span>V4.3.2 准入通道</span><strong>{v4.admission_lane === "limited_exploration" ? "受限探索" : v4.admission_lane === "validated" ? "核心已验证" : v4.admission_lane === "core_provisional" ? "核心受限" : v4.admission_lane === "core_canary" ? "核心试运行" : "仅影子"}</strong></div>
-        <div><span>连续仓位置信度</span><strong>{positionConfidence.applied ? `${fmt(Number(positionConfidence.confidence || 0) * 100, 1)}%` : "不适用"}</strong></div>
-        <div><span>目标初始风险</span><strong>{positionConfidence.target_initial_risk_pct != null ? `${fmt(positionConfidence.target_initial_risk_pct, 2)}%` : "沿用通道基础风险"}</strong></div>
-        <div><span>同仓追加资格</span><strong>{positionConfidence.add_on_eligible ? `符合；盈利 ${fmt(positionConfidence.add_on_trigger_atr, 2)} ATR 后再确认` : "不符合"}</strong></div>
-        <div><span>追加后风险上限</span><strong>{positionConfidence.add_on_eligible ? `${fmt(positionConfidence.add_on_total_risk_cap_pct, 2)}%` : "-"}</strong></div>
-        <div><span>V4.3.2 保守净期望</span><strong>{v4.enabled ? `${fmt(v4.lower_expected_net_pct, 3)}%` : "-"}</strong></div>
-        <div><span>V4.3.2 成本比</span><strong>{v4.enabled ? `${fmt(v4.cost_ratio, 2)}x` : "-"}</strong></div>
-        <div><span>动量确认</span><strong>{v4.enabled ? `${fmt(v4.momentum_confirmations, 0)} / ${fmt(v4.momentum_confirmations_required, 0)}` : "-"}</strong></div>
-        <div><span>V4.3.2 同形态证据</span><strong>{v4.enabled ? `${fmt(v4.evidence?.selected?.trades, 0)} 笔 · ${pfLabel(v4.evidence?.selected?.profit_factor, v4.evidence?.selected?.trades)}` : "-"}</strong></div>
-        <div><span>局部熔断</span><strong>{localCircuit.blocked ? "已冻结该组合" : localCircuit.restored ? "影子验证已恢复" : "未触发"}</strong></div>
+        <div><span>V4.4 准入通道</span><strong>{v4.admission_lane === "full_bet" ? "全仓短打" : "仅影子"}</strong></div>
+        <div><span>机会置信度</span><strong>{positionConfidence.applied ? `${fmt(Number(positionConfidence.confidence || 0) * 100, 1)}%` : "不适用"}</strong></div>
+        <div><span>计划止损风险</span><strong>{positionConfidence.target_initial_risk_pct != null ? `${fmt(positionConfidence.target_initial_risk_pct, 2)}%` : "等待准入"}</strong></div>
+        <div><span>保证金方式</span><strong>{v4.admission_lane === "full_bet" ? "约 90% · 单仓全进全出" : "不下单"}</strong></div>
+        <div><span>动态杠杆范围</span><strong>{v4.admission_lane === "full_bet" ? "3x - 10x" : "-"}</strong></div>
+        <div><span>V4.4 保守净期望</span><strong>{v4.enabled ? `${fmt(v4.lower_expected_net_pct, 3)}%` : "-"}</strong></div>
+        <div><span>V4.4 成本比</span><strong>{v4.enabled ? `${fmt(v4.cost_ratio, 2)}x` : "-"}</strong></div>
+        <div><span>五项确认</span><strong>{v4.enabled ? `${fmt(v4.v44_confirmations, 0)} / ${fmt(v4.v44_confirmations_required, 0)}` : "-"}</strong></div>
+        <div><span>旧版本信用</span><strong>不参与 V4.4 准入</strong></div>
+        <div><span>当前版本局部证据</span><strong>{localCircuit.blocked ? "仅作风险背景" : "正常记录"}</strong></div>
         <div><span>市场状态</span><strong>{structure.market_regime_label || best.market_state?.label || "-"}</strong></div>
         <div><span>真实收益/成本</span><strong>{v4.enabled ? `${fmt(v4.cost_ratio, 2)}x` : fmt(best.cost_ratio, 2)}</strong></div>
         <div><span>{"\u4fdd\u62a4\u6863\u6848"}</span><strong>{protectionLabel}</strong></div>
@@ -702,11 +702,11 @@ function FunnelPanel({ funnel }: { funnel: any }) {
         return <MetricCard key={key} title={label} value={value} sub={sub} />;
       })}
       <MetricCard
-        title={funnel?.opportunity_v4?.enabled ? "V4.3.2 实盘候选" : "剥头皮信号"}
+        title={funnel?.opportunity_v4?.enabled ? "V4.4 实盘候选" : "剥头皮信号"}
         value={funnel?.opportunity_v4?.enabled
           ? `${fmt(funnel?.opportunity_v4?.admitted, 0)} 个`
           : `${fmt(funnel?.extreme_v2?.scalp, 0)} 个`}
-        sub={funnel?.opportunity_v4?.enabled ? "核心准入 + 顺势受限探索" : "盘口冲击 / 放量剥头皮 / 失衡试探"}
+        sub={funnel?.opportunity_v4?.enabled ? "V4.4 全仓短打准入" : "盘口冲击 / 放量剥头皮 / 失衡试探"}
       />
       <MetricCard
         title="市场自适应"
@@ -729,21 +729,21 @@ function V4OpportunityPanel({ funnel }: { funnel: any }) {
     <div className="panel">
       <div className="panel-head">
         <div>
-          <h2>{v4.strategy_version || "v4.3.2"} 事件证据与连续质量仓位</h2>
-          <p>先判断方向和入场结构，再按排名、保守净期望、成本、流动性与局部证据计算连续置信度；标签只用于解释，不再用 A+/A/B 硬切仓位。</p>
+          <h2>{v4.strategy_version || "v4.4"} 事件证据与全仓短打</h2>
+          <p>先判断方向和入场结构，再用本轮相对排名、五项确认、扣费后期望和流动性筛选；合格后使用单仓全进全出，旧版本信用和全局 PF 只作背景。</p>
         </div>
       </div>
       <div className="metrics">
         <MetricCard title="市场状态" value={structure.market_label || "等待行情"} sub={`上涨广度 ${fmt(Number(structure.breadth_positive || 0) * 100, 1)}% · 离散 ${fmt(structure.dispersion_pct, 2)}%`} />
         <MetricCard title="真实成本线" value={`${fmt(structure.observed_cost_floor_pct, 3)}%`} sub="手续费、资金费和历史滑点的保守估计" />
         <MetricCard title="有实时触发" value={`${fmt(v4.shadow_ready, 0)} 个`} sub="已经形成方向和止盈止损，可进入后续筛选" />
-        <MetricCard title="结构可交易" value={`${fmt(v4.structure_ready, 0)} 个`} sub="顺大盘或中周期方向，且入场形态有效" />
+        <MetricCard title="结构可交易" value={`${fmt(v4.structure_ready, 0)} 个`} sub="方向、入场形态与当前市场结构有效" />
         <MetricCard title="盘口可执行" value={`${fmt(v4.liquidity_ready, 0)} 个`} sub="按本次预计下单额动态检查深度与点差" />
-        <MetricCard title="局部熔断" value={`${fmt(v4.local_circuit_blocked, 0)} 个`} sub="只冻结失效组合，不影响其他市场状态与形态" tone={Number(v4.local_circuit_blocked || 0) > 0 ? "negative" : "positive"} />
-        <MetricCard title="核心试运行" value={`${fmt(v4.canary_ready, 0)} 个`} sub="精确绑定 V4.3.2 许可证，不绕过硬风控" tone={Number(v4.canary_ready || 0) > 0 ? "positive" : ""} />
-        <MetricCard title="受限探索" value={`${fmt(v4.exploration_admitted, 0)} 个`} sub="顺势且至少两项动量确认，固定 0.4x" tone={Number(v4.exploration_admitted || 0) > 0 ? "positive" : ""} />
-        <MetricCard title="连续初始风险" value="4% - 7.5%" sub="仅核心通道生效，仍叠加方向证据和全局保护" />
-        <MetricCard title="保护后追加" value="最多 1 次" sub="先盈利 0.55 ATR 并确认保本止损，总风险最多 15%" />
+        <MetricCard title="旧证据阻断" value={`${fmt(v4.local_circuit_blocked, 0)} 个`} sub="V4.4 不因旧版本信用或局部 PF 一票否决" tone="positive" />
+        <MetricCard title="版本试运行" value={`${fmt(v4.canary_ready, 0)} 个`} sub="精确绑定 V4.4 许可证，不绕过交易所保护和 5U 硬停止" tone={Number(v4.canary_ready || 0) > 0 ? "positive" : ""} />
+        <MetricCard title="全仓短打" value={`${fmt(v4.admitted, 0)} 个`} sub="约 90% 可用保证金，单币单向、一次全平" tone={Number(v4.admitted || 0) > 0 ? "positive" : ""} />
+        <MetricCard title="计划风险" value="8% - 15%" sub="仅最强机会接近 15%，连续两次亏损后回落至 8%" />
+        <MetricCard title="动态杠杆" value="3 - 10 倍" sub="按止损距离和成本选择，不追加、不分批止盈" />
       </div>
       <p>{topBlockers.length ? `本轮主要等待原因：${topBlockers.map(([reason, count]: any) => `${reason}（${count}）`).join("；")}` : "本轮没有候选被阻断。"}</p>
     </div>
@@ -1053,14 +1053,14 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
         <div className="panel-head">
           <div>
             <h2>策略版本一眼看懂</h2>
-            <p>{active.strategy_version || "V4.3.2"} 是当前实盘版本。每笔影子都会记录核心、受限探索或仅影子通道，版本间证据严格隔离。</p>
+            <p>{active.strategy_version || "V4.4"} 是当前实盘版本。每笔机会都会记录全仓短打或仅影子通道，版本间证据严格隔离。</p>
           </div>
           <span className="pill ok">当前实盘</span>
         </div>
         <div className="metrics">
           <MetricCard title={`${active.strategy_version || "V4"} 近期基线`} value={`${fmt(activeRecent.closed, 0)} 笔`} sub={`${pfLabel(activeRecent.profit_factor, activeRecent.closed)} · 净收益 ${fmt(activeRecent.net_pnl, 4)} U`} tone={Number(activeRecent.net_pnl || 0) >= 0 ? "positive" : "negative"} />
           <MetricCard title="当前安全观察窗" value={`${fmt(recovery.closed, 0)} / 20 笔`} sub={`${pfLabel(recovery.profit_factor, recovery.closed)} · 只对应当前 V4`} tone={Number(recovery.net_pnl || 0) >= 0 ? "positive" : "negative"} />
-          <MetricCard title="V4.3.2 运行方式" value="连续质量仓位 + 受限探索" sub="核心初始风险按连续置信度落在 4%-7.5%；受限探索不放大；盈利并先锁保本后才可追加一次" />
+          <MetricCard title="V4.4 运行方式" value="单仓全进全出" sub="约 90% 可用保证金，动态 3-10 倍；计划风险 8%-15%，压力风险不超过 15%；禁止追加和部分止盈" />
         </div>
       </div>
       {hasChallenger && <div className="panel table-wrap">
@@ -1074,17 +1074,17 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
         </table>
       </div>}
       <div className="panel table-wrap">
-        <h2>V4.3.2 三类证据</h2>
+        <h2>V4.4 三类证据</h2>
         <table><thead><tr><th>类型</th><th>含义</th><th>已结束</th><th>胜率</th><th>PF</th><th>净收益</th><th>成本</th></tr></thead><tbody>
-          {evidenceTypes.map((row: any) => <tr key={row.evidence_type}><td>{row.evidence_type === "decision" ? "决策样本" : row.evidence_type === "exploration" ? "探索样本" : "同机会对照"}</td><td>{row.evidence_type === "decision" ? "V4.3.2 排名靠前且按事件去重的机会，用于当前版本证据" : row.evidence_type === "exploration" ? "从仅影子机会中抽样，用于检查是否漏判" : "同一时刻用简单规则做基线，不参与准入"}</td><td>{fmt(row.opportunities || row.closed, 0)}</td><td>{fmt(row.win_rate, 1)}%</td><td>{pfLabel(row.profit_factor, row.closed)}</td><td>{fmt(row.net_pnl, 4)} U</td><td>{fmt(row.cost, 4)} U</td></tr>)}
+          {evidenceTypes.map((row: any) => <tr key={row.evidence_type}><td>{row.evidence_type === "decision" ? "决策样本" : row.evidence_type === "exploration" ? "探索样本" : "同机会对照"}</td><td>{row.evidence_type === "decision" ? "V4.4 本轮排名靠前、确认充分且按事件去重的机会，用于当前版本证据" : row.evidence_type === "exploration" ? "从仅影子机会中抽样，用于检查是否漏判" : "同一时刻用简单规则做基线，不参与准入"}</td><td>{fmt(row.opportunities || row.closed, 0)}</td><td>{fmt(row.win_rate, 1)}%</td><td>{pfLabel(row.profit_factor, row.closed)}</td><td>{fmt(row.net_pnl, 4)} U</td><td>{fmt(row.cost, 4)} U</td></tr>)}
           {!evidenceTypes.length && <tr><td colSpan={7}>V4 刚启用，等待第一批决策、探索和对照样本结束。</td></tr>}
         </tbody></table>
       </div>
       <div className="panel table-wrap">
-        <h2>V4.3.2 通道表现</h2>
+        <h2>V4.4 通道表现</h2>
         <table><thead><tr><th>通道</th><th>独立机会</th><th>已结束</th><th>胜率</th><th>PF</th><th>净收益</th><th>成本</th></tr></thead><tbody>
-          {admissionLanes.map((row: any) => <tr key={row.admission_lane}><td>{row.admission_lane === "validated" ? "核心已验证" : row.admission_lane === "core_provisional" ? "核心受限" : row.admission_lane === "core_canary" ? "核心试运行" : row.admission_lane === "limited_exploration" ? "受限探索" : row.admission_lane === "shadow_only" ? "仅影子" : "旧数据未分类"}</td><td>{fmt(row.opportunities, 0)}</td><td>{fmt(row.closed, 0)}</td><td>{fmt(row.win_rate, 1)}%</td><td>{pfLabel(row.profit_factor, row.closed)}</td><td>{fmt(row.net_pnl, 4)} U</td><td>{fmt(row.cost, 4)} U</td></tr>)}
-          {!admissionLanes.length && <tr><td colSpan={7}>V4.3.2 刚启用，等待第一批按通道分类的事件级影子结果。</td></tr>}
+          {admissionLanes.map((row: any) => <tr key={row.admission_lane}><td>{row.admission_lane === "full_bet" ? "全仓短打" : row.admission_lane === "shadow_only" ? "仅影子" : row.admission_lane === "validated" ? "旧核心已验证" : row.admission_lane === "core_provisional" ? "旧核心受限" : row.admission_lane === "core_canary" ? "旧核心试运行" : row.admission_lane === "limited_exploration" ? "旧受限探索" : "旧数据未分类"}</td><td>{fmt(row.opportunities, 0)}</td><td>{fmt(row.closed, 0)}</td><td>{fmt(row.win_rate, 1)}%</td><td>{pfLabel(row.profit_factor, row.closed)}</td><td>{fmt(row.net_pnl, 4)} U</td><td>{fmt(row.cost, 4)} U</td></tr>)}
+          {!admissionLanes.length && <tr><td colSpan={7}>V4.4 刚启用，等待第一批按通道分类的事件级影子结果。</td></tr>}
         </tbody></table>
       </div>
       <div className="notice">“探索样本”说白了就是：系统会从以前直接淘汰的机会里挑少量代表，假装交易并扣掉成本。只有这样才能知道旧筛选是真的避开亏损，还是把赢家也一起挡掉。</div>
@@ -1413,27 +1413,30 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
         <div className="panel">
           <div className="panel-head"><div><h2>当前生效设置</h2><p>这里只显示当前阶段真正参与执行的参数。旧策略和未来阶段参数已收进专家设置。</p></div><button className="secondary" onClick={() => setExpert(true)}>进入专家设置</button></div>
           <div className="form-grid">
-            {toggle("stage_routing_enabled", "按权益自动选择阶段", "推荐开启；当前 S0-S2 使用 V4.3.2 事件证据与连续质量仓位滚仓")}
+            {toggle("stage_routing_enabled", "按权益自动选择阶段", "推荐开启；当前 S0 使用 V4.4 单仓全进全出短打，后续阶段仍按权益自动切换")}
             {select("stage_manual_mode", "阶段控制", stageManualOptions.slice(0, 4), "自动模式会按权益切换策略")}
             {toggle("dry_run", "模拟交易", "开启后绝不会真实下单")}
             {toggle("live_trading_enabled", "允许实盘交易", "还需要正确的实盘确认短语")}
             {toggle("allow_short", "允许系统做空", "V4 会按方向分别计算排名与独立证据")}
             {number("hard_stop_equity", "权益硬停止线 U", "当前建议保持 5U")}
-            {number("stage_s0_risk_pct", "S0 单笔风险上限%", "0-300U 当前生效")}
-            {number("stage_s0_max_leverage", "S0 最大杠杆", "当前生效")}
-            {toggle("opportunity_v4_live_enabled", "V4.3.2 当前实盘排序", "推荐开启；旧策略实验已归档")}
-            {toggle("opportunity_v432_continuous_sizing_enabled", "核心机会连续仓位", "推荐开启；不是 A+/A/B 硬分层，初始风险按连续置信度计算")}
-            {number("opportunity_v432_initial_min_risk_pct", "核心初始风险下限%", "默认 4%")}
-            {number("opportunity_v432_initial_max_risk_pct", "核心初始风险上限%", "默认 7.5%，仍受许可证与全局保护")}
-            {toggle("opportunity_v432_add_on_enabled", "盈利锁保本后追加一次", "仅强核心机会；确认交易所保本止损后才可执行")}
-            {number("opportunity_v432_add_on_total_risk_cap_pct", "初始加追加总风险上限%", "默认 15%，不会每单固定用满")}
-            {number("opportunity_v432_release_fallback_drawdown_pct", "版本自动回退回撤%", "默认 8%；触发后撤销新增激进能力")}
-            {toggle("opportunity_v43_exploration_enabled", "开启顺势受限探索", "只允许顺势动量、确认回踩或确认突破，不放宽硬风控")}
-            {number("opportunity_v43_exploration_min_rank_percentile", "受限探索最低排名分位", "默认 0.75，即只考虑本轮前 25%")}
-            {number("opportunity_v43_exploration_risk_multiplier", "受限探索仓位倍率", "默认 0.4 倍；本版本不同时增加杠杆")}
+            {number("stage_s0_risk_pct", "S0 压力风险硬上限%", "默认 15%；包含止损距离和放大的手续费、滑点压力，不代表每单固定亏 15%")}
+            {number("stage_s0_max_leverage", "S0 最大杠杆", "默认 10 倍；系统会按止损距离在 3-10 倍间动态选择")}
+            {toggle("opportunity_v4_live_enabled", "V4.4 当前实盘排序", "推荐开启；只使用当前版本证据，旧版本信用不参与准入")}
+            {toggle("opportunity_v44_full_bet_enabled", "启用 S0 单仓全进全出", "使用约 90% 可用保证金，只持有一个币种和一个方向，不追加、不分批止盈")}
+            {number("opportunity_v44_margin_pct", "计划使用保证金%", "默认 90%；保留约 10% 处理费用和价格波动")}
+            {number("opportunity_v44_min_risk_pct", "最低计划风险%", "默认 8%；方向验证和当前排名共同决定实际值")}
+            {number("opportunity_v44_max_risk_pct", "最高计划风险%", "默认 15%；仅最强机会接近上限，连续两次亏损后自动降回 8%")}
+            {number("opportunity_v44_stressed_risk_cap_pct", "压力风险硬上限%", "默认 15%；任何仓位计算不得越过")}
+            {number("opportunity_v44_min_confirmations", "最低确认项", "默认五项中至少 3 项：量能、方向资金流、横截面排名、中周期路径和防追高")}
+            {number("opportunity_v44_stop_atr", "初始止损 ATR", "默认 0.85 ATR")}
+            {number("opportunity_v44_take_profit_r", "初始止盈 R", "默认 1.05R；0.45R 开始保护到保本附近")}
+            {number("opportunity_v44_max_hold_bars", "最长持仓 K 线数", "默认 6 根 5 分钟 K 线，约 30 分钟")}
+            {toggle("opportunity_v44_runtime_exit_enabled", "自动执行快速失效与时间退出", "推荐开启；退出失败时保留交易所止盈止损，不先撤保护单")}
+            {number("opportunity_v44_rotation_min_edge_r", "换仓最低净优势 R", "默认 0.35R；已扣除额外平仓和重开成本")}
+            {number("opportunity_v44_release_pause_drawdown_pct", "版本回撤暂停线%", "默认 35%；5U 权益硬停止仍始终有效")}
             {toggle("strategy_canary_enabled", "启用新策略试运行许可证", "新版本首 24 小时限制风险和次数；risk_off 时仍只放行同版本合格候选")}
-            {toggle("strategy_canary_startup_cap_enabled", "首日试运行强制封顶", "推荐开启；0.70 倍风险、最多 5 个独立机会、2 次净亏后停止到首日窗口结束")}
-            {number("strategy_canary_level_1_max_opportunities", "一级试运行最多机会", "默认 5 次；每次只能有一笔受保护试单")}
+            {toggle("strategy_canary_startup_cap_enabled", "首日试运行限次", "推荐开启；风险仍由 V4.4 的 8%-15% 计算，最多 6 个独立机会、3 次净亏后进入 60 分钟观察")}
+            {number("strategy_canary_level_1_max_opportunities", "一级试运行最多机会", "默认 6 次；每次只能有一笔同时具备止盈和止损的实盘仓位")}
             {number("execution_max_spread_pct", "V4 盘口最大点差%", "流动性硬门，超过后不实盘")}
             {number("execution_min_depth_notional_usdt", "V4 最低盘口深度 U", "流动性硬门，低于后不实盘")}
             {toggle("runtime_stop_management_enabled", "自动保本与移动止盈", "对新开的 V4 仓位生效")}
@@ -1541,10 +1544,10 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("stage_switch_down_buffer_pct", "降档缓冲%", "默认 10%；避免权益在边界附近反复切换")}
           {number("stage_switch_confirmations", "切换连续确认次数", "默认 3 次；跨策略且有持仓时还会等到空仓")}
           {toggle("strategy_family_credit_enabled", "按策略隔离实盘信用", "Extreme V2、盘口剥头皮和网格分别学习，不互相继承历史奖惩")}
-          {number("stage_s0_risk_pct", "S0 单笔风险%", "0-300U，默认 10%")}
-          {number("stage_s0_margin_pct", "S0 保证金上限%", "默认 90%")}
-          {number("stage_s0_max_leverage", "S0 最大杠杆", "默认 5x")}
-          {number("stage_s0_max_open_positions", "S0 最大持仓", "默认 1")}
+          {number("stage_s0_risk_pct", "S0 压力风险硬上限%", "0-300U，默认 15%；V4.4 实际计划风险为 8%-15%")}
+          {number("stage_s0_margin_pct", "S0 计划保证金%", "默认 90%，保留约 10% 费用与波动缓冲")}
+          {number("stage_s0_max_leverage", "S0 最大杠杆", "默认 10 倍；按止损距离动态使用 3-10 倍")}
+          {number("stage_s0_max_open_positions", "S0 最大持仓", "默认 1；V4.4 只允许单币单向")}
           {number("stage_s0_daily_loss_limit_pct", "S0 当日亏损上限%", "默认 30%")}
           {number("stage_s1_risk_pct", "S1 单笔风险%", "300-10000U，默认 7%")}
           {number("stage_s1_margin_pct", "S1 保证金上限%", "默认 85%")}
@@ -1668,16 +1671,42 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("yolo_scalp_min_order_lift_min_net_profit_usdt", "补齐订单最低净利润U", "默认 0.03U；太小的毛利不强行成交")}
           {toggle("opportunity_v4_enabled", "启用 V4 机会引擎", "推荐开启：计算扣费后净期望并记录公平影子证据，不增加 Binance 下单请求")}
           {toggle("opportunity_v4_live_enabled", "V4 作为当前实盘排序器", "默认开启；旧策略实验已退出实盘和日常界面")}
-          {text("opportunity_v4_strategy_version", "V4 当前版本号", "当前 v4.3.2；改变模型后必须换版本，避免混用历史证据")}
+          {text("opportunity_v4_strategy_version", "V4 当前版本号", "当前 v4.4；改变模型后必须换版本，避免混用历史证据")}
+          {toggle("opportunity_v44_full_bet_enabled", "V4.4 S0 单仓全进全出", "只持有一个币种和一个方向；一次建仓、一次全平，禁止盈利追加和分批止盈")}
+          {number("opportunity_v44_min_rank_percentile", "V4.4 最低相对排名分位", "默认 0.80，即只考虑本轮前 20%")}
+          {number("opportunity_v44_min_quality_score", "V4.4 最低当前质量分", "默认 52；旧版本信用分不参与")}
+          {number("opportunity_v44_min_expected_net_pct", "V4.4 最低扣费后期望%", "默认 0.02%")}
+          {number("opportunity_v44_min_lower_expectancy_pct", "V4.4 保守期望下限%", "默认 -0.05%；只容忍小样本的不确定区间")}
+          {number("opportunity_v44_min_cost_ratio", "V4.4 最低毛利成本比", "默认 1.50 倍")}
+          {number("opportunity_v44_min_confirmations", "V4.4 最低确认项", "默认五项中至少 3 项")}
+          {number("opportunity_v44_margin_pct", "V4.4 使用可用保证金%", "默认 90%；剩余约 10% 作为费用和波动缓冲")}
+          {number("opportunity_v44_min_risk_pct", "V4.4 最低计划风险%", "默认 8%")}
+          {number("opportunity_v44_max_risk_pct", "V4.4 最高计划风险%", "默认 15%；仅最强机会接近上限")}
+          {number("opportunity_v44_stressed_risk_cap_pct", "V4.4 压力风险硬上限%", "默认 15%，包含放大的手续费和滑点")}
+          {number("opportunity_v44_min_leverage", "V4.4 最低动态杠杆", "默认 3 倍")}
+          {number("opportunity_v44_max_leverage", "V4.4 最高动态杠杆", "默认 10 倍")}
+          {number("opportunity_v44_cost_stress_multiplier", "V4.4 成本压力倍数", "默认 1.5 倍")}
+          {number("opportunity_v44_stop_atr", "V4.4 初始止损 ATR", "默认 0.85 ATR")}
+          {number("opportunity_v44_take_profit_r", "V4.4 初始止盈 R", "默认 1.05R")}
+          {number("opportunity_v44_break_even_trigger_r", "V4.4 保本触发 R", "默认 0.45R")}
+          {number("opportunity_v44_max_hold_bars", "V4.4 最长持仓 K 线", "默认 6 根，5 分钟周期约 30 分钟")}
+          {toggle("opportunity_v44_runtime_exit_enabled", "V4.4 自动快速退出", "快速失效或持仓超时可实盘全平；平仓成功后才清理旧保护单")}
+          {number("opportunity_v44_loss_reduced_after", "V4.4 降风险连续亏损数", "默认 2 笔")}
+          {number("opportunity_v44_loss_reduced_risk_pct", "V4.4 亏损后计划风险%", "默认回落至 8%")}
+          {number("opportunity_v44_max_consecutive_losses", "V4.4 连亏故障保险线", "默认 5 笔；正常情况下许可证会先在累计 3 次净亏后进入观察")}
+          {number("opportunity_v44_rotation_min_edge_r", "V4.4 换仓最低净优势 R", "默认 0.35R，必须覆盖额外平仓与开仓成本")}
+          {number("opportunity_v44_rotation_min_cost_ratio", "V4.4 换仓最低成本比", "默认 1.25 倍")}
+          {number("opportunity_v44_release_pause_drawdown_pct", "V4.4 版本回撤暂停线%", "默认 35%；5U 硬停止始终优先")}
+          {toggle("opportunity_v44_global_pf_soft_context", "全局 PF 仅作背景", "推荐开启；旧版或全局 PF 不再一票否决当前 V4.4 合格候选")}
           {number("execution_max_spread_pct", "V4 流动性硬门：最大点差%", "默认 0.10%；超过后不实盘")}
           {number("execution_min_depth_notional_usdt", "V4 流动性硬门：最低深度U", "默认 5000U；只检查进入竞价层的精选币")}
           {number("opportunity_v4_decision_min_rank_percentile", "V4 决策排名分位", "默认 0.75；只把本轮前 25% 作为决策样本")}
           {toggle("opportunity_v4_bootstrap_enabled", "允许 V4 受限实盘探索", "顶排候选在独立证据尚少时可用折扣仓位实盘，不继承旧 V3 拦截")}
           {number("opportunity_v4_bootstrap_min_rank_percentile", "V4 探索最低排名分位", "默认 0.85，即本轮前 15%")}
           {number("opportunity_v4_bootstrap_min_quality_score", "V4 探索最低模型分", "默认 58")}
-          {number("opportunity_v4_bootstrap_min_model_expectancy_pct", "V4.3.2 核心试运行最低融合净期望%", "默认 0.10%；许可证也必须通过融合期望与保守下界")}
-          {number("opportunity_v4_bootstrap_risk_multiplier", "V4.3.2 核心基础通道倍率", "默认 0.4；连续质量仓位会在核心准入后接管初始风险")}
-          {toggle("opportunity_v43_exploration_enabled", "V4.3.2 顺势受限探索", "只对顺势动量、确认回踩或确认突破生效；不会获得连续仓位加码")}
+          {number("opportunity_v4_bootstrap_min_model_expectancy_pct", "归档：旧核心最低融合净期望%", "仅供旧版本回放，不参与 V4.4 实盘")}
+          {number("opportunity_v4_bootstrap_risk_multiplier", "归档：旧核心基础通道倍率", "仅供旧版本回放，不参与 V4.4 实盘")}
+          {toggle("opportunity_v43_exploration_enabled", "归档：V4.3 顺势受限探索", "仅供旧版本回放，不参与 V4.4 实盘")}
           {number("opportunity_v43_exploration_min_rank_percentile", "探索最低排名分位", "默认 0.75，本轮前 25%")}
           {number("opportunity_v43_exploration_min_quality_score", "探索最低模型分", "默认 55")}
           {number("opportunity_v43_exploration_min_expected_net_pct", "探索最低扣费后期望%", "默认 0.04%")}
@@ -1699,21 +1728,21 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("opportunity_v431_local_restore_min_trades", "局部恢复新影子样本", "默认 8 笔，必须是熔断后新产生的证据")}
           {number("opportunity_v431_local_restore_min_symbols", "局部恢复最少币种", "默认 3 个币，避免单币偶然性")}
           {number("opportunity_v431_local_restore_profit_factor", "局部恢复影子 PF", "默认 1.05 且净收益为正")}
-          {toggle("opportunity_v432_continuous_sizing_enabled", "启用连续质量仓位", "核心机会按排名、保守净期望、成本、方向和流动性连续计算，不使用 A+/A/B 硬分层")}
-          {number("opportunity_v432_initial_min_risk_pct", "核心初始风险下限%", "默认 4%；已有负向方向证据仍可继续折扣")}
-          {number("opportunity_v432_initial_max_risk_pct", "核心初始风险上限%", "默认 7.5%；仍受阶段、全局保护和许可证限制")}
-          {toggle("opportunity_v432_add_on_enabled", "盈利后允许一次受保护追加", "必须先上涨或下跌 0.55 ATR，并确认交易所保本止损后才会执行")}
-          {number("opportunity_v432_add_on_min_confidence", "追加最低连续置信度", "默认 0.75；受限探索不会获得追加资格")}
-          {number("opportunity_v432_add_on_min_cost_ratio", "追加最低收益成本比", "默认 8 倍；防止手续费和滑点吞掉追加收益")}
-          {number("opportunity_v432_add_on_total_risk_cap_pct", "初始加追加总风险上限%", "默认 15%；这是绝对上限，不是每次都用满")}
-          {number("opportunity_v432_release_fallback_drawdown_pct", "当前版本自动回退回撤%", "默认 8%；触发后撤销连续仓位和追加，回到基础受限仓位")}
+          {toggle("opportunity_v432_continuous_sizing_enabled", "归档：V4.3.2 连续质量仓位", "仅供旧版本回放，不参与 V4.4 实盘")}
+          {number("opportunity_v432_initial_min_risk_pct", "归档：旧核心初始风险下限%", "仅供旧版本回放")}
+          {number("opportunity_v432_initial_max_risk_pct", "归档：旧核心初始风险上限%", "仅供旧版本回放")}
+          {toggle("opportunity_v432_add_on_enabled", "归档：旧版盈利追加", "V4.4 强制关闭；仅供旧版本回放")}
+          {number("opportunity_v432_add_on_min_confidence", "归档：旧版追加最低置信度", "仅供旧版本回放")}
+          {number("opportunity_v432_add_on_min_cost_ratio", "归档：旧版追加最低成本比", "仅供旧版本回放")}
+          {number("opportunity_v432_add_on_total_risk_cap_pct", "归档：旧版总风险上限%", "仅供旧版本回放")}
+          {number("opportunity_v432_release_fallback_drawdown_pct", "归档：旧版本回退回撤%", "V4.4 使用独立的 35% 版本暂停线")}
           {number("opportunity_v4_validated_risk_multiplier", "V4 已验证仓位倍率", "默认 1.0，仍受权益、信用和硬风控约束")}
           {number("opportunity_v4_decision_shadow_limit", "每轮决策样本上限", "默认 3；控制数据库与行情跟踪开销")}
           {number("opportunity_v4_exploration_shadow_limit", "每轮探索样本上限", "默认 6；从被拒机会中取代表样本，检查旧模型漏判")}
           {number("opportunity_v4_control_shadow_limit", "每轮对照样本上限", "默认 3；同机会运行简单突破基线")}
-          {number("opportunity_v4_admission_min_trades", "V4.3.2 核心受限准入样本", "默认 200 个事件级决策机会；按市场状态、方向、信号和入场阶段分组")}
+          {number("opportunity_v4_admission_min_trades", "归档：旧核心受限准入样本", "仅供旧版本回放；V4.4 不依赖旧样本准入")}
           {number("opportunity_v4_admission_min_profit_factor", "V4 同类最低 PF", "默认 1.10，且必须是扣费后结果")}
-          {number("opportunity_v4_admission_min_lower_expectancy_pct", "V4.3.2 核心保守净期望下限%", "默认 0%；考虑样本不确定性后的下界必须大于零")}
+          {number("opportunity_v4_admission_min_lower_expectancy_pct", "归档：旧核心保守净期望下限%", "仅供旧版本回放")}
           {number("opportunity_v41_validation_min_trades", "V4 核心标准实盘样本", "默认 500 个独立决策机会，并且需要跨时间块与币种")}
           {number("opportunity_v41_validation_min_profit_factor", "V4 核心标准实盘最低 PF", "默认 1.15，必须为扣费后 PF")}
           {number("opportunity_v41_provisional_risk_multiplier", "V4 核心受限准入倍率", "默认 0.7；达到 200 个正向同类样本后使用")}
@@ -1721,19 +1750,19 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("opportunity_v41_min_cost_ratio", "V4 核心最低毛利成本比", "默认 2.0 倍")}
           {toggle("opportunity_v41_medium_alignment_required", "要求中周期方向一致", "推荐开启；历史中方向一致样本显著更稳")}
           {toggle("strategy_canary_enabled", "新策略限次许可证", "精确绑定当前版本；不会绕过 5U 硬停止、交易所保护单、成本或流动性硬门")}
-          {toggle("strategy_canary_startup_cap_enabled", "新版本首日强制封顶", "默认开启；首 24 小时始终执行 0.70 倍、最多 5 个机会、2 次净亏停止")}
-          {text("strategy_canary_release_id", "许可证授权版本", "默认 extreme_v4_roll@v4.3.2；必须精确匹配")}
+          {toggle("strategy_canary_startup_cap_enabled", "新版本首日限次", "默认开启；V4.4 使用正常动态风险，但最多 6 个机会、3 次净亏后进入观察")}
+          {text("strategy_canary_release_id", "许可证授权版本", "默认 extreme_v4_roll@v4.4；必须精确匹配")}
           {number("strategy_canary_permit_hours", "许可证有效小时", "默认 24 小时")}
-          {number("strategy_canary_level_1_max_opportunities", "一级最多机会", "默认 5 次，倍率 0.70x；两次净亏损后撤销")}
+          {number("strategy_canary_level_1_max_opportunities", "一级最多机会", "默认 6 次，倍率 1.00x；风险仍受 15% 压力硬上限约束")}
           {number("strategy_canary_level_2_min_trades", "升二级所需实盘", "默认 3 笔且净收益为正、PF≥1.05")}
           {number("strategy_canary_level_3_min_trades", "升标准所需实盘", "默认 8 笔且净收益为正、PF≥1.15")}
-          {number("strategy_canary_max_losses", "试运行最大亏损笔数", "默认 2 笔；达到后进入观察，不是永久停用")}
+          {number("strategy_canary_max_losses", "试运行最大亏损笔数", "默认 3 笔；达到后进入 60 分钟观察，不是永久停用")}
           {number("strategy_canary_reissue_observation_minutes", "亏损后再签发观察分钟", "默认 60 分钟")}
           {number("strategy_canary_reissue_min_shadow_trades", "再签发新影子样本", "默认 8 笔且净收益为正")}
           {number("strategy_canary_reissue_min_symbols", "再签发最少币种", "默认 3 个")}
           {number("strategy_canary_reissue_min_profit_factor", "再签发影子 PF", "默认 1.15")}
-          {number("strategy_canary_reissue_multiplier", "再签发试单倍率", "默认 0.30x")}
-          {number("strategy_canary_reissue_max_opportunities", "再签发最多机会", "默认 2 次")}
+          {number("strategy_canary_reissue_multiplier", "再签发试单倍率", "V4.4 默认 1.00x；连续亏损状态仍把计划风险限制在 8%")}
+          {number("strategy_canary_reissue_max_opportunities", "再签发最多机会", "V4.4 默认 4 次；达到正向证据后可晋级，不会永久锁死")}
           {toggle("extreme_sprint_enabled", "开启 S0-S2 机会滚仓", "必须配合确认短语 ENABLE_EXTREME_SPRINT 才会生效；当前由 V4 排序")}
           {text("extreme_sprint_confirmation", "机会滚仓确认短语", "填写 ENABLE_EXTREME_SPRINT 后，增长模式才会启用")}
           {select("extreme_sprint_interval", "极限冲刺周期", intervalOptions)}

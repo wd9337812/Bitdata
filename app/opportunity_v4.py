@@ -15,7 +15,7 @@ from app.telemetry import connect, db_path
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.3.2"
+V4_FEATURE_SCHEMA = "v4.4"
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -377,7 +377,8 @@ def _liquidity_gate(
     }
 
 
-def _regime_policy(candidate: dict[str, Any]) -> dict[str, Any]:
+def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config or {}
     regime = _market_regime(candidate)
     direction = str(candidate.get("direction") or "").upper()
     structure = market_structure(candidate)
@@ -396,6 +397,23 @@ def _regime_policy(candidate: dict[str, Any]) -> dict[str, Any]:
             "exploration_scope": False,
             "trend_aligned": trend_aligned,
             "reason": "恐慌行情只记录影子，不在失序盘口追价",
+        }
+    v44_active = bool(
+        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.4")
+        and config.get("opportunity_v44_full_bet_enabled", True)
+    )
+    v44_structure = bool(
+        (setup_type == "pullback" and phase == "RETEST")
+        or setup_type in {"momentum", "prebreakout"}
+    )
+    if v44_active and trend_aligned and v44_structure and regime in {"quiet", "broad_up", "broad_down", "rotation"}:
+        return {
+            "scope": "v44_trend_aligned_full_bet",
+            "live_scope": True,
+            "canary_scope": True,
+            "exploration_scope": False,
+            "trend_aligned": True,
+            "reason": "V4.4 当前方向与中周期趋势一致，进入全仓短打候选通道",
         }
     if regime == "quiet" and direction == "LONG" and aligned and setup_type == "pullback" and phase == "RETEST":
         return {
@@ -491,6 +509,22 @@ def _regime_policy(candidate: dict[str, Any]) -> dict[str, Any]:
 
 
 def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2").lower()
+    if version.startswith("v4.4") and config.get("opportunity_v44_full_bet_enabled", True):
+        stop_atr = float(config.get("opportunity_v44_stop_atr", 0.85))
+        take_profit_r = float(config.get("opportunity_v44_take_profit_r", 1.05))
+        return {
+            "entry_phase": _entry_phase(candidate),
+            "profile": "s0_full_bet_v44",
+            "stop_atr": stop_atr,
+            "take_profit_atr": stop_atr * take_profit_r,
+            "max_hold_bars": int(config.get("opportunity_v44_max_hold_bars", 6)),
+            "fast_invalid_atr": stop_atr * 0.45,
+            "break_even_trigger_atr": stop_atr
+            * float(config.get("opportunity_v44_break_even_trigger_r", 0.45)),
+            "trailing_trigger_atr": stop_atr * 0.85,
+            "trailing_distance_atr": stop_atr * 0.50,
+        }
     phase = _entry_phase(candidate)
     prefix = "retest" if phase == "RETEST" else "armed" if phase == "ARMED" else "triggered"
     return {
@@ -607,6 +641,66 @@ def continuous_position_confidence(opportunity: dict[str, Any], config: dict[str
     }
 
 
+def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    lane = str(opportunity.get("admission_lane") or "shadow_only")
+    admitted = bool(opportunity.get("admitted"))
+    if lane != "full_bet" or not admitted:
+        return {
+            "enabled": True,
+            "applied": False,
+            "method": "s0_full_bet_v44",
+            "lane": lane,
+            "confidence": 0.0,
+            "display_label": "仅影子观察",
+            "target_initial_risk_pct": None,
+            "add_on_eligible": False,
+            "reason": "V4.4 只对通过相对排名和三重确认的 S0 候选计算全仓风险",
+        }
+
+    rank_floor = float(config.get("opportunity_v44_min_rank_percentile", 0.80))
+    rank = float(opportunity.get("rank_percentile") or 0.0)
+    rank_component = _clamp((rank - rank_floor) / max(1.0 - rank_floor, 0.000001), 0.0, 1.0)
+    confirmations = int(opportunity.get("v44_confirmations") or 0)
+    required = int(config.get("opportunity_v44_min_confirmations", 3))
+    confirmation_component = _clamp((confirmations - required) / max(5 - required, 1), 0.0, 1.0)
+    cost_ratio = float(opportunity.get("cost_ratio") or 0.0)
+    cost_floor = float(config.get("opportunity_v44_min_cost_ratio", 1.50))
+    cost_component = _clamp((cost_ratio - cost_floor) / max(8.0 - cost_floor, 0.000001), 0.0, 1.0)
+    lower = float(opportunity.get("lower_expected_net_pct") or 0.0)
+    lower_floor = float(config.get("opportunity_v44_min_lower_expectancy_pct", -0.05))
+    lower_component = _clamp((lower - lower_floor) / max(0.15 - lower_floor, 0.000001), 0.0, 1.0)
+    liquidity_component = 1.0 if (opportunity.get("liquidity_gate") or {}).get("passed") else 0.0
+    confidence = _clamp(
+        rank_component * 0.35
+        + confirmation_component * 0.25
+        + cost_component * 0.20
+        + lower_component * 0.10
+        + liquidity_component * 0.10,
+        0.0,
+        1.0,
+    )
+    minimum_risk = float(config.get("opportunity_v44_min_risk_pct", 8.0))
+    maximum_risk = max(minimum_risk, float(config.get("opportunity_v44_max_risk_pct", 15.0)))
+    target = minimum_risk + (maximum_risk - minimum_risk) * confidence
+    return {
+        "enabled": True,
+        "applied": True,
+        "method": "s0_full_bet_v44",
+        "lane": lane,
+        "confidence": round(confidence, 6),
+        "display_label": "全仓强机会" if confidence >= 0.65 else "全仓机会",
+        "components": {
+            "relative_rank": round(rank_component, 6),
+            "confirmations": round(confirmation_component, 6),
+            "cost_efficiency": round(cost_component, 6),
+            "conservative_expectancy": round(lower_component, 6),
+            "liquidity": round(liquidity_component, 6),
+        },
+        "target_initial_risk_pct": round(target, 6),
+        "configured_initial_range_pct": [round(minimum_risk, 6), round(maximum_risk, 6)],
+        "add_on_eligible": False,
+        "reason": "按本轮相对排名、五项确认、成本效率和流动性连续计算 8%-15% 计划风险",
+    }
 def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[str, Any]]:
     if not config.get("opportunity_v4_enabled", True):
         return candidates
@@ -629,6 +723,13 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
     min_symbols = int(config.get("opportunity_v41_validation_min_symbols", 3))
     prior_trades = float(config.get("opportunity_v41_empirical_prior_trades", 40))
     version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
+    v44_active = bool(version.lower().startswith("v4.4") and config.get("opportunity_v44_full_bet_enabled", True))
+    v44_rank = float(config.get("opportunity_v44_min_rank_percentile", 0.80))
+    v44_quality = float(config.get("opportunity_v44_min_quality_score", 52.0)) / 100
+    v44_expected = float(config.get("opportunity_v44_min_expected_net_pct", 0.02))
+    v44_lower = float(config.get("opportunity_v44_min_lower_expectancy_pct", -0.05))
+    v44_cost_ratio = float(config.get("opportunity_v44_min_cost_ratio", 1.50))
+    v44_confirmations_required = int(config.get("opportunity_v44_min_confirmations", 3))
     decision_limit = int(config.get("opportunity_v4_decision_shadow_limit", 3))
     bootstrap_rank = float(config.get("opportunity_v4_bootstrap_min_rank_percentile", 0.85))
     bootstrap_quality = float(config.get("opportunity_v4_bootstrap_min_quality_score", 58.0)) / 100
@@ -707,7 +808,7 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         ) * empirical_weight
         execution = candidate.get("execution_filter") or {}
         executable = not execution.get("enabled") or bool(execution.get("executable"))
-        policy = _regime_policy(candidate)
+        policy = _regime_policy(candidate, config)
         structure = market_structure(candidate)
         setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
         medium_aligned = bool(structure.get("medium_trend_aligned"))
@@ -715,7 +816,7 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         cost_ok = model["cost_ratio"] >= min_cost_ratio
         blended_model_ok = expected >= min_expected and lower > min_lower
         shadow_eligible = bool(setup_type != "unknown" and model["reward_pct"] > model["cost_pct"])
-        evidence_risk_multiplier = _direction_evidence_multiplier(evidence, config)
+        evidence_risk_multiplier = 1.0 if v44_active else _direction_evidence_multiplier(evidence, config)
         local_circuit = candidate_local_circuit_status(
             candidate,
             loaded_evidence,
@@ -727,6 +828,7 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         provisional_liquidity = _liquidity_gate(candidate, config, provisional_risk * evidence_risk_multiplier)
         canary_liquidity = _liquidity_gate(candidate, config, bootstrap_risk * evidence_risk_multiplier)
         exploration_liquidity = _liquidity_gate(candidate, config, exploration_risk * evidence_risk_multiplier)
+        full_bet_liquidity = _liquidity_gate(candidate, config, 1.0)
         common_gates = executable and alignment_ok and cost_ok and blended_model_ok and not negative_evidence
         validated = bool(
             live_enabled
@@ -771,6 +873,15 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
                 features["medium_path"] >= 0.45,
             )
         )
+        v44_confirmations = sum(
+            (
+                features["volume_persistence"] >= 0.55,
+                features["directed_flow"] >= 0.55,
+                features["cross_sectional_strength"] >= 0.70,
+                features["medium_path"] >= 0.45 or bool(policy["trend_aligned"]),
+                features["anti_chase"] >= 0.60,
+            )
+        )
         momentum_confirmed = setup_type in {"momentum", "prebreakout"} and (
             momentum_confirmations >= exploration_confirmations_required
         )
@@ -802,6 +913,21 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             and executable
             and exploration_liquidity["passed"]
             and not negative_evidence
+        )
+        v44_scope = bool(policy["live_scope"] or policy["canary_scope"] or policy["exploration_scope"])
+        v44_admitted = bool(
+            v44_active
+            and live_enabled
+            and v44_scope
+            and setup_type != "unknown"
+            and rank >= v44_rank
+            and model["quality"] >= v44_quality
+            and expected >= v44_expected
+            and lower >= v44_lower
+            and model["cost_ratio"] >= v44_cost_ratio
+            and v44_confirmations >= v44_confirmations_required
+            and executable
+            and full_bet_liquidity["passed"]
         )
         permit_eligible = canary_eligible or exploration_admitted
         bootstrap_admitted = canary_eligible
@@ -839,12 +965,24 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             if exploring
             else canary_liquidity
         )
+        if v44_active:
+            validated = False
+            provisional = False
+            bootstrap_admitted = False
+            exploration_admitted = False
+            permit_eligible = v44_admitted
+            admitted = v44_admitted
+            admission_lane = "full_bet" if v44_admitted else "shadow_only"
+            lane_risk_multiplier = 1.0 if v44_admitted else 0.0
+            risk_multiplier = lane_risk_multiplier
+            exploring = False
+            selected_liquidity = full_bet_liquidity
         blockers: list[str] = []
-        applicable_rank = exploration_rank if exploring else bootstrap_rank
-        applicable_quality = exploration_quality if exploring else bootstrap_quality
-        applicable_expected = exploration_expected if exploring else min_expected
-        applicable_lower = exploration_lower if exploring else min_lower
-        applicable_cost_ratio = exploration_cost_ratio if exploring else min_cost_ratio
+        applicable_rank = v44_rank if v44_active else exploration_rank if exploring else bootstrap_rank
+        applicable_quality = v44_quality if v44_active else exploration_quality if exploring else bootstrap_quality
+        applicable_expected = v44_expected if v44_active else exploration_expected if exploring else min_expected
+        applicable_lower = v44_lower if v44_active else exploration_lower if exploring else min_lower
+        applicable_cost_ratio = v44_cost_ratio if v44_active else exploration_cost_ratio if exploring else min_cost_ratio
         if not policy["canary_scope"] and not policy["live_scope"] and not policy["exploration_scope"]:
             blockers.append(policy["reason"])
         if rank < applicable_rank:
@@ -861,9 +999,11 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             blockers.append(
                 f"受限探索确认不足：{momentum_confirmations}/{exploration_confirmations_required}，或回踩/突破结构未确认"
             )
-        if not exploring and not alignment_ok:
+        if v44_active and v44_confirmations < v44_confirmations_required:
+            blockers.append(f"V4.4 五项确认仅通过 {v44_confirmations}/{v44_confirmations_required}")
+        if not v44_active and not exploring and not alignment_ok:
             blockers.append("中周期方向未对齐")
-        if negative_evidence:
+        if negative_evidence and not v44_active:
             circuit_reason = str(local_circuit.get("reason") or "local_shadow_negative")
             blockers.append(
                 "同市场/方向/形态/阶段局部熔断：连续实盘净亏损"
@@ -881,7 +1021,9 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             )
 
         status = (
-            "validated"
+            "full_bet"
+            if v44_admitted
+            else "validated"
             if validated
             else "provisional"
             if provisional
@@ -926,9 +1068,12 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             "core_canary_eligible": canary_eligible,
             "bootstrap_admitted": bootstrap_admitted,
             "exploration_admitted": exploration_admitted,
+            "full_bet_admitted": v44_admitted,
             "admission_lane": admission_lane,
             "momentum_confirmations": momentum_confirmations,
             "momentum_confirmations_required": exploration_confirmations_required,
+            "v44_confirmations": v44_confirmations,
+            "v44_confirmations_required": v44_confirmations_required,
             "admitted": admitted,
             "passed": admitted,
             "risk_multiplier": round(risk_multiplier, 4),
@@ -948,7 +1093,17 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
                 else "；".join(blockers or ["继续积累 V4.3.2 事件级独立影子证据"])
             ),
         }
-        opportunity["position_confidence"] = continuous_position_confidence(opportunity, config)
+        if v44_active:
+            opportunity["reason"] = (
+                "V4.4 相对排名、五项确认、扣费后期望和流动性均达标，允许 S0 全仓短打"
+                if v44_admitted
+                else "；".join(blockers or ["继续积累 V4.4 当前版本影子证据"])
+            )
+        opportunity["position_confidence"] = (
+            v44_position_confidence(opportunity, config)
+            if v44_active
+            else continuous_position_confidence(opportunity, config)
+        )
         candidate["opportunity_v4"] = opportunity
         ranked.append((rank, candidate))
 

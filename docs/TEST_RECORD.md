@@ -369,3 +369,17 @@ This file tracks local verification for the two-stage futures system.
 - 版本权益回退锁此前已因 V4.3.2 自身高点回撤达到 8% 而触发。当前回撤虽已恢复到约 0%，锁仍按设计保留，因此连续仓位放大和追加暂时关闭；它不触发全局 `risk_off`，基础受限仓位和首日许可证仍可执行。
 - 部署后权益约 `21.9221U`，空仓、普通挂单 0、条件单 0；公共 WebSocket 150 币、4 条连接、451 个流，私有 WebSocket 在线。REST 当前约 `139/2400`、无冷却或 429，交易所时间偏差 `-141ms`。
 - Dashboard OpenAPI 与 5 个静态资源均为 HTTP 200；首页未携带 Basic Auth 返回 401，符合访问控制预期。近 10 分钟无 429/500/502、数据库锁、异常栈或错误日志。VPS 内存约 4GB，两个容器合计约 221MB，磁盘剩余约 14GB。
+
+## 2026-07-20 V4.4 S0 全仓短打本地验收
+
+- 新增 `s0_full_bet_v44` 独立 sizing：默认使用可用保证金 90%，按止损距离与 1.5 倍压力成本在 3x-10x 中动态选杠杆，单笔压力风险连续控制在 8%-15%。
+- 全仓只对已通过 `full_bet_admitted` 的 V4.4 S0 候选生效；旧版本、非 S0、未准入候选不会误触发。
+- 连续两次亏损后风险上限降至 8%；仍保留 5U 硬停止、单仓上限、交易所止盈止损、最小下单量、流动性、成本、限频和时间同步硬保护。
+- 取消 V4.3.2 同方向追加，换仓要求新增优势覆盖平旧仓和开新仓的手续费、滑点，并至少达到 `0.35R`。
+- 快速保护采用约 `0.85 ATR` 初始止损、`1.05R` 止盈、`0.45R` 保本触发和 6 根 K 线超时退出；实时失效退出保持 reduce-only。
+- 完整设计与上线边界归档于 `docs/v0.14.0-v44-s0-full-bet-2026-07-20.md`。
+- Python 编译：`python -m compileall -q app tests`，通过。
+- 完整后端：`python -m pytest -q`，`273 passed`。
+- 前端：`npm run build`，通过，生成 `index-Bm_8ODcQ.js` 等版本化生产资源。
+- 本地 HTTP：首页、OpenAPI、状态接口及 5 个版本化 JS/CSS 资源全部 HTTP 200；OpenAPI 版本 `0.14.0`。
+- `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
