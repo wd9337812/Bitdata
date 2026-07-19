@@ -358,3 +358,14 @@ This file tracks local verification for the two-stage futures system.
 - 本地 HTTP：首页、OpenAPI、状态接口和 5 个版本化 JS/CSS 资源全部 HTTP 200；OpenAPI 版本 `0.13.0`。
 - `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
 - 本机无可用 Bash/WSL，部署脚本将在 VPS 原生 Linux 环境执行 `bash -n` 复核。
+
+## 2026-07-19 V4.3.2 首日许可证修复与 VPS 验收
+
+- 状态机审计发现初版 V4.3.2 只在全局 `risk_off` 时应用试运行许可证，正常状态会显示 `not_required`，不符合“发布后首 24 小时始终封顶”的设计。修复后首日许可证优先于旧恢复许可证，并补齐持仓接管、平仓复位、两亏撤销、窗口到期和追加总风险缩放。
+- 修复提交 `dbd101a`；完整后端 `268 passed`，前端生产构建、配置模型、OpenAPI `0.13.0` 和 5 个版本化静态资源本地 HTTP 冒烟全部通过。
+- 部署前机器人在旧提交 `f81c703` 正常运行；先暂停 runner，再次查询 Binance 确认权益约 `21.9219U`、空仓、普通挂单 0、条件单 0，未主动平仓或撤单。配置与状态备份为 `/opt/bitdata/backups/v0.13.0-canary-20260719T122700Z`。
+- VPS 原生执行 `bash -n deploy.sh`、`bash -n ops/bitdata-maintenance.sh` 和容器重建，最终提交为 `dbd101a`；Dashboard 与 runner 均运行，未重启、未 OOM。
+- 首日许可证已自动签发：精确绑定 `extreme_v4_roll@v4.3.2`，状态 `waiting_candidate`，`0.70x`，已用 `0/5`，到期时间 `2026-07-20T12:27:15Z`；全局保护状态正常，机器人保持实盘运行。
+- 版本权益回退锁此前已因 V4.3.2 自身高点回撤达到 8% 而触发。当前回撤虽已恢复到约 0%，锁仍按设计保留，因此连续仓位放大和追加暂时关闭；它不触发全局 `risk_off`，基础受限仓位和首日许可证仍可执行。
+- 部署后权益约 `21.9221U`，空仓、普通挂单 0、条件单 0；公共 WebSocket 150 币、4 条连接、451 个流，私有 WebSocket 在线。REST 当前约 `139/2400`、无冷却或 429，交易所时间偏差 `-141ms`。
+- Dashboard OpenAPI 与 5 个静态资源均为 HTTP 200；首页未携带 Basic Auth 返回 401，符合访问控制预期。近 10 分钟无 429/500/502、数据库锁、异常栈或错误日志。VPS 内存约 4GB，两个容器合计约 221MB，磁盘剩余约 14GB。
