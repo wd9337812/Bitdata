@@ -446,7 +446,7 @@ def build_stage1_decision(
                     "mode": active_mode["mode"],
                     "strategy": active_mode["strategy"],
                     "entry_type": entry_type,
-                    "decision_reason": "V4.3.1 试运行许可证继续保留：当前候选未通过融合期望、局部证据、成本或流动性硬门",
+                    "decision_reason": "V4.3.2 试运行许可证继续保留：当前候选未通过融合期望、局部证据、成本或流动性硬门",
                     "primary_block_reason": canary_reason,
                     "performance_guard": performance_guard,
                     "protection_plan": protection_plan,

@@ -71,6 +71,31 @@ def test_cancel_algo_order_uses_only_supported_identifier(monkeypatch):
     }
 
 
+def test_quantity_algo_stop_can_be_reduce_only_for_safe_bridge(monkeypatch):
+    captured = {}
+
+    def fake_signed_request(self, method, path, params=None):
+        captured.update({"method": method, "path": path, "params": params})
+        return {"algoId": 7}
+
+    monkeypatch.setattr(BinanceFuturesClient, "signed_request", fake_signed_request)
+
+    BinanceFuturesClient().place_algo_order(
+        symbol="BTCUSDT",
+        side="SELL",
+        order_type="STOP_MARKET",
+        trigger_price=100,
+        close_position=False,
+        quantity=0.01,
+        reduce_only=True,
+    )
+
+    assert captured["path"] == "/fapi/v1/algoOrder"
+    assert captured["params"]["quantity"] == 0.01
+    assert captured["params"]["reduceOnly"] == "true"
+    assert "closePosition" not in captured["params"]
+
+
 def test_public_request_registers_rate_limit(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
 

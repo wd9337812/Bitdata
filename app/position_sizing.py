@@ -171,6 +171,16 @@ def effective_position_risk(
     guard = guard or {}
     target = target or {}
     raw_risk = max(0.0, float(candidate_risk_pct))
+    v4 = candidate.get("opportunity_v4") or {}
+    position_confidence = v4.get("position_confidence") or {}
+    continuous_target = position_confidence.get("target_initial_risk_pct")
+    release_fallback_active = bool(config.get("_release_fallback_active"))
+    continuous_applied = bool(
+        position_confidence.get("applied")
+        and continuous_target is not None
+        and not release_fallback_active
+    )
+    sizing_input_risk = max(0.0, float(continuous_target)) if continuous_applied else raw_risk
     tier = signal_strength_tier(candidate)
     guard_multiplier = max(0.0, float(guard.get("risk_multiplier", 1.0)))
     target_multiplier = max(0.0, float(target.get("effective_risk_multiplier", 1.0)))
@@ -180,7 +190,7 @@ def effective_position_risk(
         guard_floor = float(config.get(f"effective_guard_{tier}_min_multiplier", 0.2))
         guard_multiplier = max(guard_multiplier, guard_floor)
         risk_floor = float(config.get(f"effective_{tier}_min_risk_pct", 0.0))
-    calculated = raw_risk * guard_multiplier * target_multiplier
+    calculated = sizing_input_risk * guard_multiplier * target_multiplier
     yolo_profile = yolo_scalp_execution_profile(candidate, config) if mode == "yolo_scalp" else {"enabled": False}
     scalp_tier = extreme_scalp_tier(candidate, config) if mode in {"extreme_sprint", "yolo_scalp"} else "none"
     scalp_multiplier = 1.0
@@ -194,10 +204,14 @@ def effective_position_risk(
         scalp_tier = str(yolo_profile.get("tier") or scalp_tier)
         scalp_multiplier *= float(yolo_profile.get("risk_multiplier") or 1.0)
     calculated *= scalp_multiplier
-    final_risk = max(calculated, risk_floor) if raw_risk > 0 else 0.0
-    if yolo_profile.get("enabled") and raw_risk > 0:
+    final_risk = max(calculated, risk_floor) if sizing_input_risk > 0 else 0.0
+    if yolo_profile.get("enabled") and sizing_input_risk > 0:
         final_risk = max(final_risk, float(yolo_profile.get("min_risk_pct") or 0.0))
-    max_risk = float(config.get(f"effective_{tier}_max_risk_pct", raw_risk or final_risk))
+    max_risk = float(config.get(f"effective_{tier}_max_risk_pct", sizing_input_risk or final_risk))
+    if continuous_applied:
+        # V4.3.2 uses its own continuous range rather than the legacy score-tier
+        # caps. The stage route remains the final hard ceiling below.
+        max_risk = max(max_risk, float(config.get("opportunity_v432_initial_max_risk_pct", 7.5)))
     if scalp_tier != "none":
         key_prefix = "yolo_scalp" if mode == "yolo_scalp" else "extreme_scalp"
         scalp_cap = float(config.get(f"{key_prefix}_max_risk_pct", config.get("extreme_scalp_max_risk_pct", 18.0)))
@@ -212,7 +226,7 @@ def effective_position_risk(
         final_risk = min(final_risk, max_risk)
     performance = candidate.get("global_performance_guard") or {}
     performance_multiplier = max(0.0, min(1.0, float(performance.get("risk_multiplier", 1.0))))
-    performance_cap = raw_risk * performance_multiplier
+    performance_cap = sizing_input_risk * performance_multiplier
     performance_mode = "multiplier"
     if str(performance.get("status") or "").startswith(("recovery_", "strategy_canary_")):
         # Recovery and drawdown protection are independent absolute caps. Multiplying
@@ -226,6 +240,11 @@ def effective_position_risk(
         "scalp_tier": scalp_tier,
         "scalp_multiplier": round(scalp_multiplier, 6),
         "candidate_risk_pct": round(raw_risk, 8),
+        "continuous_quality_applied": continuous_applied,
+        "release_fallback_active": release_fallback_active,
+        "continuous_confidence": round(float(position_confidence.get("confidence") or 0.0), 6),
+        "continuous_target_risk_pct": round(sizing_input_risk, 8),
+        "continuous_display_label": position_confidence.get("display_label"),
         "guard_multiplier": round(guard_multiplier, 6),
         "guard_floor": round(guard_floor, 6),
         "target_multiplier": round(target_multiplier, 6),
@@ -236,6 +255,14 @@ def effective_position_risk(
         "performance_cap_pct": round(performance_cap, 6),
         "performance_mode": performance_mode,
         "final_risk_pct": round(final_risk, 8),
+        "risk_chain": {
+            "stage_risk_pct": round(float((config.get("_stage_route") or {}).get("risk_pct") or raw_risk), 8),
+            "channel_risk_pct": round(raw_risk, 8),
+            "continuous_quality_risk_pct": round(sizing_input_risk, 8),
+            "guard_and_target_risk_pct": round(calculated, 8),
+            "license_or_performance_cap_pct": round(performance_cap, 8),
+            "final_risk_pct": round(final_risk, 8),
+        },
         "yolo_scalp_profile": yolo_profile,
     }
 

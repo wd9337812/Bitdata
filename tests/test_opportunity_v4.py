@@ -115,7 +115,7 @@ def test_v4_live_selector_ignores_v3_tier_and_applies_admission_risk_once():
     assert selected["passed"] is True
     assert selected["strategy_family"] == "extreme_v4_roll"
     assert "legacy_v3_quality" not in selected
-    assert selected["symbol_quality"]["tier"] == "V4.3.1-CORE-CANARY"
+    assert selected["symbol_quality"]["tier"] == "V4.3.2-CORE-CANARY"
     assert selected["risk_pct"] == 4.0
     assert selected["quality_risk_multiplier"] == 1.0
     assert selected["risk_adjustment"]["multiplier"] == 1.0

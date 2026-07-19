@@ -7,7 +7,7 @@ from app.binance_client import BinanceFuturesClient
 from app.binance_rate import request_priority
 from app.exchange_filters import ExchangeFilters
 from app.market_stream import stream_depth
-from app.protection_audit import enrich_positions_with_prices
+from app.protection_audit import audit_position_protection, enrich_positions_with_prices
 from app.risk import live_trading_allowed
 from app.state_store import save_state
 from app.strategy import atr
@@ -158,21 +158,151 @@ def _replace_dynamic_stop(
             "current_stop": current,
             "desired_stop": desired,
         }
-    if any(_algo_closes_position(order) for order in stops):
-        # Binance rejects a second same-direction closePosition stop with -4130,
-        # and the algo API has no atomic amend operation. Keep the confirmed hard
-        # stop instead of creating a cancellation gap during a synthetic replace.
-        return {
-            **action,
-            "executed": False,
-            "management_status": "exchange_atomic_replace_unavailable",
-            "current_stop": current,
-            "desired_stop": desired,
-        }
     close_side = "BUY" if is_short else "SELL"
     position_side = str(position.get("positionSide") or "").upper()
     if position_side not in {"LONG", "SHORT"}:
         position_side = None
+    if any(_algo_closes_position(order) for order in stops):
+        # Binance conditional orders cannot be amended. In one-way mode a
+        # confirmed reduce-only quantity stop can bridge the replace without a
+        # protection gap. Hedge mode cannot use reduceOnly, so it deliberately
+        # keeps the old closePosition stop and skips the add-on path.
+        if position_side is not None:
+            return {
+                **action,
+                "executed": False,
+                "management_status": "exchange_atomic_replace_unavailable_hedge_mode",
+                "current_stop": current,
+                "desired_stop": desired,
+            }
+        quantity = filters.quantity(symbol, abs(_position_amount(position)))
+        if quantity <= 0:
+            return {
+                **action,
+                "executed": False,
+                "management_status": "bridge_quantity_invalid",
+                "current_stop": current,
+                "desired_stop": desired,
+            }
+        bridge_order = client.place_algo_order(
+            symbol=symbol,
+            side=close_side,
+            order_type="STOP_MARKET",
+            trigger_price=desired,
+            close_position=False,
+            quantity=quantity,
+            reduce_only=True,
+        )
+        bridge_matches = [
+            order
+            for order in client.open_algo_orders(symbol)
+            if _algo_type(order) == "STOP_MARKET"
+            and not _algo_closes_position(order)
+            and abs(_algo_trigger(order) - desired) <= max(abs(desired) * 0.000001, 0.00000001)
+        ]
+        if not bridge_matches:
+            return {
+                **action,
+                "executed": False,
+                "management_status": "bridge_stop_not_confirmed",
+                "current_stop": current,
+                "desired_stop": desired,
+                "bridge_order": bridge_order,
+            }
+        bridge_id = _algo_id(bridge_matches[-1])
+        cancelled: list[int | str] = []
+        cancel_errors: list[str] = []
+        for order in stops:
+            old_id = _algo_id(order)
+            if old_id is None or old_id == bridge_id:
+                continue
+            try:
+                client.cancel_algo_order(old_id)
+                cancelled.append(old_id)
+            except Exception as exc:
+                cancel_errors.append(str(exc))
+        if cancel_errors:
+            if bridge_id is not None:
+                try:
+                    client.cancel_algo_order(bridge_id)
+                except Exception:
+                    pass
+            return {
+                **action,
+                "executed": False,
+                "management_status": "old_stop_cancel_failed_bridge_removed",
+                "current_stop": current,
+                "desired_stop": desired,
+                "bridge_order": bridge_order,
+                "cancelled_algo_ids": cancelled,
+                "cancel_errors": cancel_errors,
+            }
+        final_order = client.place_algo_order(
+            symbol=symbol,
+            side=close_side,
+            order_type="STOP_MARKET",
+            trigger_price=desired,
+            close_position=True,
+        )
+        final_matches = [
+            order
+            for order in client.open_algo_orders(symbol)
+            if _algo_type(order) == "STOP_MARKET"
+            and _algo_closes_position(order)
+            and abs(_algo_trigger(order) - desired) <= max(abs(desired) * 0.000001, 0.00000001)
+        ]
+        if not final_matches:
+            # The confirmed reduce-only bridge remains active. Do not add to the
+            # position until a full closePosition stop can be confirmed.
+            return {
+                **action,
+                "executed": False,
+                "management_status": "bridge_stop_retained_final_unconfirmed",
+                "current_stop": current,
+                "desired_stop": desired,
+                "bridge_order": bridge_order,
+                "final_order": final_order,
+                "cancelled_algo_ids": cancelled,
+            }
+        final_id = _algo_id(final_matches[-1])
+        bridge_cancelled = False
+        if bridge_id is not None:
+            try:
+                client.cancel_algo_order(bridge_id)
+                bridge_cancelled = True
+            except Exception as exc:
+                # Both orders are reduce-only/close-position in one-way mode, so
+                # they cannot reverse the account. Still skip adding until the
+                # duplicate bridge can be cleaned up.
+                return {
+                    **action,
+                    "executed": False,
+                    "management_status": "final_confirmed_bridge_cleanup_pending",
+                    "current_stop": current,
+                    "desired_stop": desired,
+                    "bridge_order": bridge_order,
+                    "final_order": final_order,
+                    "final_algo_id": final_id,
+                    "bridge_cancel_error": str(exc),
+                }
+        tracked_item.update(
+            {
+                "managed_stop": desired,
+                "last_stop_adjustment_at": _now().isoformat(),
+                "last_stop_action": action.get("action"),
+            }
+        )
+        return {
+            **action,
+            "executed": True,
+            "management_status": "stop_tightened_with_reduce_only_bridge",
+            "previous_stop": current,
+            "desired_stop": desired,
+            "bridge_order": bridge_order,
+            "new_order": final_order,
+            "bridge_cancelled": bridge_cancelled,
+            "cancelled_algo_ids": cancelled,
+        }
     new_order = client.place_algo_order(
         symbol=symbol,
         side=close_side,
@@ -216,6 +346,275 @@ def _replace_dynamic_stop(
         "cancelled_algo_ids": cancelled,
         "cancel_errors": cancel_errors,
     }
+
+
+def build_v432_add_on_plan(
+    position: dict[str, Any],
+    action: dict[str, Any],
+    tracked_item: dict[str, Any],
+    account: dict[str, Any],
+    config: dict[str, Any],
+    filters: ExchangeFilters,
+    release_guard: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build one protected V4.3.2 add-on without changing exchange state."""
+    symbol = _position_symbol(position)
+    mark = float(action.get("mark") or _mark_price(position) or 0.0)
+    stop = float(action.get("desired_stop") or tracked_item.get("managed_stop") or 0.0)
+    strategy_version = str(tracked_item.get("strategy_version") or "")
+    confidence = tracked_item.get("position_confidence") or {}
+    release_guard = release_guard or {}
+    blockers: list[str] = []
+    if not config.get("opportunity_v432_add_on_enabled", True):
+        blockers.append("add_on_disabled")
+    if not config.get("opportunity_v432_add_on_live_enabled", True):
+        blockers.append("add_on_live_disabled")
+    if not strategy_version.startswith("v4.3.2"):
+        blockers.append("strategy_version_mismatch")
+    if not bool(confidence.get("add_on_eligible")):
+        blockers.append("initial_opportunity_not_eligible")
+    if tracked_item.get("add_on_attempted") or tracked_item.get("add_on_executed"):
+        blockers.append("add_on_already_executed")
+    if action.get("action") not in {"move_break_even", "trail_stop"} or not action.get("executed"):
+        blockers.append("break_even_stop_not_confirmed")
+    if not str(action.get("management_status") or "").startswith("stop_tightened"):
+        blockers.append("full_stop_not_confirmed")
+    if float(action.get("pnl_pct") or 0.0) < float(config.get("opportunity_v432_add_on_trigger_atr", 0.55)) * float(
+        action.get("atr_pct") or 0.0
+    ):
+        blockers.append("favorable_move_insufficient")
+    direction = str(action.get("direction") or "LONG")
+    entry = float(action.get("entry") or _entry_price(position) or 0.0)
+    buffer_pct = float(config.get("protection_break_even_buffer_pct", 0.08)) / 100
+    break_even_with_cost = entry * (1 - buffer_pct) if direction == "SHORT" else entry * (1 + buffer_pct)
+    stop_locks_cost = stop <= break_even_with_cost if direction == "SHORT" else stop >= break_even_with_cost
+    if entry <= 0 or not stop_locks_cost:
+        blockers.append("stop_not_at_break_even_plus_cost")
+    fallback_drawdown = float(config.get("opportunity_v432_release_fallback_drawdown_pct", 8.0))
+    release_drawdown = float(release_guard.get("drawdown_pct") or 0.0)
+    if release_guard.get("fallback_active") or release_drawdown >= fallback_drawdown:
+        blockers.append("release_drawdown_fallback")
+    equity = float(account.get("equity") or 0.0)
+    hard_stop = float(config.get("hard_stop_equity", 5.0))
+    if equity <= hard_stop:
+        blockers.append("hard_stop_equity")
+    if mark <= 0 or stop <= 0 or abs(mark - stop) <= 0:
+        blockers.append("price_or_stop_missing")
+
+    initial_risk = max(0.0, float(tracked_item.get("initial_risk_pct") or 0.0))
+    total_cap = min(
+        15.0,
+        max(0.0, float(config.get("opportunity_v432_add_on_total_risk_cap_pct", 15.0))),
+    )
+    remaining_risk = max(0.0, total_cap - initial_risk)
+    if remaining_risk < float(config.get("opportunity_v432_add_on_min_risk_budget_pct", 0.5)):
+        blockers.append("risk_budget_exhausted")
+    current_quantity = abs(_position_amount(position))
+    initial_quantity = max(0.0, float(tracked_item.get("initial_quantity") or current_quantity))
+    if current_quantity <= 0 or initial_quantity <= 0:
+        blockers.append("position_quantity_missing")
+    if blockers:
+        return {
+            "enabled": True,
+            "allowed": False,
+            "symbol": symbol,
+            "blockers": blockers,
+            "initial_risk_pct": round(initial_risk, 6),
+            "remaining_risk_budget_pct": round(remaining_risk, 6),
+            "total_risk_cap_pct": round(total_cap, 6),
+        }
+
+    distance = abs(mark - stop)
+    quantity_by_risk = equity * remaining_risk / 100 / distance
+    quantity_by_initial = initial_quantity * float(config.get("opportunity_v432_add_on_max_initial_quantity_ratio", 0.75))
+    leverage = max(1.0, float(tracked_item.get("leverage") or config.get("stage_s0_max_leverage", 5)))
+    available = max(0.0, float(account.get("available_balance") or 0.0))
+    quantity_by_margin = available * leverage * 0.90 / mark
+    quantity = filters.quantity(symbol, min(quantity_by_risk, quantity_by_initial, quantity_by_margin))
+    notional = quantity * mark
+    min_notional = max(
+        filters.min_notional(symbol),
+        float(config.get("effective_min_order_notional_usdt", 10.0)),
+    )
+    if quantity <= 0 or notional < min_notional:
+        blockers.append("below_minimum_notional")
+    add_on_risk_pct = quantity * distance / equity * 100 if equity > 0 else 0.0
+    return {
+        "enabled": True,
+        "allowed": not blockers,
+        "symbol": symbol,
+        "direction": direction,
+        "quantity": quantity,
+        "notional": round(notional, 8),
+        "mark": mark,
+        "confirmed_stop": stop,
+        "initial_quantity": initial_quantity,
+        "current_quantity": current_quantity,
+        "initial_risk_pct": round(initial_risk, 6),
+        "add_on_risk_pct": round(add_on_risk_pct, 6),
+        "total_nominal_risk_pct": round(initial_risk + add_on_risk_pct, 6),
+        "remaining_risk_budget_pct": round(remaining_risk, 6),
+        "total_risk_cap_pct": round(total_cap, 6),
+        "release_drawdown_pct": round(release_drawdown, 6),
+        "blockers": blockers,
+    }
+
+
+def _find_live_position(
+    rows: list[dict[str, Any]],
+    symbol: str,
+    direction: str,
+) -> dict[str, Any] | None:
+    for row in rows:
+        if _position_symbol(row) != symbol.upper() or abs(_position_amount(row)) <= 0:
+            continue
+        row_side = str(row.get("positionSide") or "").upper()
+        row_direction = row_side if row_side in {"LONG", "SHORT"} else ("LONG" if _position_amount(row) > 0 else "SHORT")
+        if row_direction == direction.upper():
+            return row
+    return None
+
+
+def _execute_v432_add_on(
+    client: BinanceFuturesClient,
+    filters: ExchangeFilters,
+    position: dict[str, Any],
+    action: dict[str, Any],
+    tracked_item: dict[str, Any],
+    account: dict[str, Any],
+    config: dict[str, Any],
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    plan = build_v432_add_on_plan(
+        position,
+        action,
+        tracked_item,
+        account,
+        config,
+        filters,
+        release_guard=state.get("strategy_release_equity_guard") or {},
+    )
+    if not plan.get("allowed"):
+        return plan
+    symbol = str(plan["symbol"])
+    direction = str(plan["direction"])
+    quantity = float(plan["quantity"])
+    confirmed_stop = float(plan.get("confirmed_stop") or 0.0)
+    full_stop_confirmed = any(
+        _algo_type(order) == "STOP_MARKET"
+        and _algo_closes_position(order)
+        and abs(_algo_trigger(order) - confirmed_stop) <= max(abs(confirmed_stop) * 0.000001, 0.00000001)
+        for order in client.open_algo_orders(symbol)
+    )
+    if not full_stop_confirmed:
+        return {
+            **plan,
+            "allowed": False,
+            "executed": False,
+            "status": "full_close_position_stop_not_confirmed",
+            "blockers": [*(plan.get("blockers") or []), "full_close_position_stop_not_confirmed"],
+        }
+    entry_side = "BUY" if direction == "LONG" else "SELL"
+    close_side = "SELL" if direction == "LONG" else "BUY"
+    position_side = str(position.get("positionSide") or "").upper()
+    if position_side not in {"LONG", "SHORT"}:
+        position_side = None
+    original_quantity = abs(_position_amount(position))
+    tracked_item.update(
+        {
+            "add_on_attempted": True,
+            "add_on_attempted_at": _now().isoformat(),
+        }
+    )
+    runtime_positions = state.get("runtime_protection_positions")
+    if isinstance(runtime_positions, dict) and any(item is tracked_item for item in runtime_positions.values()):
+        # Persist the one-shot guard before sending the market order. If the
+        # process or the follow-up position query fails, a restart cannot issue
+        # the same add-on a second time.
+        save_state({"runtime_protection_positions": runtime_positions})
+    order = client.place_market_order(symbol, entry_side, quantity, position_side=position_side)
+    refreshed_rows = client.position_risk()
+    refreshed = _find_live_position(refreshed_rows, symbol, direction)
+    refreshed_quantity = abs(_position_amount(refreshed or {}))
+    filled_quantity = max(0.0, refreshed_quantity - original_quantity)
+    if filled_quantity <= 0:
+        try:
+            filled_quantity = float(order.get("executedQty") or order.get("origQty") or 0.0)
+        except (AttributeError, TypeError, ValueError):
+            filled_quantity = 0.0
+    filled_quantity = filters.quantity(symbol, filled_quantity)
+    if refreshed is not None:
+        refreshed = enrich_positions_with_prices([refreshed], refreshed_rows)[0]
+    audit = (
+        audit_position_protection(client, refreshed, config, filters=filters, repair=True)
+        if refreshed is not None
+        else {"protected": False, "status": "position_refresh_missing"}
+    )
+    protected = bool(audit.get("protected") or audit.get("repair_status") == "repaired")
+    if filled_quantity <= 0:
+        tracked_item.update(
+            {
+                "add_on_executed": True,
+                "add_on_executed_at": _now().isoformat(),
+                "add_on_fill_unconfirmed": True,
+                "add_on_quantity": 0.0,
+                "add_on_risk_pct": plan.get("add_on_risk_pct"),
+                "total_nominal_risk_pct": plan.get("total_nominal_risk_pct"),
+            }
+        )
+        result = {
+            **plan,
+            "allowed": False,
+            "executed": False,
+            "status": "add_on_fill_unconfirmed_repeat_blocked",
+            "blockers": [*(plan.get("blockers") or []), "add_on_fill_unconfirmed_repeat_blocked"],
+            "order": order,
+            "filled_quantity": 0.0,
+            "protection_audit": audit,
+        }
+        record_event("error", "v432_add_on", "追加仓位成交量无法确认，已锁定本次追加资格防止重复加仓", result)
+        return result
+    if not protected:
+        rollback = None
+        if filled_quantity > 0:
+            rollback = client.place_market_order(
+                symbol,
+                close_side,
+                filled_quantity,
+                reduce_only=position_side is None,
+                position_side=position_side,
+            )
+        result = {
+            **plan,
+            "allowed": False,
+            "executed": False,
+            "status": "protection_failed_add_on_rolled_back",
+            "order": order,
+            "filled_quantity": filled_quantity,
+            "protection_audit": audit,
+            "rollback_order": rollback,
+        }
+        record_event("error", "v432_add_on", "追加仓位保护确认失败，已仅撤回新增数量", result)
+        return result
+    tracked_item.update(
+        {
+            "add_on_executed": True,
+            "add_on_executed_at": _now().isoformat(),
+            "add_on_quantity": filled_quantity,
+            "add_on_risk_pct": plan.get("add_on_risk_pct"),
+            "total_nominal_risk_pct": plan.get("total_nominal_risk_pct"),
+        }
+    )
+    result = {
+        **plan,
+        "executed": True,
+        "status": "protected_add_on_executed",
+        "order": order,
+        "filled_quantity": filled_quantity,
+        "protection_audit": audit,
+    }
+    record_event("warning", "v432_add_on", "V4.3.2 保本保护确认后完成一次受限追加", result)
+    return result
 
 
 def build_runtime_protection_action(
@@ -358,6 +757,40 @@ def _manage_runtime_protection(
                     "runtime_protection",
                     f"dynamic stop management failed for {symbol}",
                     action,
+                    throttle_seconds=60,
+                )
+        if (
+            action.get("action") in {"move_break_even", "trail_stop"}
+            and action.get("executed")
+            and live_trading_allowed(config)
+            and config.get("opportunity_v432_add_on_enabled", True)
+        ):
+            if filters is None:
+                filters = ExchangeFilters(client.exchange_info())
+            try:
+                action["add_on"] = _execute_v432_add_on(
+                    client,
+                    filters,
+                    position,
+                    action,
+                    tracked_item,
+                    account,
+                    config,
+                    state,
+                )
+            except Exception as exc:
+                action["add_on"] = {
+                    "enabled": True,
+                    "allowed": False,
+                    "executed": False,
+                    "status": "add_on_error",
+                    "error": str(exc),
+                }
+                record_event_throttled(
+                    "error",
+                    "v432_add_on",
+                    f"V4.3.2 受保护追加失败：{symbol}",
+                    action["add_on"],
                     throttle_seconds=60,
                 )
         actions.append(action)

@@ -17,7 +17,7 @@ from app.local_circuit import record_v4_live_open
 from app.market_stream import start_market_stream_thread
 from app.opportunity_queue import read_opportunities
 from app.opportunity_v4 import V4_CONTROL_FAMILY, V4_STRATEGY_FAMILY
-from app.performance_guard import global_performance_guard
+from app.performance_guard import global_performance_guard, update_release_equity_guard
 from app.protection_audit import audit_account_protection
 from app.recovery_controller import consume_recovery_permit, revoke_recovery_permit
 from app.strategy_canary import consume_strategy_canary, revoke_strategy_canary
@@ -130,14 +130,24 @@ def set_rotation_cooldown(state: dict, symbol: str, minutes: float) -> None:
     save_state({"rotation_cooldowns": cooldowns})
 
 
-def track_runtime_position(decision: dict) -> None:
+def track_runtime_position(decision: dict, result: dict | None = None) -> None:
     symbol = str(decision.get("symbol") or "").upper()
     direction = str(decision.get("direction") or (decision.get("signal") or {}).get("signal") or "LONG").upper()
     if not symbol or direction not in {"LONG", "SHORT"}:
         return
     protection_plan = decision.get("protection_plan") or (decision.get("signal") or {}).get("protection_plan") or {}
     protection_profile = (decision.get("signal") or {}).get("protection_profile") or {}
-    strategy_family = str((decision.get("candidate") or {}).get("strategy_family") or decision.get("strategy_family") or "")
+    candidate = decision.get("candidate") or {}
+    strategy_family = str(candidate.get("strategy_family") or decision.get("strategy_family") or "")
+    opportunity_v4 = candidate.get("opportunity_v4") or {}
+    effective_risk = decision.get("effective_risk") or {}
+    entry_order = (result or {}).get("entry_order") or {}
+    initial_quantity = float(
+        entry_order.get("executedQty")
+        or entry_order.get("origQty")
+        or decision.get("quantity")
+        or 0.0
+    )
     tracked = dict(load_state().get("runtime_protection_positions") or {})
     tracked[f"{symbol}:{direction}"] = {
         "opened_at": datetime.now(timezone.utc).isoformat(),
@@ -145,10 +155,17 @@ def track_runtime_position(decision: dict) -> None:
         "max_hold_bars": protection_plan.get("max_hold_bars"),
         "max_hold_seconds": protection_profile.get("max_hold_seconds"),
         "strategy_family": strategy_family,
+        "strategy_version": str(opportunity_v4.get("strategy_version") or candidate.get("strategy_version") or ""),
         "protection_version": "v5_dynamic" if strategy_family in {"extreme_v3_roll", "extreme_v4_roll"} else protection_profile.get("protection_version"),
         "break_even_atr": protection_profile.get("break_even_atr"),
         "trailing_trigger_atr": protection_profile.get("trailing_trigger_atr"),
         "trailing_distance_atr": protection_profile.get("trailing_distance_atr"),
+        "initial_quantity": initial_quantity,
+        "initial_risk_pct": float(effective_risk.get("final_risk_pct") or decision.get("risk_pct") or 0.0),
+        "leverage": float(decision.get("leverage") or 1.0),
+        "position_confidence": dict(opportunity_v4.get("position_confidence") or {}),
+        "add_on_attempted": False,
+        "add_on_executed": False,
     }
     save_state({"runtime_protection_positions": tracked})
 
@@ -353,6 +370,10 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         return {"status": "hard_stopped", "hard_stop": hard_stop, "loop_seconds": loop_seconds_for(config, config.get("growth_mode"))}
     state = sync_stage(config, state, account)
     config = apply_stage_route(config, state.get("stage_route"))
+    release_equity_guard = update_release_equity_guard(config, account.get("equity"))
+    config["_strategy_release_equity_guard"] = release_equity_guard
+    config["_release_fallback_active"] = bool(release_equity_guard.get("fallback_active"))
+    state = {**state, "strategy_release_equity_guard": release_equity_guard}
     performance_status = global_performance_guard(config, account.get("equity"))
     maybe_sync_live_reaction(client, config, state, account, symbols_override)
     if not fast_lane:
@@ -462,7 +483,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         decision_count = 0
         exploration_count = 0
         control_count = 0
-        v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.3.1")
+        v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
         v4_shadow_role = "active" if config.get("opportunity_v4_live_enabled", False) else "challenger"
         v4_rows = list(scan.get("v4_candidates") or scan.get("candidates", []))
         decision_rows = [item for item in v4_rows if (item.get("opportunity_v4") or {}).get("decision_candidate")]
@@ -589,7 +610,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         record_v4_live_open(decision, result)
         consume_recovery_permit(decision, result)
         consume_strategy_canary(decision, result)
-        track_runtime_position(decision)
+        track_runtime_position(decision, result)
         cooldown_minutes = float(config.get("symbol_cooldown_minutes", 0))
         if config.get("directional_cooldown_enabled", True):
             set_symbol_direction_cooldown(

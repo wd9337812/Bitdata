@@ -47,7 +47,7 @@ def test_release_registry_and_legacy_migration(monkeypatch, tmp_path):
     assert row["release_id"] == "extreme_v31_challenger@v3.1"
     assert ("v3.2", "active") in roles
     assert ("v3.3-candidate", "archived") in roles
-    assert ("v4.3.1", "challenger") in roles
+    assert ("v4.3.2", "challenger") in roles
     assert ("v3.1-legacy", "archived") in roles
 
 

@@ -290,7 +290,7 @@ def candidate_local_circuit_status(
     *,
     state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    version = str(config.get("opportunity_v4_strategy_version") or "v4.3.1")
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
     release_id = f"extreme_v4_roll@{version}"
     state = state or local_circuit_state(release_id)
     key = cohort_key(candidate)

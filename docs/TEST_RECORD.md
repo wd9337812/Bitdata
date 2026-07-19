@@ -342,3 +342,18 @@ This file tracks local verification for the two-stage futures system.
 - 部署验收时 `BANKUSDT` 多单 120 张；止盈 `0.11488`、止损 `0.10798` 均为 Binance 端 `NEW`，保护审计为完整。未手工开仓、平仓、撤单或重建正常保护单。
 - 已从真实开仓日志回填局部组合 `quiet:LONG:pullback:RETEST`；多个并发扫描周期后字段仍保留，证明跨进程覆盖问题已修复。
 - 公共/私有 WebSocket 正常，REST 无冷却或 429，时间偏差 `-96ms`；Dashboard/API/静态资源全部 200；近端日志无 429/500/502、数据库锁、异常栈或错误。
+
+# v0.13.0 / V4.3.2 连续质量仓位与受保护追加（2026-07-19）
+
+- 执行模型：核心通道不再使用 A+/A/B 硬分层决定仓位，改为连续置信度映射 `4%-7.5%` 初始风险；受限探索不放大，原有方向证据、局部熔断、许可证、阶段上限和全局安全保护继续向下约束。
+- 受保护追加：仅在持仓顺向运行至少 `0.55 ATR`、交易所全仓止损已确认收紧到保本并覆盖成本后，允许同方向追加一次；初始与追加名义风险合计硬上限 `15%`。
+- 订单安全：一向持仓使用 `quantity + reduceOnly` 桥接止损原子替换全仓保护；双向持仓保留旧全仓保护，不进行无法原子保障的替换。市场追加成交量无法确认时会锁定本次追加资格，禁止下一轮重复加仓。
+- 发布金丝雀：精确绑定 `extreme_v4_roll@v4.3.2`，首 24 小时 `0.70x`、最多 5 个机会、2 次净亏损撤销。版本从自身权益高点回撤 8% 时只关闭连续放大和追加，回到基础仓位，不触发全局 `risk_off` 或强制冷却。
+- Binance 官方契约复核：USD-M `/fapi/v1/algoOrder` 的 `quantity` 不能与 `closePosition=true` 同传；`reduceOnly` 不能用于双向持仓，也不能与 `closePosition=true` 同传。实现按一向/双向模式分别处理。
+- Python 编译：`python -m compileall -q app tests`，通过。
+- 完整后端：`python -m pytest -q`，`264 passed`；仅保留本机 `requests` 依赖兼容警告。
+- 前端：`npm run build`，通过，生成 `index-InBUlm3H.js` 等版本化生产资源。
+- 配置模型：V4.3.2 精确版本及 15% 总风险硬上限校验通过。
+- 本地 HTTP：首页、OpenAPI、状态接口和 5 个版本化 JS/CSS 资源全部 HTTP 200；OpenAPI 版本 `0.13.0`。
+- `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
+- 本机无可用 Bash/WSL，部署脚本将于 VPS 原生 Linux 环境执行 `bash -n` 复核。

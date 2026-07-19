@@ -1852,11 +1852,11 @@ def _apply_v4_live_selection(
         signal["protection_profile"] = dict(v4["protection_profile"])
     result.update(
         {
-            "strategy": "opportunity_v43_adaptive_roll",
+            "strategy": "opportunity_v432_continuous_roll",
             "strategy_family": V4_STRATEGY_FAMILY,
-            "strategy_version": str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.3.1"),
+            "strategy_version": str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.3.2"),
             "strategy_role": "active",
-            "strategy_generation": "v4.3.1",
+            "strategy_generation": "v4.3.2",
             "signal": signal,
             "score": float(v4.get("score") or 0),
             "passed": admitted,
@@ -1868,15 +1868,15 @@ def _apply_v4_live_selection(
             "quality_risk_multiplier": 1.0,
             "v4_risk_multiplier": risk_multiplier,
             "quality_risk_reasons": [
-                "V4.3.1 已验证核心准入"
+                "V4.3.2 已验证核心准入"
                 if v4.get("validated")
-                else "V4.3.1 同状态核心准入"
+                else "V4.3.2 同状态核心准入"
                 if v4.get("provisional")
-                else "V4.3.1 核心限次试运行"
+                else "V4.3.2 核心限次试运行"
                 if v4.get("bootstrap_admitted")
-                else "V4.3.1 顺势受限探索"
+                else "V4.3.2 顺势受限探索"
                 if v4.get("exploration_admitted")
-                else "V4.3.1 仅影子观察"
+                else "V4.3.2 仅影子观察"
             ],
             "symbol_quality": {
                 "engine": "opportunity_v4",
@@ -1884,21 +1884,22 @@ def _apply_v4_live_selection(
                 "allowed": admitted,
                 "pool": "trade" if admitted else "observe",
                 "tier": (
-                    "V4.3.1-CORE"
+                    "V4.3.2-CORE"
                     if v4.get("validated")
-                    else "V4.3.1-CORE-LIMITED"
+                    else "V4.3.2-CORE-LIMITED"
                     if v4.get("provisional")
-                    else "V4.3.1-CORE-CANARY"
+                    else "V4.3.2-CORE-CANARY"
                     if v4.get("bootstrap_admitted")
-                    else "V4.3.1-EXPLORE"
+                    else "V4.3.2-EXPLORE"
                     if v4.get("exploration_admitted")
-                    else "V4.3.1-SHADOW"
+                    else "V4.3.2-SHADOW"
                 ),
                 "quality_risk_multiplier": risk_multiplier,
-                "quality_risk_reasons": [str(v4.get("reason") or "V4.3.1 独立排序")],
+                "quality_risk_reasons": [str(v4.get("reason") or "V4.3.2 独立排序")],
+                "continuous_position_confidence": v4.get("position_confidence") or {},
                 "simulation": {
                     "passed": None,
-                    "diagnostic": "V4.3.1 按核心、受限探索和影子三通道隔离事件级证据",
+                    "diagnostic": "V4.3.2 按核心、受限探索和影子三通道隔离事件级证据",
                 },
             },
             "symbol_pool": "trade" if admitted else "observe",
@@ -1909,6 +1910,7 @@ def _apply_v4_live_selection(
                 "rank_percentile": v4.get("rank_percentile"),
                 "evidence_status": v4.get("evidence_status"),
                 "admission_lane": v4.get("admission_lane"),
+                "position_confidence": v4.get("position_confidence") or {},
             },
         }
     )
@@ -2178,7 +2180,7 @@ def scan_growth_candidates(
                             "eligible": False,
                             "expected_profit_pct": expected,
                             "cost_ratio": expected / observed_cost_pct if observed_cost_pct > 0 else 999.0,
-                            "reason": "中性市场结构已生成，交由 V4.3.1 独立排序",
+                            "reason": "中性市场结构已生成，交由 V4.3.2 独立排序",
                         }
                         challenger = {"enabled": False, "reason": "旧 V3 实验已归档"}
                     tier = str(opportunity.get("tier") or "WATCH")
@@ -2806,7 +2808,7 @@ def scan_growth_candidates(
         "opportunity_v4": {
             "enabled": bool(config.get("opportunity_v4_enabled", True)),
             "strategy_family": V4_STRATEGY_FAMILY,
-            "strategy_version": str(config.get("opportunity_v4_strategy_version") or "v4.3.1"),
+            "strategy_version": str(config.get("opportunity_v4_strategy_version") or "v4.3.2"),
             "shadow_ready": v4_shadow_ready,
             "admitted": v4_admitted,
             "canary_ready": v43_canary_ready,
@@ -2830,7 +2832,7 @@ def scan_growth_candidates(
                 if ((candidate.get("opportunity_v4") or {}).get("liquidity_gate") or {}).get("passed")
             ),
             "live_enabled": bool(config.get("opportunity_v4_live_enabled", False)),
-            "label": "V4.3.1 事件证据、局部熔断与顺势双通道排序",
+            "label": "V4.3.2 连续质量仓位、局部熔断与顺势双通道排序",
         },
         "opportunity_queue": {
             "enabled": bool(config.get("opportunity_queue_enabled", True)),

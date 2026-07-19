@@ -15,7 +15,7 @@ from app.telemetry import connect, db_path
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.3.1"
+V4_FEATURE_SCHEMA = "v4.3.2"
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -57,7 +57,7 @@ def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "AND closed_at >= ? ORDER BY id DESC LIMIT ?",
                 (
                     V4_STRATEGY_FAMILY,
-                    str(config.get("opportunity_v4_strategy_version") or "v4.3.1"),
+                    str(config.get("opportunity_v4_strategy_version") or "v4.3.2"),
                     cutoff,
                     limit,
                 ),
@@ -104,7 +104,7 @@ def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def evidence_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
-    key = f"{db_path()}:{config.get('opportunity_v4_strategy_version', 'v4.3.1')}"
+    key = f"{db_path()}:{config.get('opportunity_v4_strategy_version', 'v4.3.2')}"
     now = time.monotonic()
     ttl = float(config.get("opportunity_v4_evidence_cache_seconds", 60))
     cached = _CACHE.get(key)
@@ -478,7 +478,7 @@ def _regime_policy(candidate: dict[str, Any]) -> dict[str, Any]:
             "canary_scope": False,
             "exploration_scope": False,
             "trend_aligned": trend_aligned,
-            "reason": "V4.2 样本显示广泛下跌追空仍为负期望，V4.3.1 暂只记录影子",
+            "reason": "V4.2 样本显示广泛下跌追空仍为负期望，V4.3.2 暂只记录影子",
         }
     return {
         "scope": "shadow_only",
@@ -486,7 +486,7 @@ def _regime_policy(candidate: dict[str, Any]) -> dict[str, Any]:
         "canary_scope": False,
         "exploration_scope": False,
         "trend_aligned": trend_aligned,
-        "reason": "方向或结构未达到 V4.3.1 实盘通道，继续积累影子证据",
+        "reason": "方向或结构未达到 V4.3.2 实盘通道，继续积累影子证据",
     }
 
 
@@ -498,6 +498,112 @@ def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> di
         "stop_atr": float(config.get(f"opportunity_v41_{prefix}_stop_atr", 0.70)),
         "take_profit_atr": float(config.get(f"opportunity_v41_{prefix}_take_profit_atr", 1.20)),
         "max_hold_bars": int(config.get(f"opportunity_v41_{prefix}_max_hold_bars", 8)),
+    }
+
+
+def continuous_position_confidence(opportunity: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    """Map independent V4 evidence to a continuous initial-risk target.
+
+    This deliberately avoids recreating the old A+/A/B buckets. The display
+    label is explanatory only; execution uses the numeric confidence and keeps
+    the existing direction-evidence multiplier.
+    """
+    enabled = bool(config.get("opportunity_v432_continuous_sizing_enabled", True))
+    lane = str(opportunity.get("admission_lane") or "shadow_only")
+    core_lane = lane in {"validated", "core_provisional", "core_canary"}
+    admitted = bool(opportunity.get("admitted"))
+    if not enabled or not core_lane or not admitted:
+        return {
+            "enabled": enabled,
+            "applied": False,
+            "method": "continuous_v432",
+            "lane": lane,
+            "confidence": 0.0,
+            "display_label": "受限探索" if lane == "limited_exploration" else "仅影子",
+            "target_initial_risk_pct": None,
+            "add_on_eligible": False,
+            "reason": "连续质量仓位仅作用于已经通过准入的核心通道",
+        }
+
+    def clamp(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
+
+    rank = float(opportunity.get("rank_percentile") or 0.0)
+    lower_expected = float(opportunity.get("lower_expected_net_pct") or 0.0)
+    cost = max(float(opportunity.get("estimated_cost_pct") or 0.0), 0.000001)
+    cost_ratio = float(opportunity.get("cost_ratio") or 0.0)
+    features = opportunity.get("features") or {}
+    policy = opportunity.get("regime_policy") or {}
+    liquidity = opportunity.get("liquidity_gate") or {}
+    local_circuit = opportunity.get("local_circuit") or {}
+
+    rank_floor = float(config.get("opportunity_v432_confidence_rank_floor", 0.75))
+    rank_component = clamp((rank - rank_floor) / max(1.0 - rank_floor, 0.000001))
+    conservative_cost_multiple = lower_expected / cost
+    lower_component = clamp(
+        (conservative_cost_multiple - float(config.get("opportunity_v432_confidence_lower_cost_floor", 0.5)))
+        / max(
+            float(config.get("opportunity_v432_confidence_lower_cost_full", 2.5))
+            - float(config.get("opportunity_v432_confidence_lower_cost_floor", 0.5)),
+            0.000001,
+        )
+    )
+    cost_component = clamp(
+        (cost_ratio - float(config.get("opportunity_v432_confidence_cost_ratio_floor", 2.0)))
+        / max(
+            float(config.get("opportunity_v432_confidence_cost_ratio_full", 10.0))
+            - float(config.get("opportunity_v432_confidence_cost_ratio_floor", 2.0)),
+            0.000001,
+        )
+    )
+    medium_aligned = bool(float(features.get("medium_alignment") or 0.0) >= 0.5 or policy.get("trend_aligned"))
+    liquidity_passed = bool(liquidity.get("passed"))
+    circuit_clear = not bool(local_circuit.get("blocked"))
+    components = {
+        "rank": rank_component,
+        "conservative_net_after_cost": lower_component,
+        "cost_efficiency": cost_component,
+        "medium_alignment": 1.0 if medium_aligned else 0.0,
+        "liquidity": 1.0 if liquidity_passed else 0.0,
+        "local_circuit": 1.0 if circuit_clear else 0.0,
+    }
+    weights = {
+        "rank": 0.30,
+        "conservative_net_after_cost": 0.25,
+        "cost_efficiency": 0.15,
+        "medium_alignment": 0.15,
+        "liquidity": 0.10,
+        "local_circuit": 0.05,
+    }
+    confidence = clamp(sum(components[key] * weights[key] for key in weights))
+    minimum_risk = float(config.get("opportunity_v432_initial_min_risk_pct", 4.0))
+    maximum_risk = max(minimum_risk, float(config.get("opportunity_v432_initial_max_risk_pct", 7.5)))
+    evidence_multiplier = max(0.0, min(1.0, float(opportunity.get("evidence_risk_multiplier") or 1.0)))
+    target = (minimum_risk + (maximum_risk - minimum_risk) * confidence) * evidence_multiplier
+    add_on_eligible = bool(
+        confidence >= float(config.get("opportunity_v432_add_on_min_confidence", 0.75))
+        and conservative_cost_multiple >= float(config.get("opportunity_v432_add_on_min_lower_cost_multiple", 2.0))
+        and cost_ratio >= float(config.get("opportunity_v432_add_on_min_cost_ratio", 8.0))
+        and medium_aligned
+        and liquidity_passed
+        and circuit_clear
+    )
+    return {
+        "enabled": True,
+        "applied": True,
+        "method": "continuous_v432",
+        "lane": lane,
+        "confidence": round(confidence, 6),
+        "display_label": "强机会" if confidence >= 0.80 else "核心机会",
+        "components": {key: round(value, 6) for key, value in components.items()},
+        "conservative_cost_multiple": round(conservative_cost_multiple, 6),
+        "evidence_multiplier": round(evidence_multiplier, 6),
+        "target_initial_risk_pct": round(target, 6),
+        "configured_initial_range_pct": [round(minimum_risk, 6), round(maximum_risk, 6)],
+        "add_on_eligible": add_on_eligible,
+        "add_on_trigger_atr": float(config.get("opportunity_v432_add_on_trigger_atr", 0.55)),
+        "add_on_total_risk_cap_pct": float(config.get("opportunity_v432_add_on_total_risk_cap_pct", 15.0)),
+        "reason": "核心机会按连续置信度计算初始风险；显示标签不参与硬分层",
     }
 
 
@@ -522,7 +628,7 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
     min_time_blocks = int(config.get("opportunity_v41_validation_min_time_blocks", 2))
     min_symbols = int(config.get("opportunity_v41_validation_min_symbols", 3))
     prior_trades = float(config.get("opportunity_v41_empirical_prior_trades", 40))
-    version = str(config.get("opportunity_v4_strategy_version") or "v4.3.1")
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
     decision_limit = int(config.get("opportunity_v4_decision_shadow_limit", 3))
     bootstrap_rank = float(config.get("opportunity_v4_bootstrap_min_rank_percentile", 0.85))
     bootstrap_quality = float(config.get("opportunity_v4_bootstrap_min_quality_score", 58.0)) / 100
@@ -831,17 +937,18 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             "liquidity_gate": selected_liquidity,
             "blockers": blockers,
             "reason": (
-                "V4.3.1 局部证据充分，允许标准实盘"
+                "V4.3.2 局部证据充分，允许标准实盘"
                 if validated
-                else "V4.3.1 局部证据初步达标，允许受限实盘"
+                else "V4.3.2 局部证据初步达标，允许受限实盘"
                 if provisional
-                else "V4.3.1 顺势核心候选可使用限次许可证试单"
+                else "V4.3.2 顺势核心候选可使用限次许可证试单"
                 if bootstrap_admitted
-                else "V4.3.1 顺势机会通过受限探索通道"
+                else "V4.3.2 顺势机会通过受限探索通道"
                 if exploration_admitted
-                else "；".join(blockers or ["继续积累 V4.3.1 事件级独立影子证据"])
+                else "；".join(blockers or ["继续积累 V4.3.2 事件级独立影子证据"])
             ),
         }
+        opportunity["position_confidence"] = continuous_position_confidence(opportunity, config)
         candidate["opportunity_v4"] = opportunity
         ranked.append((rank, candidate))
 

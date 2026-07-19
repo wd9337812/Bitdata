@@ -87,6 +87,46 @@ def clear_performance_cache() -> None:
     _CACHE.clear()
 
 
+def update_release_equity_guard(
+    config: dict[str, Any],
+    equity: float | None,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Track one release peak and latch its configured fallback threshold."""
+    from app.state_store import load_state, save_state
+
+    now = now or datetime.now(timezone.utc)
+    release_id = f"{active_family(config)}@{active_release_version(config)}"
+    state = load_state()
+    previous = dict(state.get("strategy_release_equity_guard") or {})
+    current_equity = max(0.0, float(equity or 0.0))
+    reset = str(previous.get("release_id") or "") != release_id
+    baseline = current_equity if reset else max(0.0, float(previous.get("baseline_equity") or current_equity))
+    peak = current_equity if reset else max(current_equity, float(previous.get("peak_equity") or current_equity))
+    drawdown = max(0.0, (peak - current_equity) / peak * 100) if peak > 0 else 0.0
+    threshold = float(config.get("opportunity_v432_release_fallback_drawdown_pct", 8.0))
+    fallback_active = bool(False if reset else previous.get("fallback_active")) or drawdown >= threshold
+    result = {
+        "release_id": release_id,
+        "baseline_equity": round(baseline, 8),
+        "peak_equity": round(peak, 8),
+        "current_equity": round(current_equity, 8),
+        "drawdown_pct": round(drawdown, 6),
+        "fallback_threshold_pct": round(threshold, 6),
+        "fallback_active": fallback_active,
+        "updated_at": now.isoformat(),
+    }
+    meaningful_change = bool(
+        reset
+        or peak > float(previous.get("peak_equity") or 0.0)
+        or fallback_active != bool(previous.get("fallback_active"))
+    )
+    if meaningful_change:
+        save_state({"strategy_release_equity_guard": result})
+    return result
+
+
 def global_performance_guard(
     config: dict[str, Any],
     equity: float | None = None,
@@ -102,6 +142,7 @@ def global_performance_guard(
     current_family = active_family(config)
     current_version = active_release_version(config)
     release_only = bool(config.get("performance_guard_current_release_only", True))
+    release_equity_guard = dict(config.get("_strategy_release_equity_guard") or {})
 
     def load() -> dict[str, Any]:
         with connect() as conn:
@@ -172,7 +213,7 @@ def global_performance_guard(
                 ]
                 scoped_shadow = _live_eligible_shadow_rows(
                     scoped_shadow_raw,
-                    allow_legacy=current_version != "v4.3.1",
+                    allow_legacy=not current_version.startswith("v4.3"),
                 )
                 scoped_shadow_total = len(scoped_shadow)
                 if release_only and (current_family == V4_FAMILY or scoped_shadow):
@@ -346,6 +387,7 @@ def global_performance_guard(
         config.get("performance_guard_hard_peak_drawdown_pct", 15.0)
     )
     hard_risk_off = bool(emergency_stop or hard_loss_streak or hard_window_loss or hard_peak_drawdown)
+    release_drawdown_fallback = bool(release_equity_guard.get("fallback_active"))
     soft_risk_off = bool(
         hard_risk_off
         or live_severe
@@ -450,9 +492,9 @@ def global_performance_guard(
         "probe_open": "恢复试单持仓中",
         "recovery_2": "已取得恢复试单资格",
         "recovery_3": "三级受限恢复",
-        "strategy_canary_1": "V4.3.1 新策略一级试运行",
-        "strategy_canary_2": "V4.3.1 新策略二级试运行",
-        "strategy_canary_3": "V4.3.1 新策略已验证",
+        "strategy_canary_1": "V4.3.2 新策略一级试运行",
+        "strategy_canary_2": "V4.3.2 新策略二级试运行",
+        "strategy_canary_3": "V4.3.2 新策略已验证",
     }
     reason = "当前版本滚动表现正常"
     if canary_allowed and risk_off:
@@ -469,6 +511,11 @@ def global_performance_guard(
         reason = "实盘触发软保护；短时观察后仅放行局部证据合格的低倍率候选"
     elif peak_drawdown_severe:
         reason = f"24小时权益高点回撤 {peak_drawdown_pct:.2f}% 已触发保护"
+    elif release_drawdown_fallback:
+        reason = (
+            f"当前版本从自身权益高点回撤 {float(release_equity_guard.get('drawdown_pct') or 0):.2f}%，"
+            "已自动撤销连续质量加码与同仓追加，回到基础受限仓位"
+        )
     elif live_bad and shadow_bad:
         reason = "实盘与影子交易同时处于负期望"
     elif risk_off:
@@ -531,6 +578,8 @@ def global_performance_guard(
         "peak_equity": round(peak_equity, 8) if peak_equity else None,
         "peak_drawdown_pct": round(peak_drawdown_pct, 4),
         "peak_drawdown_severe": peak_drawdown_severe,
+        "release_equity_guard": release_equity_guard,
+        "release_drawdown_fallback": release_drawdown_fallback,
         "rolling_losses": rolling_losses,
         "tail_losses": tail_losses,
         "severe_loss_streak": soft_loss_streak,

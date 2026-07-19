@@ -120,7 +120,7 @@ def active_version(config: dict[str, Any]) -> str:
 
 
 def challenger_version(config: dict[str, Any]) -> str:
-    return str(config.get("opportunity_v4_strategy_version") or "v4.3.1")
+    return str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
 
 
 def active_family(config: dict[str, Any]) -> str:

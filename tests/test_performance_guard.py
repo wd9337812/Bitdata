@@ -10,6 +10,7 @@ from app.performance_guard import (
     global_performance_guard,
     observed_round_trip_cost_pct,
     strategy_evidence_for,
+    update_release_equity_guard,
 )
 from app.shadow_trading import ensure_shadow_tables
 from app.telemetry import connect
@@ -491,3 +492,44 @@ def test_five_losses_use_hard_global_cooldown(monkeypatch, tmp_path):
     assert status["guard_level"] == "hard"
     assert status["hard_risk_off"] is True
     assert status["cooldown_minutes"] == 60
+
+
+def test_release_equity_guard_latches_eight_percent_fallback_and_resets_on_new_version(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v4_strategy_version": "v4.3.2",
+        "opportunity_v432_release_fallback_drawdown_pct": 8.0,
+    }
+
+    first = update_release_equity_guard(config, 100)
+    lower = update_release_equity_guard(config, 91)
+    recovered = update_release_equity_guard(config, 99)
+    reset = update_release_equity_guard({**config, "opportunity_v4_strategy_version": "v4.3.3"}, 99)
+
+    assert first["fallback_active"] is False
+    assert lower["drawdown_pct"] == 9.0
+    assert lower["fallback_active"] is True
+    assert recovered["fallback_active"] is True
+    assert reset["fallback_active"] is False
+    assert reset["peak_equity"] == 99
+
+
+def test_release_sizing_fallback_does_not_create_global_risk_off(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    config = {
+        "opportunity_v4_strategy_version": "v4.3.2",
+        "performance_guard_current_release_only": True,
+        "_strategy_release_equity_guard": {
+            "release_id": "extreme_v4_roll@v4.3.2",
+            "drawdown_pct": 8.5,
+            "fallback_threshold_pct": 8.0,
+            "fallback_active": True,
+        },
+    }
+
+    status = global_performance_guard(config, 91)
+
+    assert status["release_drawdown_fallback"] is True
+    assert status["status"] == "normal"
+    assert status["risk_multiplier"] == 1.0

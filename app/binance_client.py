@@ -374,6 +374,7 @@ class BinanceFuturesClient:
         trigger_price: float,
         close_position: bool = True,
         quantity: float | None = None,
+        reduce_only: bool = False,
         position_side: str | None = None,
         working_type: str = "MARK_PRICE",
     ) -> Any:
@@ -389,6 +390,8 @@ class BinanceFuturesClient:
             params["closePosition"] = "true"
         elif quantity is not None:
             params["quantity"] = quantity
+            if reduce_only:
+                params["reduceOnly"] = "true"
         if position_side:
             params["positionSide"] = position_side.upper()
         return self.signed_request("POST", "/fapi/v1/algoOrder", params)
