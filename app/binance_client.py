@@ -225,6 +225,26 @@ class BinanceFuturesClient:
         cache_set(key, data)
         return data
 
+    def top_trader_position_ratio(self, symbol: str, period: str = "5m", limit: int = 12) -> list[dict[str, Any]]:
+        return self.api_key_request(
+            "GET",
+            "/futures/data/topLongShortPositionRatio",
+            {"symbol": symbol.upper(), "period": period, "limit": limit},
+        )
+
+    def top_trader_account_ratio(self, symbol: str, period: str = "5m", limit: int = 12) -> list[dict[str, Any]]:
+        return self.api_key_request(
+            "GET",
+            "/futures/data/topLongShortAccountRatio",
+            {"symbol": symbol.upper(), "period": period, "limit": limit},
+        )
+
+    def taker_buy_sell_ratio(self, symbol: str, period: str = "5m", limit: int = 12) -> list[dict[str, Any]]:
+        return self.public_get(
+            "/futures/data/takerlongshortRatio",
+            {"symbol": symbol.upper(), "period": period, "limit": limit},
+        )
+
     def depth(self, symbol: str, limit: int = 5) -> Any:
         item = stream_depth(symbol)
         if item and item.get("bids") and item.get("asks"):

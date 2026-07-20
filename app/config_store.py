@@ -61,14 +61,30 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "user_stream_reconnect_seconds": 5,
     "user_stream_max_session_seconds": 82_800,
     "user_stream_account_max_age_seconds": 90,
+    "account_projection_ws_max_age_seconds": 45,
+    "account_supervisor_enabled": True,
+    "account_supervisor_poll_seconds": 2,
+    "account_supervisor_position_audit_seconds": 10,
+    "account_supervisor_idle_audit_seconds": 30,
     "fast_lane_enabled": True,
     "fast_lane_poll_seconds": 2,
     "background_scan_min_interval_seconds": 30,
+    "background_scan_timeout_seconds": 90,
+    "background_scan_watchdog_seconds": 5,
+    "background_scan_restart_enabled": True,
     "fast_lane_symbol_cooldown_seconds": 10,
     "fast_lane_event_max_age_seconds": 45,
     "fast_lane_max_symbols": 3,
     "fast_lane_depth_checks": 3,
     "fast_lane_budget_seconds": 5.0,
+    "smart_flow_enabled": True,
+    "smart_flow_live_soft_score_enabled": True,
+    "smart_flow_symbol_limit": 12,
+    "smart_flow_cache_seconds": 300,
+    "smart_flow_period": "5m",
+    "smart_flow_history_points": 12,
+    "smart_flow_max_soft_points": 5.0,
+    "smart_flow_min_confidence": 0.45,
     "telemetry_retention_days": 14,
     "strategy_run_retention_days": 2,
     "shadow_trade_retention_days": 14,
@@ -599,7 +615,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v4.5",
+    "opportunity_v4_strategy_version": "v4.6",
     "opportunity_v4_decision_min_rank_percentile": 0.75,
     "opportunity_v4_bootstrap_enabled": True,
     "opportunity_v4_bootstrap_min_rank_percentile": 0.85,
@@ -728,7 +744,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "strategy_canary_enabled": True,
     "strategy_canary_auto_issue": True,
     "strategy_canary_startup_cap_enabled": True,
-    "strategy_canary_release_id": "extreme_v4_roll@v4.5",
+    "strategy_canary_release_id": "extreme_v4_roll@v4.6",
     "strategy_canary_permit_hours": 24.0,
     "strategy_canary_level_1_multiplier": 1.0,
     "strategy_canary_level_1_max_opportunities": 6,
@@ -1032,13 +1048,15 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         config["execution_max_spread_pct"] = loaded["opportunity_v3_max_spread_pct"]
     if "execution_min_depth_notional_usdt" not in loaded and "opportunity_v3_min_depth_notional_usdt" in loaded:
         config["execution_min_depth_notional_usdt"] = loaded["opportunity_v3_min_depth_notional_usdt"]
-    # V4.5 keeps the V4.4 entry/exit model but replaces its global loss-license
-    # revocation with S0 continuous admission. Exact V4.4 saved configs migrate
-    # once; custom future versions are never rewritten.
-    if str(loaded.get("opportunity_v4_strategy_version") or "").lower() == "v4.4":
-        config["opportunity_v4_strategy_version"] = "v4.5"
-    if str(loaded.get("strategy_canary_release_id") or "").lower() == "extreme_v4_roll@v4.4":
-        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.5"
+    # V4.6 keeps V4.5 continuous admission and adds real-time state projection
+    # plus a bounded smart-flow feature without weakening hard safety gates.
+    if str(loaded.get("opportunity_v4_strategy_version") or "").lower() in {"v4.4", "v4.5"}:
+        config["opportunity_v4_strategy_version"] = "v4.6"
+    if str(loaded.get("strategy_canary_release_id") or "").lower() in {
+        "extreme_v4_roll@v4.4",
+        "extreme_v4_roll@v4.5",
+    }:
+        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.6"
     if not include_secret:
         config["api_secret"] = "********" if config.get("api_secret") else ""
         config["api_key"] = mask(config.get("api_key", ""))

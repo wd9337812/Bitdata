@@ -90,7 +90,7 @@ def update_release_equity_guard(
     version = active_release_version(config).lower()
     threshold = float(
         config.get("opportunity_v44_release_pause_drawdown_pct", 35.0)
-        if version.startswith(("v4.4", "v4.5"))
+        if version.startswith(("v4.4", "v4.5", "v4.6"))
         else config.get("opportunity_v432_release_fallback_drawdown_pct", 8.0)
     )
     fallback_active = bool(False if reset else previous.get("fallback_active")) or drawdown >= threshold
@@ -201,9 +201,9 @@ def global_performance_guard(
                 scoped_shadow = filter_live_eligible_v4_shadows(
                     scoped_shadow_raw,
                     strategy_version=current_version,
-                    allow_unclassified_legacy=not current_version.startswith(("v4.3", "v4.4", "v4.5")),
+                    allow_unclassified_legacy=not current_version.startswith(("v4.3", "v4.4", "v4.5", "v4.6")),
                 )
-                if current_version.startswith("v4.5"):
+                if current_version.startswith(("v4.5", "v4.6")):
                     scoped_shadow = executable_single_position_shadows(scoped_shadow)
                 scoped_shadow_total = len(scoped_shadow)
                 if release_only and (current_family == V4_FAMILY or scoped_shadow):

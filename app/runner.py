@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 
+from app.account_projection import canonical_account_projection
 from app.binance_client import BinanceFuturesClient
 from app.binance_rate import BinanceRateLimitError, rate_status, request_priority
 from app.config_store import load_config
@@ -38,10 +39,85 @@ from app.trading_engine import (
 from app.state_store import load_state, save_state
 from app.runtime_snapshot import market_rows_from_scan, update_runtime_snapshot
 from app.telemetry import compact_decision, maintain_telemetry, record_equity_snapshot, record_event, record_event_throttled, record_strategy_run
-from app.user_stream import account_from_user_stream, seed_user_account, start_user_stream_thread
+from app.user_stream import start_user_stream_thread
 
 
 _EXECUTION_LOCK = threading.Lock()
+_PROTECTION_LOCK = threading.Lock()
+_PROTECTION_AUDIT_CACHE: dict[str, object] = {
+    "checked_monotonic": 0.0,
+    "fingerprint": None,
+    "result": None,
+}
+_BACKGROUND_SCAN_STATE_LOCK = threading.Lock()
+_BACKGROUND_SCAN_STATE: dict[str, object] = {
+    "in_flight": False,
+    "started_monotonic": None,
+    "started_at": None,
+    "completed_at": None,
+    "last_error": "",
+    "restart_reason": "",
+}
+
+
+def _set_background_scan_state(**updates: object) -> dict[str, object]:
+    with _BACKGROUND_SCAN_STATE_LOCK:
+        _BACKGROUND_SCAN_STATE.update(updates)
+        return dict(_BACKGROUND_SCAN_STATE)
+
+
+def background_scan_watchdog_reason(
+    scan_state: dict[str, object],
+    *,
+    thread_alive: bool,
+    now_monotonic: float,
+    timeout_seconds: float,
+) -> str | None:
+    if not thread_alive:
+        return "background scan thread exited"
+    started = scan_state.get("started_monotonic")
+    if scan_state.get("in_flight") and started is not None:
+        elapsed = now_monotonic - float(started)
+        if elapsed > timeout_seconds:
+            return f"background scan stalled for {elapsed:.1f}s"
+    return None
+
+
+def _runtime_account(account: dict) -> dict:
+    return {
+        "equity": account.get("equity"),
+        "available_balance": account.get("available_balance"),
+        "unrealized_pnl": account.get("unrealized_pnl"),
+        "positions": list(account.get("positions") or []),
+    }
+
+
+def _audit_account_protection_cached(
+    client: BinanceFuturesClient,
+    config: dict,
+    account: dict,
+    *,
+    repair: bool,
+    minimum_interval_seconds: float,
+) -> dict:
+    fingerprint = tuple(sorted(_position_keys(account)))
+    with _PROTECTION_LOCK:
+        now = time.monotonic()
+        cached_result = _PROTECTION_AUDIT_CACHE.get("result")
+        if (
+            cached_result is not None
+            and _PROTECTION_AUDIT_CACHE.get("fingerprint") == fingerprint
+            and now - float(_PROTECTION_AUDIT_CACHE.get("checked_monotonic") or 0) < minimum_interval_seconds
+        ):
+            return dict(cached_result)
+        with request_priority("critical"):
+            result = audit_account_protection(client, config, account, repair=repair)
+        _PROTECTION_AUDIT_CACHE.update(
+            checked_monotonic=now,
+            fingerprint=fingerprint,
+            result=dict(result),
+        )
+        return result
 
 
 def enforce_hard_stop(
@@ -356,13 +432,11 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             record_event("warning", "binance_auth", "模拟交易模式使用 50U 模拟账户，不依赖 Binance 私有接口。")
     elif config.get("api_key") and config.get("api_secret"):
         try:
-            streamed_account = account_from_user_stream(int(config.get("user_stream_account_max_age_seconds", 90)))
-            if streamed_account:
-                account = summarize_account(streamed_account)
-            else:
-                raw_account = client.account()
-                seed_user_account(raw_account)
-                account = summarize_account(raw_account)
+            projection = canonical_account_projection(
+                client,
+                websocket_max_age_seconds=int(config.get("account_projection_ws_max_age_seconds", 45)),
+            )
+            account = projection["account"]
         except BinanceRateLimitError:
             raise
         except Exception as exc:
@@ -392,8 +466,13 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     maybe_sync_live_reaction(client, config, state, account, symbols_override)
     if not fast_lane:
         maybe_sync_live_learning(client, config, state)
-        with request_priority("critical"):
-            audit_status = audit_account_protection(client, config, account, repair=live_trading_allowed(config))
+        audit_status = _audit_account_protection_cached(
+            client,
+            config,
+            account,
+            repair=live_trading_allowed(config),
+            minimum_interval_seconds=float(config.get("account_supervisor_position_audit_seconds", 10)),
+        )
         if audit_status.get("positions") and not audit_status.get("protected", True):
             record_event_throttled(
                 "warning",
@@ -681,7 +760,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             "action": decision.get("action"),
             "reason": decision.get("reason") or (decision.get("risk") or {}).get("reason"),
         },
-        "account": {key: account.get(key) for key in ["equity", "available_balance", "unrealized_pnl"]},
+        "account": _runtime_account(account),
         "risk_status": {
             "warning_active": warning_active,
             "warning_equity": warning_floor,
@@ -753,6 +832,136 @@ def main() -> None:
         time.sleep(interval_seconds)
 
 
+def _account_supervisor_loop() -> None:
+    last_audit_monotonic = 0.0
+    last_position_fingerprint = ""
+    last_account_revision = 0
+    while True:
+        started = time.monotonic()
+        try:
+            config = load_config()
+            state = load_state()
+            if not config.get("account_supervisor_enabled", True) or config.get("dry_run", True):
+                update_runtime_snapshot(
+                    account_supervisor={"enabled": False, "reason": "disabled_or_simulation"}
+                )
+                time.sleep(max(2, int(config.get("account_supervisor_poll_seconds", 2))))
+                continue
+            client = BinanceFuturesClient(
+                api_key=config.get("api_key", ""),
+                api_secret=config.get("api_secret", ""),
+                base_url=config.get("binance_base_url", "https://fapi.binance.com"),
+            )
+            projection = canonical_account_projection(
+                client,
+                websocket_max_age_seconds=int(config.get("account_projection_ws_max_age_seconds", 45)),
+            )
+            revision = int(projection.get("revision") or 0)
+            if revision and revision != last_account_revision:
+                projection = canonical_account_projection(
+                    client,
+                    websocket_max_age_seconds=int(config.get("account_projection_ws_max_age_seconds", 45)),
+                    force_rest=True,
+                )
+                last_account_revision = revision
+            account = projection["account"]
+            hard_floor = float(config.get("hard_stop_equity", 5.0))
+            if (
+                hard_floor > 0
+                and float(account.get("equity") or 0) <= hard_floor
+                and state.get("bot_status") != "hard_stopped"
+            ):
+                with _EXECUTION_LOCK:
+                    enforce_hard_stop(client, config, account)
+            positions = list(account.get("positions") or [])
+            fingerprint = "|".join(
+                sorted(
+                    f"{item.get('symbol')}:{item.get('positionSide', 'BOTH')}:{item.get('positionAmt', 0)}:{item.get('entryPrice', 0)}"
+                    for item in positions
+                )
+            )
+            now_monotonic = time.monotonic()
+            audit_interval = int(
+                config.get(
+                    "account_supervisor_position_audit_seconds" if positions else "account_supervisor_idle_audit_seconds",
+                    10 if positions else 30,
+                )
+            )
+            audit_due = fingerprint != last_position_fingerprint or now_monotonic - last_audit_monotonic >= audit_interval
+            runtime_updates = {
+                "account": _runtime_account(account),
+                "account_projection": {
+                    key: projection.get(key)
+                    for key in [
+                        "source",
+                        "as_of",
+                        "age_seconds",
+                        "stream_age_seconds",
+                        "stale",
+                        "position_count",
+                        "revision",
+                    ]
+                },
+            }
+            if audit_due:
+                audit = _audit_account_protection_cached(
+                    client,
+                    config,
+                    account,
+                    repair=live_trading_allowed(config),
+                    minimum_interval_seconds=audit_interval,
+                )
+                runtime_updates["protection_audit"] = audit
+                last_audit_monotonic = now_monotonic
+                last_position_fingerprint = fingerprint
+                if audit.get("positions") and not audit.get("protected", True):
+                    record_event_throttled(
+                        "error",
+                        "account_supervisor",
+                        "持仓保护巡检未通过",
+                        audit,
+                        throttle_seconds=int(config.get("protection_audit_log_throttle_seconds", 60)),
+                    )
+            runtime_updates["account_supervisor"] = {
+                "enabled": True,
+                "healthy": not projection.get("stale"),
+                "last_check_at": datetime.now(timezone.utc).isoformat(),
+                "elapsed_seconds": round(time.monotonic() - started, 3),
+                "next_audit_seconds": audit_interval,
+                "last_error": "",
+            }
+            update_runtime_snapshot(**runtime_updates)
+        except BinanceRateLimitError as exc:
+            update_runtime_snapshot(
+                account_supervisor={
+                    "enabled": True,
+                    "healthy": False,
+                    "last_check_at": datetime.now(timezone.utc).isoformat(),
+                    "last_error": str(exc),
+                    "rate_limited": True,
+                }
+            )
+        except Exception as exc:
+            record_event_throttled(
+                "error",
+                "account_supervisor",
+                "账户实时投影或保护巡检异常",
+                {"error": str(exc)},
+                throttle_seconds=60,
+            )
+            update_runtime_snapshot(
+                account_supervisor={
+                    "enabled": True,
+                    "healthy": False,
+                    "last_check_at": datetime.now(timezone.utc).isoformat(),
+                    "last_error": str(exc),
+                }
+            )
+        elapsed = time.monotonic() - started
+        poll_seconds = max(1, int(load_config().get("account_supervisor_poll_seconds", 2)))
+        time.sleep(max(0.2, poll_seconds - elapsed))
+
+
 def _background_scan_loop() -> None:
     interval_seconds = int(os.getenv("BOT_LOOP_SECONDS", "300"))
     while True:
@@ -761,20 +970,68 @@ def _background_scan_loop() -> None:
             config = load_config()
             state = load_state()
             if state.get("bot_status") != "running":
+                _set_background_scan_state(in_flight=False, started_monotonic=None)
                 time.sleep(2)
                 continue
+            _set_background_scan_state(
+                in_flight=True,
+                started_monotonic=started,
+                started_at=datetime.now(timezone.utc).isoformat(),
+                last_error="",
+            )
             with request_priority("background"):
                 result = run_once()
             save_state({"last_error": ""})
             interval_seconds = background_loop_seconds(config, result)
+            completed_at = datetime.now(timezone.utc).isoformat()
+            scan_state = _set_background_scan_state(
+                in_flight=False,
+                started_monotonic=None,
+                completed_at=completed_at,
+                last_error="",
+            )
+            update_runtime_snapshot(scan_supervisor={**scan_state, "healthy": True})
             print({"status": "background_scan", "elapsed": time.monotonic() - started}, flush=True)
         except BinanceRateLimitError as exc:
+            _set_background_scan_state(in_flight=False, started_monotonic=None, last_error=str(exc))
             record_event("warning", "background_scan_deferred", str(exc), {"retry_after": exc.retry_after})
         except Exception as exc:
+            _set_background_scan_state(in_flight=False, started_monotonic=None, last_error=str(exc))
             save_state({"last_error": str(exc)})
             record_event("error", "background_scan", str(exc))
         elapsed = time.monotonic() - started
         time.sleep(max(5, interval_seconds - elapsed))
+
+
+def _background_scan_watchdog_loop(scan_thread: threading.Thread) -> None:
+    while True:
+        config = load_config()
+        state = load_state()
+        timeout_seconds = float(config.get("background_scan_timeout_seconds", 90))
+        scan_state = _set_background_scan_state()
+        reason = None
+        if state.get("bot_status") == "running":
+            reason = background_scan_watchdog_reason(
+                scan_state,
+                thread_alive=scan_thread.is_alive(),
+                now_monotonic=time.monotonic(),
+                timeout_seconds=timeout_seconds,
+            )
+        supervisor = {
+            **scan_state,
+            "healthy": reason is None,
+            "thread_alive": scan_thread.is_alive(),
+            "timeout_seconds": timeout_seconds,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "restart_reason": reason or "",
+        }
+        update_runtime_snapshot(scan_supervisor=supervisor)
+        if reason:
+            record_event("error", "background_scan_watchdog", "后台扫描失去响应，准备自动恢复", supervisor)
+            if config.get("background_scan_restart_enabled", True):
+                time.sleep(1)
+                os._exit(75)
+        time.sleep(max(1, int(config.get("background_scan_watchdog_seconds", 5))))
 
 
 def _event_signature(events: list[dict]) -> str:
@@ -788,7 +1045,15 @@ def coordinator_main() -> None:
     load_dotenv()
     start_market_stream_thread(load_config)
     start_user_stream_thread(load_config)
-    threading.Thread(target=_background_scan_loop, name="background-scan", daemon=True).start()
+    threading.Thread(target=_account_supervisor_loop, name="account-supervisor", daemon=True).start()
+    scan_thread = threading.Thread(target=_background_scan_loop, name="background-scan", daemon=True)
+    scan_thread.start()
+    threading.Thread(
+        target=_background_scan_watchdog_loop,
+        args=(scan_thread,),
+        name="background-scan-watchdog",
+        daemon=True,
+    ).start()
     last_signature = ""
     last_processed_symbols: dict[str, float] = {}
     last_maintenance_day = ""

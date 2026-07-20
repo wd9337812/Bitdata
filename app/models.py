@@ -44,14 +44,30 @@ class TradingConfig(BaseModel):
     user_stream_reconnect_seconds: int = Field(default=5, ge=1, le=300)
     user_stream_max_session_seconds: int = Field(default=82_800, ge=3600, le=86_400)
     user_stream_account_max_age_seconds: int = Field(default=90, ge=5, le=3600)
+    account_projection_ws_max_age_seconds: int = Field(default=45, ge=5, le=300)
+    account_supervisor_enabled: bool = True
+    account_supervisor_poll_seconds: int = Field(default=2, ge=1, le=60)
+    account_supervisor_position_audit_seconds: int = Field(default=10, ge=2, le=300)
+    account_supervisor_idle_audit_seconds: int = Field(default=30, ge=5, le=600)
     fast_lane_enabled: bool = True
     fast_lane_poll_seconds: int = Field(default=2, ge=1, le=60)
     background_scan_min_interval_seconds: int = Field(default=30, ge=10, le=3600)
+    background_scan_timeout_seconds: int = Field(default=90, ge=30, le=1800)
+    background_scan_watchdog_seconds: int = Field(default=5, ge=1, le=60)
+    background_scan_restart_enabled: bool = True
     fast_lane_symbol_cooldown_seconds: int = Field(default=10, ge=1, le=300)
     fast_lane_event_max_age_seconds: int = Field(default=45, ge=5, le=600)
     fast_lane_max_symbols: int = Field(default=3, ge=1, le=20)
     fast_lane_depth_checks: int = Field(default=3, ge=0, le=20)
     fast_lane_budget_seconds: float = Field(default=5.0, ge=1, le=60)
+    smart_flow_enabled: bool = True
+    smart_flow_live_soft_score_enabled: bool = True
+    smart_flow_symbol_limit: int = Field(default=12, ge=0, le=50)
+    smart_flow_cache_seconds: int = Field(default=300, ge=60, le=3600)
+    smart_flow_period: str = "5m"
+    smart_flow_history_points: int = Field(default=12, ge=2, le=500)
+    smart_flow_max_soft_points: float = Field(default=5.0, ge=0, le=10)
+    smart_flow_min_confidence: float = Field(default=0.45, ge=0, le=1)
     telemetry_retention_days: int = Field(default=14, ge=7, le=3650)
     strategy_run_retention_days: int = Field(default=2, ge=1, le=365)
     shadow_trade_retention_days: int = Field(default=14, ge=1, le=365)
@@ -582,7 +598,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v4.5"
+    opportunity_v4_strategy_version: str = "v4.6"
     opportunity_v4_decision_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
     opportunity_v4_bootstrap_enabled: bool = True
     opportunity_v4_bootstrap_min_rank_percentile: float = Field(default=0.85, ge=0, le=1)
@@ -711,7 +727,7 @@ class TradingConfig(BaseModel):
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
     strategy_canary_startup_cap_enabled: bool = True
-    strategy_canary_release_id: str = "extreme_v4_roll@v4.5"
+    strategy_canary_release_id: str = "extreme_v4_roll@v4.6"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
     strategy_canary_level_1_multiplier: float = Field(default=1.0, ge=0, le=1)
     strategy_canary_level_1_max_opportunities: int = Field(default=6, ge=1, le=100)

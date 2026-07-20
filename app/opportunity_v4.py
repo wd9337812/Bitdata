@@ -15,7 +15,7 @@ from app.telemetry import connect, db_path
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.5"
+V4_FEATURE_SCHEMA = "v4.6"
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -260,6 +260,7 @@ def _model_features(candidate: dict[str, Any]) -> dict[str, float]:
     spread = float(spread_raw) if spread_raw is not None else 999.0
     depth_notional = float(depth.get("depth_notional") or 0.0)
     liquidity = 0.0 if spread >= 999 else 0.55 * _clamp(1.0 - spread / 0.15, 0.0, 1.0) + 0.45 * _clamp(depth_notional / 10_000, 0.0, 1.0)
+    smart_flow_alignment = _clamp(float((candidate.get("smart_flow") or {}).get("directional_alignment") or 0.0), -1.0, 1.0)
     return {
         "cross_sectional_strength": strength,
         "regime_fit": direction_fit,
@@ -270,6 +271,7 @@ def _model_features(candidate: dict[str, Any]) -> dict[str, float]:
         "entry_quality": entry_quality,
         "anti_chase": anti_chase,
         "liquidity": liquidity,
+        "smart_flow_alignment": smart_flow_alignment,
     }
 
 
@@ -284,7 +286,7 @@ def _dynamic_cost_pct(candidate: dict[str, Any], config: dict[str, Any]) -> floa
 
 
 def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], config: dict[str, Any]) -> dict[str, float]:
-    quality = (
+    base_quality = (
         features["cross_sectional_strength"] * 0.14
         + features["regime_fit"] * 0.14
         + features["volume_persistence"] * 0.10
@@ -294,6 +296,11 @@ def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], con
         + features["entry_quality"] * 0.14
         + features["anti_chase"] * 0.05
         + features["liquidity"] * 0.03
+    )
+    quality = _clamp(
+        base_quality + float(candidate.get("smart_flow_score_delta") or 0.0) / 100.0,
+        0.0,
+        1.0,
     )
     signal = candidate.get("signal") or {}
     entry = max(float(signal.get("last_price") or 0), 0.00000001)
@@ -400,7 +407,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
             "reason": "恐慌行情只记录影子，不在失序盘口追价",
         }
     v44_active = bool(
-        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5"))
+        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6"))
         and config.get("opportunity_v44_full_bet_enabled", True)
     )
     v44_structure = bool(
@@ -511,7 +518,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
 
 def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2").lower()
-    if version.startswith(("v4.4", "v4.5")) and config.get("opportunity_v44_full_bet_enabled", True):
+    if version.startswith(("v4.4", "v4.5", "v4.6")) and config.get("opportunity_v44_full_bet_enabled", True):
         stop_atr = float(config.get("opportunity_v44_stop_atr", 0.85))
         take_profit_r = float(config.get("opportunity_v44_take_profit_r", 1.05))
         return {
@@ -724,7 +731,7 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
     min_symbols = int(config.get("opportunity_v41_validation_min_symbols", 3))
     prior_trades = float(config.get("opportunity_v41_empirical_prior_trades", 40))
     version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
-    v44_active = bool(version.lower().startswith(("v4.4", "v4.5")) and config.get("opportunity_v44_full_bet_enabled", True))
+    v44_active = bool(version.lower().startswith(("v4.4", "v4.5", "v4.6")) and config.get("opportunity_v44_full_bet_enabled", True))
     v44_rank = float(config.get("opportunity_v44_min_rank_percentile", 0.80))
     v44_quality = float(config.get("opportunity_v44_min_quality_score", 52.0)) / 100
     v44_expected = float(config.get("opportunity_v44_min_expected_net_pct", 0.02))

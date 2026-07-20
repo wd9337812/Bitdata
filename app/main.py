@@ -63,7 +63,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.15.0")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.16.0")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -143,20 +143,42 @@ def test_binance_config() -> dict[str, Any]:
 def status() -> dict[str, Any]:
     config = load_config()
     state = load_state()
-    account_summary = {"equity": None, "available_balance": None, "unrealized_pnl": None, "positions": []}
-    latest_snapshot = list_equity_snapshots(1)
-    if latest_snapshot:
-        snap = latest_snapshot[-1]
-        account_summary = {
-            "equity": snap.get("equity"),
-            "available_balance": snap.get("available_balance"),
-            "unrealized_pnl": snap.get("unrealized_pnl"),
-            "positions": [],
-        }
     runtime = read_runtime_snapshot()
+    account_summary = {"equity": None, "available_balance": None, "unrealized_pnl": None, "positions": []}
+    runtime_account = runtime.get("account") or {}
+    if runtime_account.get("equity") is not None:
+        account_summary = {
+            "equity": runtime_account.get("equity"),
+            "available_balance": runtime_account.get("available_balance"),
+            "unrealized_pnl": runtime_account.get("unrealized_pnl"),
+            "positions": list(runtime_account.get("positions") or []),
+        }
+    else:
+        latest_snapshot = list_equity_snapshots(1)
+        if latest_snapshot:
+            snap = latest_snapshot[-1]
+            account_summary = {
+                "equity": snap.get("equity"),
+                "available_balance": snap.get("available_balance"),
+                "unrealized_pnl": snap.get("unrealized_pnl"),
+                "positions": [],
+            }
     runtime_status = {
         key: runtime.get(key)
-        for key in ["updated_at", "age_seconds", "channel", "last_cycle", "fast_lane", "background_scan", "protection_audit", "risk_status", "shadow_trading"]
+        for key in [
+            "updated_at",
+            "age_seconds",
+            "channel",
+            "last_cycle",
+            "fast_lane",
+            "background_scan",
+            "scan_supervisor",
+            "account_projection",
+            "account_supervisor",
+            "protection_audit",
+            "risk_status",
+            "shadow_trading",
+        ]
     }
     return {
         "config": load_config(include_secret=False),
@@ -455,7 +477,25 @@ def api_decisions() -> dict[str, Any]:
     latest = latest_strategy_payload()
     payload = (latest or {}).get("payload") or {}
     best_growth = runtime.get("decision") or ((payload.get("decision") or {}) if payload else {})
-    scan = best_growth.get("scan") or {}
+    scan = dict(best_growth.get("scan") or {})
+    fast_decision = runtime.get("fast_lane_decision") or {}
+    fast_scan = fast_decision.get("scan") or {}
+    merged_candidates = []
+    seen = set()
+    for candidate in list(fast_scan.get("candidates") or []) + list(scan.get("candidates") or []):
+        key = (str(candidate.get("symbol") or ""), str(candidate.get("direction") or ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        merged_candidates.append(candidate)
+    if merged_candidates:
+        scan["candidates"] = merged_candidates
+        scan["best"] = merged_candidates[0]
+    scan["freshness"] = {
+        "background_updated_at": (runtime.get("background_scan") or {}).get("updated_at"),
+        "fast_lane_updated_at": (runtime.get("fast_lane") or {}).get("updated_at"),
+        "background_healthy": (runtime.get("scan_supervisor") or {}).get("healthy"),
+    }
     if latest:
         account_summary.update(
             {
@@ -474,7 +514,7 @@ def api_decisions() -> dict[str, Any]:
         "stage1": stage1_decisions,
         "growth_scan": scan,
         "stage2_grid": [],
-        "source": "runner_snapshot" if runtime.get("decision") else "runner_latest",
+        "source": "realtime_merged" if fast_decision else ("runner_snapshot" if runtime.get("decision") else "runner_latest"),
         "runtime": runtime,
         "latest_run": {key: latest.get(key) for key in ["id", "ts", "action", "symbol", "reason"]} if latest else None,
         "binance_rate": rate_status(),

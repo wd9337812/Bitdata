@@ -45,6 +45,9 @@ def _empty_state() -> dict[str, Any]:
         "last_event_type": None,
         "last_error": "",
         "reconnects": 0,
+        "last_update_ms": 0,
+        "account_update_ms": 0,
+        "event_revisions": {},
         "account": {},
         "orders": {},
         "algo_orders": {},
@@ -109,6 +112,7 @@ def user_stream_status(max_age_seconds: int = 90) -> dict[str, Any]:
         "reconnects": int(state.get("reconnects") or 0),
         "orders": len(state.get("orders") or {}),
         "algo_orders": len(state.get("algo_orders") or {}),
+        "last_update_ms": int(state.get("last_update_ms") or 0),
     }
 
 
@@ -185,17 +189,30 @@ def _merge_account_update(state: dict[str, Any], payload: dict[str, Any]) -> Non
 
 
 def _merge_event(state: dict[str, Any], payload: dict[str, Any]) -> None:
+    event_ms = int(payload.get("E") or payload.get("T") or 0)
     event_type = str(payload.get("e") or "")
+    revisions = dict(state.get("event_revisions") or {})
+    if event_ms and event_ms < int(revisions.get(event_type) or 0):
+        return
     if event_type == "ACCOUNT_UPDATE":
         _merge_account_update(state, payload)
+        state["account_update_ms"] = max(event_ms, int(state.get("account_update_ms") or 0))
     elif event_type == "ORDER_TRADE_UPDATE":
         order = payload.get("o") or {}
         key = f"{order.get('s')}:{order.get('i')}"
-        state.setdefault("orders", {})[key] = order
+        status = str(order.get("X") or order.get("x") or "").upper()
+        if status in {"FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+            state.setdefault("orders", {}).pop(key, None)
+        else:
+            state.setdefault("orders", {})[key] = order
     elif event_type == "ALGO_UPDATE":
         order = payload.get("o") or {}
         key = f"{order.get('s')}:{order.get('aid') or order.get('caid')}"
-        state.setdefault("algo_orders", {})[key] = order
+        status = str(order.get("X") or order.get("x") or order.get("S") or "").upper()
+        if status in {"FINISHED", "FILLED", "CANCELED", "CANCELLED", "EXPIRED", "REJECTED"}:
+            state.setdefault("algo_orders", {}).pop(key, None)
+        else:
+            state.setdefault("algo_orders", {})[key] = order
     elif event_type == "listenKeyExpired":
         state["connected"] = False
     now = _now_iso()
@@ -203,6 +220,9 @@ def _merge_event(state: dict[str, Any], payload: dict[str, Any]) -> None:
     state["last_event_type"] = event_type
     state["updated_at"] = now
     state["last_error"] = ""
+    state["last_update_ms"] = max(event_ms, int(state.get("last_update_ms") or 0))
+    revisions[event_type] = max(event_ms, int(revisions.get(event_type) or 0))
+    state["event_revisions"] = revisions
     recent = [{"event": event_type, "event_time": payload.get("E"), "updated_at": now}]
     state["recent_events"] = (recent + list(state.get("recent_events") or []))[:100]
 

@@ -49,5 +49,6 @@ def test_user_stream_tracks_order_events_without_persisting_listen_key(monkeypat
     snapshot = user_stream.read_user_stream_snapshot()
 
     assert "must-not-be-written" not in persisted
-    assert snapshot["orders"]["BTCUSDT:123"]["X"] == "FILLED"
+    assert "BTCUSDT:123" not in snapshot["orders"]
+    assert snapshot["last_event_type"] == "ORDER_TRADE_UPDATE"
     assert snapshot["last_event_type"] == "ORDER_TRADE_UPDATE"

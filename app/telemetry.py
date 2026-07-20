@@ -233,9 +233,10 @@ def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
             "score", "passed", "reason", "decision_reason", "entry_type", "entry_type_label",
             "symbol_pool", "cost_ratio", "estimated_cost_pct", "expected_profit_pct",
             "risk_pct", "base_risk_pct", "leverage", "margin_pct", "current_score",
+            "smart_flow_score_delta",
         }
         item = {key: candidate.get(key) for key in keys if key in candidate}
-        for nested_key in ("market_structure", "opportunity_v4", "market_state", "risk_adjustment", "ticker"):
+        for nested_key in ("market_structure", "opportunity_v4", "market_state", "risk_adjustment", "ticker", "smart_flow"):
             if isinstance(candidate.get(nested_key), dict):
                 item[nested_key] = candidate[nested_key]
         signal = candidate.get("signal") or {}

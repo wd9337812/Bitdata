@@ -139,8 +139,8 @@ function useData() {
 
   useEffect(() => {
     refresh();
-    const fast = window.setInterval(() => refresh(true), 10000);
-    const slow = window.setInterval(() => refresh(), 60000);
+    const fast = window.setInterval(() => refresh(true), 2000);
+    const slow = window.setInterval(() => refresh(), 30000);
     return () => {
       window.clearInterval(fast);
       window.clearInterval(slow);
@@ -160,11 +160,19 @@ function MetricCard({ title, value, sub, tone }: { title: string; value: string;
   );
 }
 
-function ProtectionAuditPanel({ audit }: { audit?: any }) {
+function freshnessText(value?: string, ageSeconds?: number) {
+  if (!value) return "等待首次同步";
+  const age = Number(ageSeconds);
+  const ageLabel = Number.isFinite(age) ? `${fmt(age, 0)} 秒前` : new Date(value).toLocaleString("zh-CN");
+  return `${ageLabel} · ${new Date(value).toLocaleTimeString("zh-CN")}`;
+}
+
+function ProtectionAuditPanel({ audit, projection, supervisor }: { audit?: any; projection?: any; supervisor?: any }) {
   const positions = audit?.positions || [];
   if (!audit?.enabled && positions.length === 0) return null;
   const protectedCount = positions.filter((item: any) => item.protected || item.repair_status === "repaired").length;
   const first = positions[0] || {};
+  const fresh = !projection?.stale && supervisor?.healthy !== false;
   const statusText = positions.length === 0 ? "暂无持仓" : audit?.protected ? "已保护" : "需关注";
   return (
     <div className="panel">
@@ -175,6 +183,7 @@ function ProtectionAuditPanel({ audit }: { audit?: any }) {
         </div>
       </div>
       <div className="metrics">
+        <MetricCard title="账户数据" value={fresh ? "实时" : "已陈旧"} sub={`${projection?.source === "private_websocket" ? "私有 WebSocket" : "REST 兜底"} · ${freshnessText(projection?.as_of, projection?.stream_age_seconds)}`} tone={fresh ? "positive" : "negative"} />
         <MetricCard title="保护状态" value={statusText} sub={audit?.checked_at ? new Date(audit.checked_at).toLocaleString("zh-CN") : "等待下一轮审计"} tone={audit?.protected ? "positive" : positions.length ? "negative" : ""} />
         <MetricCard title="持仓数量" value={`${protectedCount} / ${positions.length}`} sub="已保护 / 当前持仓" />
         <MetricCard title="最近持仓" value={first.symbol || "-"} sub={first.direction ? `${first.direction} · ${first.status || "-"}` : "暂无"} />
@@ -211,7 +220,7 @@ function App() {
     funnel?.opportunity_v4?.local_circuit_blocked
       ?? Object.values(localCircuit.cohorts || {}).filter((item: any) => item?.blocked_at).length,
   );
-  const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v4_roll"}@${performanceGuard.active_strategy_version || "v4.5"}`;
+  const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v4_roll"}@${performanceGuard.active_strategy_version || "v4.6"}`;
   const liveEvidenceIsCurrent = performanceGuard.live_evidence_scope === currentPerformanceScope;
   const recoveryEligibleLanes = performanceGuard.recovery_requirements?.eligible_admission_lanes || [];
   const recoveryEvidenceLabel = recoveryEligibleLanes.includes("full_bet") ? "全仓决策影子" : "实盘准入决策影子";
@@ -452,7 +461,7 @@ function App() {
               <MetricCard
                 title={continuousPermit.enabled ? "局部组合证据" : "局部组合熔断"}
                 value={`${activeLocalCircuitBlocks} 个组合`}
-                sub={continuousPermit.enabled ? "V4.5 仅用于候选排序和仓位解释，不会因旧组合亏损暂停其他合格机会" : "显示本轮仍被阻断的组合；只冻结同市场状态、方向、形态和入场阶段"}
+                sub={continuousPermit.enabled ? "V4.6 用当前结构、相对排名和聪明钱软信号排序，不会因旧组合亏损暂停其他合格机会" : "显示本轮仍被阻断的组合；只冻结同市场状态、方向、形态和入场阶段"}
                 tone={activeLocalCircuitBlocks > 0 ? "negative" : "positive"}
               />
               <MetricCard
@@ -467,7 +476,7 @@ function App() {
                 sub={`${state.daily_session_date || "等待初始化"}（UTC），跨日自动重置`}
               />
             </div>
-            <ProtectionAuditPanel audit={runtime?.protection_audit} />
+            <ProtectionAuditPanel audit={runtime?.protection_audit} projection={runtime?.account_projection} supervisor={runtime?.account_supervisor} />
             <TargetProgressPanel target={target} />
             <SignalExplain best={best} />
             <div className="panel">
@@ -484,7 +493,7 @@ function App() {
               <div className="panel-head">
                 <div>
                   <h2>机会漏斗</h2>
-                  <p>系统先大范围召回，再逐层粗排、精排和竞价；V4.5 按本轮相对排名、方向、五项确认和扣费后期望选币，只对精选币检查盘口。</p>
+                  <p>系统先大范围召回，再逐层粗排、精排和竞价；V4.6 按本轮相对排名、方向、五项确认、聪明钱软信号和扣费后期望选币，只对精选币检查盘口。</p>
                 </div>
               </div>
               <FunnelPanel funnel={funnel} />
@@ -494,7 +503,7 @@ function App() {
               <div className="panel-head">
                 <div>
                   <h2>候选币排名</h2>
-                  <p>V4.5 是当前实盘排序器；通过本轮相对排名和三项以上确认后，S0 使用单仓全进全出与动态杠杆，普通亏损只降仓、不全局停牌。</p>
+                  <p>V4.6 是当前实盘排序器；通过本轮相对排名和三项以上确认后，S0 使用单仓全进全出与动态杠杆，普通亏损只降仓、不全局停牌。</p>
                 </div>
               </div>
               <CandidateTable rows={candidates} />
@@ -536,6 +545,9 @@ function ScanSummary({ funnel, candidates, stream, opportunityQueue, runtime }: 
         </div>
       </div>
       <div className="metrics">
+        <MetricCard title="扫描守护" value={runtime?.scan_supervisor?.healthy === false ? "正在恢复" : "正常"} sub={runtime?.scan_supervisor?.restart_reason || `超时线 ${fmt(runtime?.scan_supervisor?.timeout_seconds, 0)} 秒`} tone={runtime?.scan_supervisor?.healthy === false ? "negative" : "positive"} />
+        <MetricCard title="全量数据时间" value={freshnessText(runtime?.background_scan?.updated_at)} sub="候选池与排名更新时间" />
+        <MetricCard title="实时机会时间" value={freshnessText(runtime?.fast_lane?.updated_at)} sub="WebSocket 异动触发更新时间" />
         <MetricCard title="实时快车道" value={`${fmt(runtime?.fast_lane?.elapsed_seconds, 2)} 秒`} sub={(runtime?.fast_lane?.symbols || []).join("、") || "等待 WebSocket 机会"} tone={(runtime?.fast_lane?.elapsed_seconds || 0) <= 5 ? "positive" : undefined} />
         <MetricCard title="后台全量扫描" value={`${fmt(runtime?.background_scan?.elapsed_seconds ?? funnel?.elapsed_seconds, 2)} 秒`} sub="后台更新，不阻塞实时机会" />
         <MetricCard title="WebSocket 状态" value={stream.connected ? "实时盯盘中" : "未连接"} sub={stream.last_error || `${fmt(stream.symbols?.length, 0)} 币 · ${fmt(stream.connection_count, 0)} 条连接 · 数据年龄 ${fmt(stream.age_seconds, 0)} 秒`} tone={stream.connected ? "positive" : "negative"} />
@@ -644,6 +656,7 @@ function SignalExplain({ best }: { best?: any }) {
   const v4 = best.opportunity_v4 || {};
   const positionConfidence = v4.position_confidence || {};
   const localCircuit = v4.local_circuit || {};
+  const smartFlow = best.smart_flow || {};
   return (
     <div className="panel signal-explain">
       <h2>当前策略解释</h2>
@@ -655,17 +668,19 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>离触发价</span><strong>{fmt(signal.distance_to_trigger_pct, 3)}%</strong></div>
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
         <div><span>V4 本轮排名</span><strong>{v4.enabled ? `前 ${fmt((1 - Number(v4.rank_percentile || 0)) * 100, 0)}%` : "-"}</strong></div>
-        <div><span>V4.5 准入通道</span><strong>{v4.admission_lane === "full_bet" ? "全仓短打" : "仅影子"}</strong></div>
+        <div><span>V4.6 准入通道</span><strong>{v4.admission_lane === "full_bet" ? "全仓短打" : "仅影子"}</strong></div>
         <div><span>机会置信度</span><strong>{positionConfidence.applied ? `${fmt(Number(positionConfidence.confidence || 0) * 100, 1)}%` : "不适用"}</strong></div>
         <div><span>计划止损风险</span><strong>{positionConfidence.target_initial_risk_pct != null ? `${fmt(positionConfidence.target_initial_risk_pct, 2)}%` : "等待准入"}</strong></div>
         <div><span>保证金方式</span><strong>{v4.admission_lane === "full_bet" ? "约 90% · 单仓全进全出" : "不下单"}</strong></div>
         <div><span>动态杠杆范围</span><strong>{v4.admission_lane === "full_bet" ? "3x - 10x" : "-"}</strong></div>
-        <div><span>V4.5 保守净期望</span><strong>{v4.enabled ? `${fmt(v4.lower_expected_net_pct, 3)}%` : "-"}</strong></div>
-        <div><span>V4.5 成本比</span><strong>{v4.enabled ? `${fmt(v4.cost_ratio, 2)}x` : "-"}</strong></div>
+        <div><span>V4.6 保守净期望</span><strong>{v4.enabled ? `${fmt(v4.lower_expected_net_pct, 3)}%` : "-"}</strong></div>
+        <div><span>V4.6 成本比</span><strong>{v4.enabled ? `${fmt(v4.cost_ratio, 2)}x` : "-"}</strong></div>
         <div><span>五项确认</span><strong>{v4.enabled ? `${fmt(v4.v44_confirmations, 0)} / ${fmt(v4.v44_confirmations_required, 0)}` : "-"}</strong></div>
-        <div><span>旧版本信用</span><strong>不参与 V4.5 准入</strong></div>
+        <div><span>旧版本信用</span><strong>不参与 V4.6 准入</strong></div>
         <div><span>当前版本局部证据</span><strong>{localCircuit.blocked ? "仅作风险背景" : "正常记录"}</strong></div>
         <div><span>市场状态</span><strong>{structure.market_regime_label || best.market_state?.label || "-"}</strong></div>
+        <div><span>聪明钱方向</span><strong>{smartFlow.available ? (smartFlow.bias === "LONG" ? "偏多" : smartFlow.bias === "SHORT" ? "偏空" : "中性") : "等待数据"}</strong></div>
+        <div><span>聪明钱修正</span><strong>{smartFlow.available ? `${Number(best.smart_flow_score_delta || 0) >= 0 ? "+" : ""}${fmt(best.smart_flow_score_delta, 2)} 分 · 置信 ${fmt(Number(smartFlow.confidence || 0) * 100, 0)}%` : "不影响准入"}</strong></div>
         <div><span>真实收益/成本</span><strong>{v4.enabled ? `${fmt(v4.cost_ratio, 2)}x` : fmt(best.cost_ratio, 2)}</strong></div>
         <div><span>{"\u4fdd\u62a4\u6863\u6848"}</span><strong>{protectionLabel}</strong></div>
         <div><span>{"\u6b62\u635f / \u6b62\u76c8 ATR"}</span><strong>{fmt(protectionStopAtr, 2)} / {fmt(protectionTakeAtr, 2)}</strong></div>
@@ -728,6 +743,7 @@ function FunnelPanel({ funnel }: { funnel: any }) {
 function V4OpportunityPanel({ funnel, performanceGuard }: { funnel: any; performanceGuard: any }) {
   const structure = funnel?.market_structure || {};
   const v4 = funnel?.opportunity_v4 || {};
+  const smartFlow = funnel?.smart_flow || {};
   if (!v4.enabled) return null;
   const topBlockers = Object.entries(v4.blocked_categories || v4.blocked_reasons || {})
     .sort((left: any, right: any) => Number(right[1]) - Number(left[1]))
@@ -736,7 +752,7 @@ function V4OpportunityPanel({ funnel, performanceGuard }: { funnel: any; perform
     <div className="panel">
       <div className="panel-head">
         <div>
-          <h2>{v4.strategy_version || "v4.5"} 事件证据与全仓短打</h2>
+          <h2>{v4.strategy_version || "v4.6"} 事件证据与全仓短打</h2>
           <p>先判断方向和入场结构，再用本轮相对排名、五项确认、扣费后期望和流动性筛选；合格后使用单仓全进全出，旧版本信用和全局 PF 只作背景。</p>
         </div>
       </div>
@@ -746,7 +762,8 @@ function V4OpportunityPanel({ funnel, performanceGuard }: { funnel: any; perform
         <MetricCard title="有实时触发" value={`${fmt(v4.shadow_ready, 0)} 个`} sub="已经形成方向和止盈止损，可进入后续筛选" />
         <MetricCard title="结构可交易" value={`${fmt(v4.structure_ready, 0)} 个`} sub="方向、入场形态与当前市场结构有效" />
         <MetricCard title="盘口可执行" value={`${fmt(v4.liquidity_ready, 0)} 个`} sub="按本次预计下单额动态检查深度与点差" />
-        <MetricCard title="旧证据阻断" value={`${fmt(v4.local_circuit_blocked, 0)} 个`} sub="V4.5 不因旧版本信用或局部 PF 一票否决" tone="positive" />
+        <MetricCard title="聪明钱覆盖" value={`${fmt(smartFlow.available, 0)} / ${fmt(smartFlow.symbol_limit, 0)} 个`} sub={`${fmt(smartFlow.adjusted, 0)} 个候选获得软评分修正，最大 ±${fmt(smartFlow.max_soft_points, 1)} 分`} tone={smartFlow.enabled ? "positive" : ""} />
+        <MetricCard title="旧证据阻断" value={`${fmt(v4.local_circuit_blocked, 0)} 个`} sub="V4.6 不因旧版本信用或局部 PF 一票否决" tone="positive" />
         <MetricCard title="连续准入" value={performanceGuard?.allowed ? "可开仓" : "安全暂停"} sub="普通亏损只递进降仓；仅 5U 硬停止、当日 30% 回撤或运行安全异常暂停" tone={performanceGuard?.allowed ? "positive" : "negative"} />
         <MetricCard title="全仓短打" value={`${fmt(v4.admitted, 0)} 个`} sub="约 90% 可用保证金，单币单向、一次全平" tone={Number(v4.admitted || 0) > 0 ? "positive" : ""} />
         <MetricCard title="计划风险" value="8% - 15%" sub="仅最强机会接近 15%，连续两次亏损后回落至 8%" />
@@ -770,6 +787,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
             <th>V4排名</th>
             <th>保守净期望</th>
             <th>同类证据</th>
+            <th>聪明钱</th>
             {!compact && <th>不开仓原因</th>}
             {!compact && <th>距离触发</th>}
             {!compact && <th>市场状态</th>}
@@ -787,6 +805,7 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               <td>{row.opportunity_v4?.enabled ? `前 ${fmt((1 - Number(row.opportunity_v4.rank_percentile || 0)) * 100, 0)}%` : "-"}<small>{row.opportunity_v4?.rank_bucket || ""}</small></td>
               <td className={Number(row.opportunity_v4?.lower_expected_net_pct || 0) >= 0 ? "positive-text" : "negative-text"}>{row.opportunity_v4?.enabled ? `${fmt(row.opportunity_v4.lower_expected_net_pct, 3)}%` : "-"}</td>
               <td>{row.opportunity_v4?.enabled ? `${fmt(row.opportunity_v4.evidence?.selected?.trades, 0)} 笔` : "-"}<small>{row.opportunity_v4?.enabled ? pfLabel(row.opportunity_v4.evidence?.selected?.profit_factor, row.opportunity_v4.evidence?.selected?.trades) : ""}</small></td>
+              <td>{row.smart_flow?.available ? `${row.smart_flow.bias === "LONG" ? "偏多" : row.smart_flow.bias === "SHORT" ? "偏空" : "中性"} ${Number(row.smart_flow_score_delta || 0) >= 0 ? "+" : ""}${fmt(row.smart_flow_score_delta, 1)}` : "-"}<small>{row.smart_flow?.available ? `置信 ${fmt(Number(row.smart_flow.confidence || 0) * 100, 0)}%` : ""}</small></td>
               {!compact && <td className="reason-cell">{row.decision_reason || row.reason}</td>}
               {!compact && <td>{fmt(row.signal?.distance_to_trigger_pct, 3)}%</td>}
               {!compact && <td>{row.market_structure?.market_regime_label || row.market_state?.label || "-"}</td>}
@@ -1490,6 +1509,14 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("fast_lane_enabled", "WebSocket 实时快车道", "异动事件独立于全量扫描，优先在数秒内完成决策")}
           {number("fast_lane_poll_seconds", "快车道轮询秒数", "默认 2 秒；只读取本地事件队列，不持续消耗 Binance REST")}
           {number("background_scan_min_interval_seconds", "后台全量扫描最短间隔", "默认 30 秒；实时机会仍由快车道立即处理，避免重复拉取 K 线耗尽 REST 预算")}
+          {number("background_scan_timeout_seconds", "全量扫描超时线", "默认 90 秒；超过后看门狗自动重启交易进程并恢复扫描")}
+          {number("account_supervisor_poll_seconds", "账户实时刷新秒数", "默认 2 秒；优先读私有 WebSocket，断线才使用 REST 兜底")}
+          {number("account_supervisor_position_audit_seconds", "持仓保护复核秒数", "默认 10 秒；持仓变化时会立即检查止盈止损")}
+          {toggle("smart_flow_enabled", "启用聪明钱复合信号", "组合顶级交易者持仓、账户多空比、主动买卖量和未平仓量，不是单独开仓条件")}
+          {toggle("smart_flow_live_soft_score_enabled", "聪明钱参与 V4.6 软评分", "最多正负 5 分；数据不完整时保持中性，不会阻断开仓")}
+          {number("smart_flow_symbol_limit", "聪明钱深查币数", "默认每轮只检查最高排名 12 个币，5 分钟缓存以控制 Binance API 开销")}
+          {number("smart_flow_max_soft_points", "聪明钱最大修正分", "默认正负 5 分；只在置信度达到门槛时生效")}
+          {number("smart_flow_min_confidence", "聪明钱最低置信度", "默认 0.45；不足时只展示，不参与排序")}
           {number("fast_lane_symbol_cooldown_seconds", "同币快车道冷却秒数", "默认 10 秒；合并连续推送，避免重复计算和追单")}
           {number("fast_lane_event_max_age_seconds", "快车道事件有效期", "默认 45 秒；过期异动不再追单")}
           {number("fast_lane_max_symbols", "快车道单次币数", "默认 3；优先最高分异动，避免挤占交易API预算")}
@@ -1678,7 +1705,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("yolo_scalp_min_order_lift_min_net_profit_usdt", "补齐订单最低净利润U", "默认 0.03U；太小的毛利不强行成交")}
           {toggle("opportunity_v4_enabled", "启用 V4 机会引擎", "推荐开启：计算扣费后净期望并记录公平影子证据，不增加 Binance 下单请求")}
           {toggle("opportunity_v4_live_enabled", "V4 作为当前实盘排序器", "默认开启；旧策略实验已退出实盘和日常界面")}
-          {text("opportunity_v4_strategy_version", "V4 当前版本号", "当前 v4.5；不同版本实盘和影子证据严格隔离")}
+          {text("opportunity_v4_strategy_version", "V4 当前版本号", "当前 v4.6；不同版本实盘和影子证据严格隔离")}
           {toggle("opportunity_v44_full_bet_enabled", "V4.5 S0 单仓全进全出", "只持有一个币种和一个方向；一次建仓、一次全平，禁止盈利追加和分批止盈")}
           {number("opportunity_v44_min_rank_percentile", "V4.5 最低相对排名分位", "默认 0.80，即只考虑本轮前 20%")}
           {number("opportunity_v44_min_quality_score", "V4.5 最低当前质量分", "默认 52；旧版本信用分不参与")}
