@@ -421,7 +421,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
             "canary_scope": True,
             "exploration_scope": False,
             "trend_aligned": True,
-            "reason": f"{version.upper()} 当前方向与中周期趋势一致，进入全仓短打候选通道",
+            "reason": f"{version_label} 当前方向与中周期趋势一致，进入全仓短打候选通道",
         }
     if regime == "quiet" and direction == "LONG" and aligned and setup_type == "pullback" and phase == "RETEST":
         return {

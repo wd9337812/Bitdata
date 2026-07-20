@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.opportunity_v4 import attach_v4_rankings, clear_v4_evidence_cache
+from app.opportunity_v4 import _regime_policy, attach_v4_rankings, clear_v4_evidence_cache
 from app.position_sizing import effective_position_risk
 from app.scanner import _apply_v4_live_selection
 from app.shadow_trading import ensure_shadow_tables
@@ -40,6 +40,23 @@ def _candidate(symbol: str, strength: float, volume: float) -> dict:
         },
         "execution_filter": {"enabled": True, "executable": True},
     }
+
+
+def test_v46_trend_aligned_policy_uses_configured_version_label():
+    candidate = _candidate("ALTUSDT", 0.95, 2.0)
+    candidate["entry_type"] = "v3_momentum"
+
+    policy = _regime_policy(
+        candidate,
+        {
+            "opportunity_v4_strategy_version": "v4.6",
+            "opportunity_v44_full_bet_enabled": True,
+        },
+    )
+
+    assert policy["scope"] == "v44_trend_aligned_full_bet"
+    assert policy["live_scope"] is True
+    assert "V4.6" in policy["reason"]
 
 
 def test_v4_ranks_net_expectancy_but_does_not_promote_when_bootstrap_is_disabled(monkeypatch, tmp_path):
