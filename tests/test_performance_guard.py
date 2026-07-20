@@ -468,6 +468,53 @@ def test_v431_guard_excludes_shadow_only_decisions_from_recovery(monkeypatch, tm
     assert status["shadow"]["net_pnl"] < 0
 
 
+def test_v44_guard_counts_full_bet_decisions_and_excludes_research_shadows(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    _seed_shadow(
+        "FULLBETUSDT",
+        "LONG",
+        [0.2] * 8,
+        version="v4.4",
+        role="active",
+        family="extreme_v4_roll",
+        admission_lane="full_bet",
+    )
+    _seed_shadow(
+        "RESEARCHUSDT",
+        "SHORT",
+        [-0.5] * 20,
+        version="v4.4",
+        role="active",
+        family="extreme_v4_roll",
+        admission_lane="shadow_only",
+    )
+    _seed_shadow(
+        "EXPLORATIONUSDT",
+        "LONG",
+        [1.0] * 20,
+        version="v4.4",
+        role="active",
+        family="extreme_v4_roll",
+        evidence_type="exploration",
+        admission_lane="full_bet",
+    )
+    clear_performance_cache()
+
+    status = global_performance_guard(
+        {
+            "opportunity_v4_live_enabled": True,
+            "opportunity_v4_strategy_version": "v4.4",
+            "performance_guard_current_release_only": True,
+        },
+        25,
+    )
+
+    assert status["shadow_evidence_scope"] == "extreme_v4_roll@v4.4:live_lanes"
+    assert status["shadow"]["trades"] == 8
+    assert status["shadow"]["net_pnl"] == 1.6
+    assert status["recovery_requirements"]["eligible_admission_lanes"] == ["full_bet"]
+
+
 def test_four_losses_use_soft_observation_before_hard_cooldown(monkeypatch, tmp_path):
     _prepare(monkeypatch, tmp_path)
     _seed_live("SOFTUSDT", "LONG", [-0.1] * 4)
@@ -577,6 +624,13 @@ def test_v432_startup_canary_caps_normal_trading_then_expires_cleanly(monkeypatc
     assert startup["strategy_canary_permit"]["max_opportunities"] == 5
     assert revoked["allowed"] is False
     assert revoked["risk_multiplier"] == 0.0
+    assert revoked["status"] == "strategy_canary_revoked"
+    assert revoked["recovery_requirements"]["eligible_admission_lanes"] == [
+        "core_canary",
+        "core_provisional",
+        "limited_exploration",
+        "validated",
+    ]
     assert after_window["status"] == "normal"
     assert after_window["allowed"] is True
     assert after_window["risk_multiplier"] == 1.0

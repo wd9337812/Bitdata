@@ -397,3 +397,16 @@ This file tracks local verification for the two-stage futures system.
 - 前端：`npm run build`，通过，生成 `index-Bm_8ODcQ.js` 等版本化生产资源。
 - 本地 HTTP：首页、OpenAPI、状态接口及 5 个版本化 JS/CSS 资源全部 HTTP 200；OpenAPI 版本 `0.14.0`。
 - `git diff --check`：通过，仅有 Windows LF/CRLF 转换提示。
+
+## 2026-07-20 v0.14.1 / V4.4 证据恢复与漏斗对齐
+
+- 根因复现：V4.4 使用 `full_bet` 准入通道，但恢复白名单只包含 V4.3 系列旧通道，导致当前版本合格决策影子被统计为 0。
+- 证据修复：全局恢复、许可证再签发和局部熔断统一使用版本感知资格；V4.4 只接收 `decision + full_bet`，研究影子与旧版本继续隔离，并按 `opportunity_id` 去重。
+- 漏斗修复：V4.4 粗排增加实时事件、横截面做多强势和横截面做空强势三条保留路线；没有增加 Binance REST 请求，也没有降低最终准入与安全硬门。
+- 交互修复：已撤销许可证显示“等待再签发”；恢复卡片明确展示可计票影子类型和进度；机会中心版本文案改为动态版本。
+- 策略版本保持 `v4.4`，应用版本升级为 `0.14.1`，现有 V4.4 精确版本证据不清零。
+- 定向回归：证据资格、恢复状态机、许可证、V4 排序和扫描漏斗共 `72 passed`。
+- 完整后端：`.venv/Scripts/python.exe -m pytest -q`，`280 passed`。
+- 前端：`npm run build` 通过，生成 `index-DHJfINrJ.js` 等版本化生产资源。
+- 本地 HTTP：主页、OpenAPI 和 5 个版本化 JS/CSS 资源全部返回 HTTP 200；OpenAPI 版本为 `0.14.1`。
+- 完整设计和边界归档于 `docs/v0.14.1-v44-evidence-recovery-2026-07-20.md`。

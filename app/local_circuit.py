@@ -8,15 +8,10 @@ from typing import Any
 from app.market_structure import market_structure, normalize_setup_type
 from app.state_store import load_state, save_state
 from app.telemetry import record_event
+from app.v4_evidence import is_live_eligible_v4_shadow
 
 
 LOCAL_CIRCUIT_STATE_KEY = "v4_local_circuit"
-LIVE_ELIGIBLE_LANES = {
-    "core_canary",
-    "core_provisional",
-    "validated",
-    "limited_exploration",
-}
 _LOCAL_CIRCUIT_LOCK = threading.RLock()
 
 
@@ -231,6 +226,7 @@ def _shadow_circuit(
     rows: list[dict[str, Any]],
     config: dict[str, Any],
 ) -> dict[str, Any]:
+    strategy_version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
     min_trades = int(config.get("opportunity_v431_local_block_min_trades", 8))
     block_pf = float(config.get("opportunity_v431_local_block_profit_factor", 0.80))
     restore_trades = int(config.get("opportunity_v431_local_restore_min_trades", 8))
@@ -245,7 +241,7 @@ def _shadow_circuit(
 
     for row in sorted(rows, key=lambda item: str(item.get("closed_at") or "")):
         if blocked:
-            if str(row.get("admission_lane") or "") in LIVE_ELIGIBLE_LANES:
+            if is_live_eligible_v4_shadow(row, strategy_version=strategy_version):
                 recovery.append(row)
             recovery_stats = _stats(recovery)
             if (
@@ -304,7 +300,7 @@ def candidate_local_circuit_status(
         for row in local_rows
         if live_blocked_at
         and (_parse_time(row.get("closed_at")) or datetime.min.replace(tzinfo=timezone.utc)) > live_blocked_at
-        and str(row.get("admission_lane") or "") in LIVE_ELIGIBLE_LANES
+        and is_live_eligible_v4_shadow(row, strategy_version=version)
     ]
     live_recovery = _stats(live_recovery_rows)
     restore_trades = int(config.get("opportunity_v431_local_restore_min_trades", 8))

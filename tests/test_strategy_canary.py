@@ -284,3 +284,110 @@ def test_canary_loss_revocation_reissues_after_observation_and_fresh_shadow_evid
     assert reissued["risk_multiplier"] == 0.3
     assert reissued["max_opportunities"] == 2
     assert reissued["reissue_count"] == 1
+
+
+def test_revoked_canary_does_not_reissue_from_negative_fresh_evidence(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        **_config(),
+        "strategy_canary_reissue_observation_minutes": 60,
+        "strategy_canary_reissue_min_shadow_trades": 8,
+        "strategy_canary_reissue_min_symbols": 3,
+        "strategy_canary_reissue_min_profit_factor": 1.15,
+    }
+    now = datetime(2026, 7, 17, 5, 0, tzinfo=timezone.utc)
+    save_state(
+        {
+            "strategy_canary": {
+                "release_id": "extreme_v4_roll@v4.1",
+                "status": "revoked",
+                "permit_id": "revoked-permit",
+                "permit_kind": "risk_off_recovery",
+                "expires_at": (now + timedelta(hours=24)).isoformat(),
+                "revoked_at": now.isoformat(),
+                "reissue_shadow_baseline_id": 10,
+                "reason": "canary_loss_budget_exhausted",
+            }
+        }
+    )
+    fresh = [
+        {
+            "id": 11 + index,
+            "closed_at": (now + timedelta(minutes=61 + index)).isoformat(),
+            "symbol": f"LOSS{index % 3}USDT",
+            "net_pnl": -0.1,
+        }
+        for index in range(8)
+    ]
+
+    result = strategy_canary_status(
+        config,
+        active_release_id="extreme_v4_roll@v4.1",
+        risk_off=True,
+        cooldown_active=False,
+        emergency_stop=False,
+        current_live=_live(closed=2, net=-0.4, pf=0, latest=-0.2),
+        eligible_shadow_rows=fresh,
+        now=now + timedelta(minutes=90),
+    )
+
+    assert result["status"] == "revoked"
+    assert result["allowed"] is False
+    assert result["reason"] == "waiting_for_reissue_shadow_evidence"
+    assert result["recovery"]["trades"] == 8
+    assert result["recovery"]["net_pnl"] < 0
+
+
+def test_v44_expired_revocation_keeps_original_observation_anchor_and_can_reissue(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        **_config(),
+        "strategy_canary_release_id": "extreme_v4_roll@v4.4",
+        "strategy_canary_startup_cap_enabled": True,
+        "strategy_canary_reissue_observation_minutes": 60,
+        "strategy_canary_reissue_min_shadow_trades": 8,
+        "strategy_canary_reissue_min_symbols": 3,
+        "strategy_canary_reissue_min_profit_factor": 1.15,
+    }
+    now = datetime(2026, 7, 20, 8, 0, tzinfo=timezone.utc)
+    revoked_at = now - timedelta(minutes=90)
+    save_state(
+        {
+            "strategy_canary": {
+                "release_id": "extreme_v4_roll@v4.4",
+                "status": "revoked",
+                "permit_id": "expired-v44-permit",
+                "permit_kind": "release_startup",
+                "expires_at": (now - timedelta(minutes=1)).isoformat(),
+                "revoked_at": revoked_at.isoformat(),
+                "reissue_shadow_baseline_id": 10,
+                "reissue_count": 0,
+                "reason": "canary_permit_expired",
+            }
+        }
+    )
+    fresh = [
+        {
+            "id": 11 + index,
+            "closed_at": (revoked_at + timedelta(minutes=61 + index)).isoformat(),
+            "symbol": f"WIN{index % 3}USDT",
+            "net_pnl": 0.2,
+        }
+        for index in range(8)
+    ]
+
+    result = strategy_canary_status(
+        config,
+        active_release_id="extreme_v4_roll@v4.4",
+        risk_off=True,
+        cooldown_active=False,
+        emergency_stop=False,
+        current_live=_live(closed=5, net=0.1, pf=1.01, latest=-0.1),
+        eligible_shadow_rows=fresh,
+        now=now,
+    )
+
+    assert result["status"] == "waiting_candidate"
+    assert result["allowed"] is True
+    assert result["permit_kind"] == "risk_off_recovery"
+    assert result["reissue_count"] == 1

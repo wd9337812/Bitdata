@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from app.local_circuit import LIVE_ELIGIBLE_LANES, reconcile_v4_local_circuit
+from app.local_circuit import reconcile_v4_local_circuit
 from app.recovery_controller import recovery_permit_status
 from app.strategy_canary import strategy_canary_status
 from app.strategy_releases import (
@@ -19,6 +18,7 @@ from app.strategy_releases import (
     migrate_shadow_release_metadata,
 )
 from app.telemetry import connect, db_path
+from app.v4_evidence import filter_live_eligible_v4_shadows, live_evidence_lanes
 
 
 _CACHE: dict[str, tuple[float, Any]] = {}
@@ -47,29 +47,6 @@ def _stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "cost": round(costs, 8),
         "profit_factor": round(_profit_factor(positive, negative), 4),
     }
-
-
-def _live_eligible_shadow_rows(rows: list[dict[str, Any]], *, allow_legacy: bool) -> list[dict[str, Any]]:
-    """Keep only shadows that were actually eligible for a V4 live lane."""
-    result: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for row in rows:
-        item = dict(row)
-        try:
-            payload = json.loads(item.get("payload") or "{}")
-        except (json.JSONDecodeError, TypeError):
-            payload = {}
-        lane = str(payload.get("admission_lane") or "")
-        if lane not in LIVE_ELIGIBLE_LANES and not (allow_legacy and not lane):
-            continue
-        opportunity_id = str(item.get("opportunity_id") or "").strip()
-        dedupe_key = opportunity_id or f"row:{item.get('id')}"
-        if dedupe_key in seen:
-            continue
-        seen.add(dedupe_key)
-        item["admission_lane"] = lane or "legacy_decision"
-        result.append(item)
-    return result
 
 
 def _cached(key: str, ttl_seconds: float, loader: Any) -> Any:
@@ -216,9 +193,10 @@ def global_performance_guard(
                         (current_family, current_version, ACTIVE_ROLE, shadow_fetch_limit),
                     ).fetchall()
                 ]
-                scoped_shadow = _live_eligible_shadow_rows(
+                scoped_shadow = filter_live_eligible_v4_shadows(
                     scoped_shadow_raw,
-                    allow_legacy=not current_version.startswith("v4.3"),
+                    strategy_version=current_version,
+                    allow_unclassified_legacy=not current_version.startswith(("v4.3", "v4.4")),
                 )
                 scoped_shadow_total = len(scoped_shadow)
                 if release_only and (current_family == V4_FAMILY or scoped_shadow):
@@ -473,8 +451,13 @@ def global_performance_guard(
         recovery_level = 3
         recovery_multiplier = float(config.get("performance_guard_recovery_level_3_multiplier", 0.70))
     permit_state = str(permit.get("status") or "accumulating")
+    canary_state = str(canary.get("status") or "inactive")
     status = (
         f"strategy_canary_{max(1, int(canary.get('level') or 1))}"
+        if startup_canary_active and canary_allowed
+        else "strategy_canary_revoked"
+        if startup_canary_active and canary_state == "revoked"
+        else "strategy_canary_blocked"
         if startup_canary_active
         else "normal"
         if not risk_off
@@ -507,10 +490,14 @@ def global_performance_guard(
         "strategy_canary_1": f"{release_label} 新策略一级试运行",
         "strategy_canary_2": f"{release_label} 新策略二级试运行",
         "strategy_canary_3": f"{release_label} 新策略已验证",
+        "strategy_canary_revoked": f"{release_label} 许可证等待再签发",
+        "strategy_canary_blocked": f"{release_label} 许可证暂不放行",
     }
     reason = "当前版本滚动表现正常"
     if startup_canary_active and canary_allowed:
         reason = f"{release_label} 正在执行首 24 小时限次试运行：单仓保护不变，最多验证 6 个独立机会"
+    elif startup_canary_active and canary_state == "revoked":
+        reason = f"{release_label} 许可证已撤销，等待当前版本合格决策影子达到再签发条件"
     elif startup_canary_active:
         reason = f"{release_label} 首日试运行暂不放行新仓：已有持仓，或机会/亏损预算已用完"
     elif canary_allowed and risk_off:
@@ -610,6 +597,7 @@ def global_performance_guard(
         "local_circuit": local_circuit,
         "recovery_requirements": {
             "shadow_trades": recovery_shadow_limit,
+            "eligible_admission_lanes": sorted(live_evidence_lanes(current_version)),
             "shadow_net_positive": True,
             "shadow_profit_factor": float(config.get("performance_recovery_entry_profit_factor", 0.9)),
             "confirm_closes": int(config.get("performance_recovery_confirm_closes", 3)),

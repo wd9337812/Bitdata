@@ -212,6 +212,8 @@ function App() {
   );
   const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v4_roll"}@${performanceGuard.active_strategy_version || "v4.4"}`;
   const liveEvidenceIsCurrent = performanceGuard.live_evidence_scope === currentPerformanceScope;
+  const recoveryEligibleLanes = performanceGuard.recovery_requirements?.eligible_admission_lanes || [];
+  const recoveryEvidenceLabel = recoveryEligibleLanes.includes("full_bet") ? "全仓决策影子" : "实盘准入决策影子";
   const target = status?.target_progress || {};
   const stageProfile = status?.stage_profile || {};
   const rawStageRoute = status?.stage_route || {};
@@ -415,7 +417,7 @@ function App() {
               <MetricCard
                 title={`${performanceGuard.active_strategy_version || "当前版本"} 决策影子恢复证据`}
                 value={`决策影子 PF ${fmt(performanceGuard.shadow_tail?.profit_factor, 2)}`}
-                sub={`${fmt(performanceGuard.shadow_tail?.trades, 0)} / ${fmt(performanceGuard.recovery_requirements?.shadow_trades, 0)} 笔 · 探索影子只用于研究，不参与恢复放行 · ${performanceGuard.reason || "只用于判断当前实盘版本是否恢复"}`}
+                sub={`${recoveryEvidenceLabel} ${fmt(performanceGuard.shadow_tail?.trades, 0)} / ${fmt(performanceGuard.recovery_requirements?.shadow_trades, 0)} 笔 · 仅影子和探索影子只用于研究，不参与恢复放行 · ${performanceGuard.reason || "只用于判断当前实盘版本是否恢复"}`}
                 tone={performanceGuard.shadow_bad ? "negative" : ""}
               />
               <MetricCard
@@ -431,7 +433,7 @@ function App() {
                 tone={recoveryPermit.status === "waiting_candidate" ? "positive" : recoveryPermit.status === "normal" ? "positive" : "negative"}
               />
               <MetricCard
-                title="V4.4 新策略试运行许可证"
+                title={`${performanceGuard.active_strategy_version || "V4"} 策略试运行许可证`}
                 value={recoveryStatusLabel[strategyCanary.status] || strategyCanary.status || "等待状态"}
                 sub={
                   strategyCanary.status === "revoked" && strategyCanary.recovery
@@ -702,11 +704,11 @@ function FunnelPanel({ funnel }: { funnel: any }) {
         return <MetricCard key={key} title={label} value={value} sub={sub} />;
       })}
       <MetricCard
-        title={funnel?.opportunity_v4?.enabled ? "V4.4 实盘候选" : "剥头皮信号"}
+        title={funnel?.opportunity_v4?.enabled ? `${funnel?.opportunity_v4?.strategy_version || "V4"} 实盘候选` : "剥头皮信号"}
         value={funnel?.opportunity_v4?.enabled
           ? `${fmt(funnel?.opportunity_v4?.admitted, 0)} 个`
           : `${fmt(funnel?.extreme_v2?.scalp, 0)} 个`}
-        sub={funnel?.opportunity_v4?.enabled ? "V4.4 全仓短打准入" : "盘口冲击 / 放量剥头皮 / 失衡试探"}
+        sub={funnel?.opportunity_v4?.enabled ? `${funnel?.opportunity_v4?.strategy_version || "V4"} 当前版本全仓短打准入` : "盘口冲击 / 放量剥头皮 / 失衡试探"}
       />
       <MetricCard
         title="市场自适应"

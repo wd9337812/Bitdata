@@ -379,6 +379,7 @@ def _liquidity_gate(
 
 def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or {}
+    version_label = str(config.get("opportunity_v4_strategy_version") or "v4.3.2").upper()
     regime = _market_regime(candidate)
     direction = str(candidate.get("direction") or "").upper()
     structure = market_structure(candidate)
@@ -496,7 +497,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
             "canary_scope": False,
             "exploration_scope": False,
             "trend_aligned": trend_aligned,
-            "reason": "V4.2 样本显示广泛下跌追空仍为负期望，V4.3.2 暂只记录影子",
+            "reason": f"V4.2 历史样本显示广泛下跌追空为负期望，{version_label} 当前结构未达实盘通道",
         }
     return {
         "scope": "shadow_only",
@@ -504,7 +505,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
         "canary_scope": False,
         "exploration_scope": False,
         "trend_aligned": trend_aligned,
-        "reason": "方向或结构未达到 V4.3.2 实盘通道，继续积累影子证据",
+        "reason": f"方向或结构未达到 {version_label} 实盘通道，继续积累当前版本影子证据",
     }
 
 
@@ -1035,6 +1036,7 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             if negative_evidence
             else "collecting"
         )
+        version_label = version.upper()
         opportunity = {
             "enabled": True,
             "engine": "opportunity_v4",
@@ -1082,15 +1084,15 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
             "liquidity_gate": selected_liquidity,
             "blockers": blockers,
             "reason": (
-                "V4.3.2 局部证据充分，允许标准实盘"
+                f"{version_label} 局部证据充分，允许标准实盘"
                 if validated
-                else "V4.3.2 局部证据初步达标，允许受限实盘"
+                else f"{version_label} 局部证据初步达标，允许受限实盘"
                 if provisional
-                else "V4.3.2 顺势核心候选可使用限次许可证试单"
+                else f"{version_label} 顺势核心候选可使用限次许可证试单"
                 if bootstrap_admitted
-                else "V4.3.2 顺势机会通过受限探索通道"
+                else f"{version_label} 顺势机会通过受限探索通道"
                 if exploration_admitted
-                else "；".join(blockers or ["继续积累 V4.3.2 事件级独立影子证据"])
+                else "；".join(blockers or [f"继续积累 {version_label} 事件级独立影子证据"])
             ),
         }
         if v44_active:

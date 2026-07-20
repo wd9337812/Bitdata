@@ -780,7 +780,54 @@ def _coarse_rank_symbols(
     else:
         rows.sort(key=lambda item: (item["symbol"] in manual, item["score"]), reverse=True)
     ranked = rows[: max(1, limits["coarse"])]
-    symbols_out = [item["symbol"] for item in ranked[: max(1, limits["rank"])]]
+    rank_limit = max(1, limits["rank"])
+    v44_active = bool(
+        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.4")
+        and config.get("opportunity_v4_enabled", True)
+    )
+    if not v44_active or rank_limit < 3:
+        symbols_out = [item["symbol"] for item in ranked[:rank_limit]]
+        return symbols_out, ranked
+
+    selected: list[str] = []
+
+    def reserve(items: list[dict[str, Any]], count: int, route: str) -> None:
+        for item in items:
+            symbol = str(item.get("symbol") or "")
+            if not symbol or symbol in selected:
+                continue
+            item.setdefault("reasons", []).append(route)
+            selected.append(symbol)
+            if sum(route in row.get("reasons", []) for row in ranked) >= count:
+                break
+
+    route_slots = max(1, min(rank_limit // 5, 6))
+    reserve([item for item in ranked if item.get("opportunity_event")], route_slots, "v44_event_reserve")
+    reserve(
+        sorted(
+            ranked,
+            key=lambda item: float((item.get("v3_cross_section") or {}).get("long_strength_percentile") or 0),
+            reverse=True,
+        ),
+        route_slots,
+        "v44_long_reserve",
+    )
+    reserve(
+        sorted(
+            ranked,
+            key=lambda item: float((item.get("v3_cross_section") or {}).get("short_strength_percentile") or 0),
+            reverse=True,
+        ),
+        route_slots,
+        "v44_short_reserve",
+    )
+    for item in ranked:
+        symbol = str(item.get("symbol") or "")
+        if symbol and symbol not in selected:
+            selected.append(symbol)
+        if len(selected) >= rank_limit:
+            break
+    symbols_out = selected[:rank_limit]
     return symbols_out, ranked
 
 
@@ -1856,6 +1903,7 @@ def _apply_v4_live_selection(
     risk_multiplier = float(v4.get("risk_multiplier") or 0.0)
     base_risk = float(candidate.get("base_risk_pct") or mode.get("risk_pct") or 0.0)
     version = str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.3.2")
+    version_label = version.upper()
     full_bet = bool(version.lower().startswith("v4.4") and v4.get("full_bet_admitted"))
     signal = dict(candidate.get("signal") or {})
     if v4.get("protection_profile"):
@@ -1882,15 +1930,15 @@ def _apply_v4_live_selection(
             "quality_risk_multiplier": 1.0,
             "v4_risk_multiplier": risk_multiplier,
             "quality_risk_reasons": [
-                "V4.3.2 已验证核心准入"
+                f"{version_label} 已验证核心准入"
                 if v4.get("validated")
-                else "V4.3.2 同状态核心准入"
+                else f"{version_label} 同状态核心准入"
                 if v4.get("provisional")
-                else "V4.3.2 核心限次试运行"
+                else f"{version_label} 核心限次试运行"
                 if v4.get("bootstrap_admitted")
-                else "V4.3.2 顺势受限探索"
+                else f"{version_label} 顺势受限探索"
                 if v4.get("exploration_admitted")
-                else "V4.3.2 仅影子观察"
+                else f"{version_label} 仅影子观察"
             ],
             "symbol_quality": {
                 "engine": "opportunity_v4",
@@ -1898,22 +1946,22 @@ def _apply_v4_live_selection(
                 "allowed": admitted,
                 "pool": "trade" if admitted else "observe",
                 "tier": (
-                    "V4.3.2-CORE"
+                    f"{version_label}-CORE"
                     if v4.get("validated")
-                    else "V4.3.2-CORE-LIMITED"
+                    else f"{version_label}-CORE-LIMITED"
                     if v4.get("provisional")
-                    else "V4.3.2-CORE-CANARY"
+                    else f"{version_label}-CORE-CANARY"
                     if v4.get("bootstrap_admitted")
-                    else "V4.3.2-EXPLORE"
+                    else f"{version_label}-EXPLORE"
                     if v4.get("exploration_admitted")
-                    else "V4.3.2-SHADOW"
+                    else f"{version_label}-SHADOW"
                 ),
                 "quality_risk_multiplier": risk_multiplier,
-                "quality_risk_reasons": [str(v4.get("reason") or "V4.3.2 独立排序")],
+                "quality_risk_reasons": [str(v4.get("reason") or f"{version_label} 独立排序")],
                 "continuous_position_confidence": v4.get("position_confidence") or {},
                 "simulation": {
                     "passed": None,
-                    "diagnostic": "V4.3.2 按核心、受限探索和影子三通道隔离事件级证据",
+                    "diagnostic": f"{version_label} 按实盘准入与研究影子隔离事件级证据",
                 },
             },
             "symbol_pool": "trade" if admitted else "observe",

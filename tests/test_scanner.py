@@ -1698,6 +1698,45 @@ def test_scan_prioritizes_opportunity_queue_symbols(monkeypatch):
     assert result["funnel"]["coarse_top"][0]["symbol"] == "FASTUSDT"
 
 
+def test_v44_coarse_rank_reserves_event_long_and_short_routes():
+    symbols = ["MAINUSDT", "EVENTUSDT", "LONGUSDT", "SHORTUSDT", "FILLUSDT"]
+    tickers = {
+        symbol: {
+            "symbol": symbol,
+            "lastPrice": "1",
+            "quoteVolume": str(100_000_000 - index * 1_000_000),
+            "priceChangePercent": "0",
+        }
+        for index, symbol in enumerate(symbols)
+    }
+    config = {
+        "opportunity_v4_enabled": True,
+        "opportunity_v4_strategy_version": "v4.4",
+        "rank_pool_limit": 3,
+        "coarse_pool_limit": 5,
+        "_opportunity_v3_market_context": {
+            "symbols": {
+                "LONGUSDT": {"long_strength_percentile": 0.99, "short_strength_percentile": 0.01},
+                "SHORTUSDT": {"long_strength_percentile": 0.01, "short_strength_percentile": 0.99},
+            }
+        },
+    }
+
+    ranked, rows = scanner._coarse_rank_symbols(
+        symbols,
+        tickers,
+        config,
+        {"mode": "tournament_sprint"},
+        {"EVENTUSDT": {"score": 0}},
+    )
+
+    assert set(ranked) == {"EVENTUSDT", "LONGUSDT", "SHORTUSDT"}
+    reasons = {row["symbol"]: row["reasons"] for row in rows}
+    assert "v44_event_reserve" in reasons["EVENTUSDT"]
+    assert "v44_long_reserve" in reasons["LONGUSDT"]
+    assert "v44_short_reserve" in reasons["SHORTUSDT"]
+
+
 def test_scan_publishes_dynamic_stream_intent(monkeypatch):
     class FakeScanClient:
         def ticker_24h(self, symbols=None):

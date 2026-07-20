@@ -296,7 +296,9 @@ def strategy_canary_status(
         return _result(state, enabled=True, allowed=False, now=now)
 
     expires_at = _parse_time(state.get("expires_at"))
-    if (expires_at is None or now >= expires_at) and not (v44_release and state.get("status") == "validated"):
+    if (expires_at is None or now >= expires_at) and not (
+        v44_release and state.get("status") in {"validated", "revoked"}
+    ):
         if v44_release:
             expired = {
                 **state,
