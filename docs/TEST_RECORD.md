@@ -423,3 +423,14 @@ This file tracks local verification for the two-stage futures system.
 - 前端 `npm run build` 通过，生成 `index-CBOUCDgv.js` 等版本化生产资源。
 - 本地 HTTP 冒烟：首页、OpenAPI 与 5 个版本化 JS/CSS 资源全部返回 HTTP 200，OpenAPI 版本为 `0.15.0`。
 - 完整设计与部署边界归档于 `docs/v0.15.0-v45-s0-continuous-admission-2026-07-20.md`。
+
+## 2026-07-20 v0.15.0 / V4.5 VPS 实盘部署验收
+
+- 发布提交为 `58d6973`，VPS 工作区、Dashboard 与 runner 均已切换到应用版本 `0.15.0`、策略 `extreme_v4_roll@v4.5`。
+- 部署前确认 Binance 实盘为空仓、普通订单 0、条件订单 0；配置、状态与数据库辅助文件备份至 `/opt/bitdata/backups/v0.15.0-20260720T101833Z`，未清理历史数据。
+- 部署后通过正式控制接口启动机器人，机器人状态为 `running`；V4.5 连续准入 `allowed=true`，初始仓位倍率 `0.75x`，开仓权限已经恢复。普通亏损只降低后续仓位，不再撤销整张许可证。
+- 当日权益基准保留为 `24.65922409U`，验收时真实权益约 `24.6513U`、当日回撤约 `0.027%`，明显低于 `30%` 暂停线；5U 硬停止保持不变。
+- 最终安全复核仍为空仓、普通订单 0、条件订单 0、未实现盈亏 0；当前无需保护单。部署过程没有手工开仓、平仓或撤销保护单。
+- 公共 WebSocket 已连接，覆盖 150 个币、4 条连接和 451 个流；私有账户流已连接并初始化。Binance REST 无 429 冷却，交易所时间偏差约 `-124ms`。
+- Dashboard 首页、OpenAPI 与 5 个版本化 JS/CSS 资源全部返回 HTTP 200；OpenAPI 版本为 `0.15.0`。Dashboard 与 runner 重启次数均为 0，未发生 OOM。
+- 部署后日志未发现 429/500/502、数据库锁、异常栈或保护单缺失；系统维护定时器保持 active。
