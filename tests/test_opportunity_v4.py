@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.opportunity_v4 import _regime_policy, attach_v4_rankings, clear_v4_evidence_cache
+from app.opportunity_v4 import (
+    _regime_policy,
+    attach_v4_rankings,
+    clear_v4_evidence_cache,
+    v44_position_confidence,
+)
 from app.position_sizing import effective_position_risk
 from app.scanner import _apply_v4_live_selection
 from app.shadow_trading import ensure_shadow_tables
@@ -57,6 +62,16 @@ def test_v46_trend_aligned_policy_uses_configured_version_label():
     assert policy["scope"] == "v44_trend_aligned_full_bet"
     assert policy["live_scope"] is True
     assert "V4.6" in policy["reason"]
+
+
+def test_v46_non_admitted_position_confidence_uses_configured_version_label():
+    confidence = v44_position_confidence(
+        {"admission_lane": "shadow_only", "admitted": False},
+        {"opportunity_v4_strategy_version": "v4.6"},
+    )
+
+    assert confidence["applied"] is False
+    assert "V4.6" in confidence["reason"]
 
 
 def test_v4_ranks_net_expectancy_but_does_not_promote_when_bootstrap_is_disabled(monkeypatch, tmp_path):

@@ -650,6 +650,7 @@ def continuous_position_confidence(opportunity: dict[str, Any], config: dict[str
 
 
 def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    version_label = str(config.get("opportunity_v4_strategy_version") or "v4.6").upper()
     lane = str(opportunity.get("admission_lane") or "shadow_only")
     admitted = bool(opportunity.get("admitted"))
     if lane != "full_bet" or not admitted:
@@ -662,7 +663,7 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
             "display_label": "仅影子观察",
             "target_initial_risk_pct": None,
             "add_on_eligible": False,
-            "reason": f"{version.upper()} 只对通过相对排名和三重确认的 S0 候选计算全仓风险",
+            "reason": f"{version_label} 只对通过相对排名和三重确认的 S0 候选计算全仓风险",
         }
 
     rank_floor = float(config.get("opportunity_v44_min_rank_percentile", 0.80))
