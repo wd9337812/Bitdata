@@ -515,6 +515,37 @@ def test_v44_guard_counts_full_bet_decisions_and_excludes_research_shadows(monke
     assert status["recovery_requirements"]["eligible_admission_lanes"] == ["full_bet"]
 
 
+def test_v45_losses_reduce_position_without_old_global_revoke(monkeypatch, tmp_path):
+    _prepare(monkeypatch, tmp_path)
+    save_state({"daily_start_equity": 20.0, "daily_session_date": "2026-07-20"})
+    _seed_live(
+        "V45LOSSUSDT",
+        "LONG",
+        [-0.2, -0.2, -0.2],
+        version="v4.5",
+        role="active",
+        family="extreme_v4_roll",
+    )
+    clear_performance_cache()
+
+    status = global_performance_guard(
+        {
+            "opportunity_v4_live_enabled": True,
+            "opportunity_v4_strategy_version": "v4.5",
+            "s0_continuous_permit_enabled": True,
+            "performance_guard_current_release_only": True,
+            "_stage_route": {"stage": "S0"},
+        },
+        19.0,
+    )
+
+    assert status["allowed"] is True
+    assert status["status"] == "s0_continuous_position_penalty"
+    assert status["risk_multiplier"] == 0.25
+    assert status["continuous_permit"]["consecutive_losses"] == 3
+    assert status["recovery_permit"]["status"] == "replaced_by_continuous_permit"
+
+
 def test_four_losses_use_soft_observation_before_hard_cooldown(monkeypatch, tmp_path):
     _prepare(monkeypatch, tmp_path)
     _seed_live("SOFTUSDT", "LONG", [-0.1] * 4)

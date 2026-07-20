@@ -599,7 +599,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v4.4",
+    "opportunity_v4_strategy_version": "v4.5",
     "opportunity_v4_decision_min_rank_percentile": 0.75,
     "opportunity_v4_bootstrap_enabled": True,
     "opportunity_v4_bootstrap_min_rank_percentile": 0.85,
@@ -728,7 +728,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "strategy_canary_enabled": True,
     "strategy_canary_auto_issue": True,
     "strategy_canary_startup_cap_enabled": True,
-    "strategy_canary_release_id": "extreme_v4_roll@v4.4",
+    "strategy_canary_release_id": "extreme_v4_roll@v4.5",
     "strategy_canary_permit_hours": 24.0,
     "strategy_canary_level_1_multiplier": 1.0,
     "strategy_canary_level_1_max_opportunities": 6,
@@ -748,6 +748,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "strategy_canary_reissue_min_profit_factor": 1.15,
     "strategy_canary_reissue_multiplier": 1.0,
     "strategy_canary_reissue_max_opportunities": 4,
+    "s0_continuous_permit_enabled": True,
+    "s0_continuous_initial_multiplier": 0.75,
+    "s0_continuous_loss_1_multiplier": 0.75,
+    "s0_continuous_loss_2_multiplier": 0.50,
+    "s0_continuous_loss_3_multiplier": 0.25,
+    "s0_continuous_daily_tier_1_pct": 10.0,
+    "s0_continuous_daily_tier_1_multiplier": 0.75,
+    "s0_continuous_daily_tier_2_pct": 20.0,
+    "s0_continuous_daily_tier_2_multiplier": 0.50,
+    "s0_continuous_daily_pause_pct": 30.0,
+    "s0_continuous_profit_recovery_cost_multiple": 2.0,
+    "s0_continuous_strong_profit_cost_multiple": 6.0,
+    "s0_continuous_full_recovery_wins": 2,
     "v3_credit_score_weight": 0.15,
     "v3_credit_quick_stop_seconds": 300,
     "v3_credit_win_reward": 4.0,
@@ -1019,6 +1032,13 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         config["execution_max_spread_pct"] = loaded["opportunity_v3_max_spread_pct"]
     if "execution_min_depth_notional_usdt" not in loaded and "opportunity_v3_min_depth_notional_usdt" in loaded:
         config["execution_min_depth_notional_usdt"] = loaded["opportunity_v3_min_depth_notional_usdt"]
+    # V4.5 keeps the V4.4 entry/exit model but replaces its global loss-license
+    # revocation with S0 continuous admission. Exact V4.4 saved configs migrate
+    # once; custom future versions are never rewritten.
+    if str(loaded.get("opportunity_v4_strategy_version") or "").lower() == "v4.4":
+        config["opportunity_v4_strategy_version"] = "v4.5"
+    if str(loaded.get("strategy_canary_release_id") or "").lower() == "extreme_v4_roll@v4.4":
+        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.5"
     if not include_secret:
         config["api_secret"] = "********" if config.get("api_secret") else ""
         config["api_key"] = mask(config.get("api_key", ""))

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from app.s0_continuous_permit import s0_continuous_permit_active
+
 
 @dataclass(frozen=True)
 class RiskDecision:
@@ -41,7 +43,7 @@ def equity_guard_status(
     pause_key = "yolo_scalp_equity_guard_pause_drawdown_pct" if mode == "yolo_scalp" else "extreme_equity_guard_pause_drawdown_pct" if mode == "extreme_sprint" else "equity_guard_pause_drawdown_pct"
     v44_full_bet = bool(
         mode == "extreme_sprint"
-        and str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.4")
+        and str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5"))
         and config.get("opportunity_v44_full_bet_enabled", True)
     )
     pause_pct = float(
@@ -139,14 +141,16 @@ def assess_new_position(
     if hard_stop > 0 and equity <= hard_stop:
         return RiskDecision(False, "hard_stop_equity")
 
-    cooldown_until = state.get("cooldown_until")
-    active, error = _cooldown_active(cooldown_until)
-    if error:
-        return RiskDecision(False, error)
-    if active:
-        return RiskDecision(False, "cooldown_active")
+    continuous_s0 = s0_continuous_permit_active(config)
+    if not continuous_s0:
+        cooldown_until = state.get("cooldown_until")
+        active, error = _cooldown_active(cooldown_until)
+        if error:
+            return RiskDecision(False, error)
+        if active:
+            return RiskDecision(False, "cooldown_active")
 
-    if config.get("directional_cooldown_enabled", True) and direction in {"LONG", "SHORT"}:
+    if not continuous_s0 and config.get("directional_cooldown_enabled", True) and direction in {"LONG", "SHORT"}:
         direction_cooldowns = state.get("symbol_direction_cooldowns") or {}
         direction_until = (
             direction_cooldowns.get(direction_cooldown_key(symbol, direction))
@@ -159,26 +163,31 @@ def assess_new_position(
         if active and not overrides.get("ignore_direction_cooldown", False):
             return RiskDecision(False, "symbol_direction_cooldown_active")
 
-    symbol_cooldowns = state.get("symbol_cooldowns") or {}
-    symbol_cooldown_until = symbol_cooldowns.get(symbol.upper()) if isinstance(symbol_cooldowns, dict) else None
-    active, error = _cooldown_active(symbol_cooldown_until)
-    if error:
-        return RiskDecision(False, "invalid_symbol_cooldown_state")
-    if active and config.get("legacy_symbol_cooldown_blocks", False):
-        return RiskDecision(False, "symbol_cooldown_active")
+    if not continuous_s0:
+        symbol_cooldowns = state.get("symbol_cooldowns") or {}
+        symbol_cooldown_until = symbol_cooldowns.get(symbol.upper()) if isinstance(symbol_cooldowns, dict) else None
+        active, error = _cooldown_active(symbol_cooldown_until)
+        if error:
+            return RiskDecision(False, "invalid_symbol_cooldown_state")
+        if active and config.get("legacy_symbol_cooldown_blocks", False):
+            return RiskDecision(False, "symbol_cooldown_active")
 
     max_consecutive_losses = int(overrides.get("max_consecutive_losses", config.get("max_consecutive_losses", 2)))
-    if int(state.get("consecutive_losses", 0)) >= max_consecutive_losses:
+    if not continuous_s0 and int(state.get("consecutive_losses", 0)) >= max_consecutive_losses:
         return RiskDecision(False, "consecutive_loss_limit")
 
     daily_start = float(state.get("daily_start_equity") or equity)
-    daily_loss_limit_pct = float(overrides.get("daily_loss_limit_pct", config.get("daily_loss_limit_pct", 3.0)))
+    daily_loss_limit_pct = float(
+        config.get("s0_continuous_daily_pause_pct", 30.0)
+        if continuous_s0
+        else overrides.get("daily_loss_limit_pct", config.get("daily_loss_limit_pct", 3.0))
+    )
     if daily_start > 0:
         daily_dd_pct = max(0.0, (daily_start - equity) / daily_start * 100)
         if daily_dd_pct >= daily_loss_limit_pct:
             return RiskDecision(False, "daily_loss_limit")
 
-    if not overrides.get("ignore_max_drawdown", False):
+    if not continuous_s0 and not overrides.get("ignore_max_drawdown", False):
         high_watermark = max(float(state.get("equity_high_watermark") or equity), equity)
         if high_watermark > 0:
             drawdown_pct = max(0.0, (high_watermark - equity) / high_watermark * 100)

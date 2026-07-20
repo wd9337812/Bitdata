@@ -7,6 +7,7 @@ from typing import Any
 
 from app.local_circuit import reconcile_v4_local_circuit
 from app.recovery_controller import recovery_permit_status
+from app.s0_continuous_permit import s0_continuous_permit_active, s0_continuous_permit_status
 from app.strategy_canary import strategy_canary_status
 from app.strategy_releases import (
     ACTIVE_ROLE,
@@ -18,7 +19,11 @@ from app.strategy_releases import (
     migrate_shadow_release_metadata,
 )
 from app.telemetry import connect, db_path
-from app.v4_evidence import filter_live_eligible_v4_shadows, live_evidence_lanes
+from app.v4_evidence import (
+    executable_single_position_shadows,
+    filter_live_eligible_v4_shadows,
+    live_evidence_lanes,
+)
 
 
 _CACHE: dict[str, tuple[float, Any]] = {}
@@ -85,7 +90,7 @@ def update_release_equity_guard(
     version = active_release_version(config).lower()
     threshold = float(
         config.get("opportunity_v44_release_pause_drawdown_pct", 35.0)
-        if version.startswith("v4.4")
+        if version.startswith(("v4.4", "v4.5"))
         else config.get("opportunity_v432_release_fallback_drawdown_pct", 8.0)
     )
     fallback_active = bool(False if reset else previous.get("fallback_active")) or drawdown >= threshold
@@ -134,7 +139,7 @@ def global_performance_guard(
                 scoped_live = [
                     dict(row)
                     for row in conn.execute(
-                        "SELECT symbol, direction, open_time, close_time, net_pnl, commission, funding_fee "
+                        "SELECT id, symbol, direction, open_time, close_time, net_pnl, commission, funding_fee, payload "
                         "FROM live_trade_records "
                         "WHERE strategy_family = ? AND strategy_version = ? AND strategy_role = ? "
                         "ORDER BY close_time DESC LIMIT ?",
@@ -151,7 +156,7 @@ def global_performance_guard(
                 fallback_live = [
                     dict(row)
                     for row in conn.execute(
-                        "SELECT symbol, direction, open_time, close_time, net_pnl, commission, funding_fee "
+                        "SELECT id, symbol, direction, open_time, close_time, net_pnl, commission, funding_fee, payload "
                         "FROM live_trade_records "
                         "ORDER BY close_time DESC LIMIT ?",
                         (live_limit,),
@@ -186,7 +191,7 @@ def global_performance_guard(
                 scoped_shadow_raw = [
                     dict(row)
                     for row in conn.execute(
-                        "SELECT id, closed_at, symbol, direction, net_pnl, estimated_cost, "
+                        "SELECT id, opened_at, closed_at, symbol, direction, net_pnl, estimated_cost, "
                         "opportunity_id, payload FROM shadow_trades "
                         "WHERE status = 'CLOSED' AND strategy_family = ? AND strategy_version = ? "
                         f"AND strategy_role = ?{shadow_evidence_clause} ORDER BY id DESC LIMIT ?",
@@ -196,8 +201,10 @@ def global_performance_guard(
                 scoped_shadow = filter_live_eligible_v4_shadows(
                     scoped_shadow_raw,
                     strategy_version=current_version,
-                    allow_unclassified_legacy=not current_version.startswith(("v4.3", "v4.4")),
+                    allow_unclassified_legacy=not current_version.startswith(("v4.3", "v4.4", "v4.5")),
                 )
+                if current_version.startswith("v4.5"):
+                    scoped_shadow = executable_single_position_shadows(scoped_shadow)
                 scoped_shadow_total = len(scoped_shadow)
                 if release_only and (current_family == V4_FAMILY or scoped_shadow):
                     shadow = scoped_shadow
@@ -210,7 +217,7 @@ def global_performance_guard(
                     shadow = [
                         dict(row)
                         for row in conn.execute(
-                            "SELECT id, closed_at, symbol, direction, net_pnl, estimated_cost, "
+                            "SELECT id, opened_at, closed_at, symbol, direction, net_pnl, estimated_cost, "
                             "opportunity_id, payload FROM shadow_trades "
                             "WHERE status = 'CLOSED' ORDER BY id DESC LIMIT ?",
                             (max(shadow_limit, recovery_shadow_limit),),
@@ -404,30 +411,47 @@ def global_performance_guard(
         live_rows=current_live_rows,
         now=now,
     )
-    permit = recovery_permit_status(
-        config,
-        strategy_version=current_version,
-        risk_off=risk_off,
-        cooldown_active=cooldown_active,
-        # A peak drawdown keeps the release in risk-off, but it must remain
-        # recoverable through the shadow-confirmed, single-probe permit path.
-        # Only the account hard stop is an unconditional recovery revocation.
-        emergency_stop=emergency_stop,
-        shadow_tail=shadow_tail,
-        shadow_token=shadow_token,
-        shadow_closed_total=int(raw.get("shadow_closed_total") or 0),
-        current_live=current_live,
-        now=now,
+    continuous_active = s0_continuous_permit_active(config)
+    continuous_permit = (
+        s0_continuous_permit_status(config, equity=equity, live_rows=current_live_rows, now=now)
+        if continuous_active
+        else {}
     )
-    canary = strategy_canary_status(
-        config,
-        active_release_id=f"{current_family}@{current_version}",
-        risk_off=risk_off,
-        cooldown_active=cooldown_active,
-        emergency_stop=emergency_stop,
-        current_live=current_live,
-        eligible_shadow_rows=shadow_rows,
-        now=now,
+    permit = (
+        {"enabled": False, "allowed": False, "status": "replaced_by_continuous_permit"}
+        if continuous_active
+        else recovery_permit_status(
+            config,
+            strategy_version=current_version,
+            risk_off=risk_off,
+            cooldown_active=cooldown_active,
+            emergency_stop=emergency_stop,
+            shadow_tail=shadow_tail,
+            shadow_token=shadow_token,
+            shadow_closed_total=int(raw.get("shadow_closed_total") or 0),
+            current_live=current_live,
+            now=now,
+        )
+    )
+    canary = (
+        {
+            **continuous_permit,
+            "permit_kind": "s0_continuous",
+            "startup_window_active": False,
+            "max_opportunities": None,
+            "used_opportunities": int(current_live.get("closed_total") or 0),
+        }
+        if continuous_active
+        else strategy_canary_status(
+            config,
+            active_release_id=f"{current_family}@{current_version}",
+            risk_off=risk_off,
+            cooldown_active=cooldown_active,
+            emergency_stop=emergency_stop,
+            current_live=current_live,
+            eligible_shadow_rows=shadow_rows,
+            now=now,
+        )
     )
     canary_allowed = bool(canary.get("allowed"))
     startup_canary_active = bool(canary.get("startup_window_active"))
@@ -523,13 +547,31 @@ def global_performance_guard(
         reason = "实盘与影子交易同时处于负期望"
     elif risk_off:
         reason = "等待影子交易证明恢复后才允许小仓验证"
+    if continuous_active:
+        allowed = bool(continuous_permit.get("allowed"))
+        risk_off = not allowed
+        hard_risk_off = continuous_permit.get("status") in {"daily_paused", "hard_stop"}
+        soft_risk_off = bool(allowed and float(continuous_permit.get("risk_multiplier") or 0) < 1.0)
+        cooldown_active = False
+        pause_until = None
+        status = f"s0_continuous_{continuous_permit.get('status') or 'normal'}"
+        labels[status] = {
+            "s0_continuous_normal": "S0 连续准入正常",
+            "s0_continuous_initial_exploration": "S0 新版本受限试探",
+            "s0_continuous_position_penalty": "S0 连续准入降仓",
+            "s0_continuous_daily_paused": "S0 当日回撤暂停",
+            "s0_continuous_hard_stop": "账户权益硬停止",
+        }.get(status, "S0 连续准入")
+        reason = str(continuous_permit.get("reason") or "S0 连续准入状态已更新")
     return {
         "enabled": True,
         "allowed": allowed,
         "status": status,
         "status_label": labels[status],
         "risk_multiplier": (
-            0.0
+            float(continuous_permit.get("risk_multiplier") or 0.0)
+            if continuous_active
+            else 0.0
             if not allowed
             else float(canary.get("risk_multiplier") or 0.0)
             if startup_canary_active or (risk_off and canary_allowed)
@@ -594,6 +636,7 @@ def global_performance_guard(
         "shadow_evidence_scope": raw.get("shadow_scope"),
         "recovery_permit": permit,
         "strategy_canary_permit": canary,
+        "continuous_permit": continuous_permit,
         "local_circuit": local_circuit,
         "recovery_requirements": {
             "shadow_trades": recovery_shadow_limit,

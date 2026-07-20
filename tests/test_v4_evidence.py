@@ -1,4 +1,8 @@
-from app.v4_evidence import filter_live_eligible_v4_shadows, is_live_eligible_v4_shadow
+from app.v4_evidence import (
+    executable_single_position_shadows,
+    filter_live_eligible_v4_shadows,
+    is_live_eligible_v4_shadow,
+)
 
 
 def test_v44_uses_only_full_bet_decision_shadows_for_live_recovery():
@@ -46,3 +50,14 @@ def test_live_recovery_deduplicates_same_opportunity_id():
 
     assert len(eligible) == 1
 
+
+def test_v45_recovery_uses_only_non_overlapping_single_position_path():
+    rows = [
+        {"id": 1, "opened_at": "2026-07-20T00:00:00+00:00", "closed_at": "2026-07-20T00:10:00+00:00"},
+        {"id": 2, "opened_at": "2026-07-20T00:05:00+00:00", "closed_at": "2026-07-20T00:08:00+00:00"},
+        {"id": 3, "opened_at": "2026-07-20T00:10:00+00:00", "closed_at": "2026-07-20T00:20:00+00:00"},
+    ]
+
+    executable = executable_single_position_shadows(rows)
+
+    assert [row["id"] for row in executable] == [3, 1]

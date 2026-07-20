@@ -582,7 +582,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v4.4"
+    opportunity_v4_strategy_version: str = "v4.5"
     opportunity_v4_decision_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
     opportunity_v4_bootstrap_enabled: bool = True
     opportunity_v4_bootstrap_min_rank_percentile: float = Field(default=0.85, ge=0, le=1)
@@ -711,7 +711,7 @@ class TradingConfig(BaseModel):
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
     strategy_canary_startup_cap_enabled: bool = True
-    strategy_canary_release_id: str = "extreme_v4_roll@v4.4"
+    strategy_canary_release_id: str = "extreme_v4_roll@v4.5"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
     strategy_canary_level_1_multiplier: float = Field(default=1.0, ge=0, le=1)
     strategy_canary_level_1_max_opportunities: int = Field(default=6, ge=1, le=100)
@@ -731,6 +731,19 @@ class TradingConfig(BaseModel):
     strategy_canary_reissue_min_profit_factor: float = Field(default=1.15, ge=0, le=100)
     strategy_canary_reissue_multiplier: float = Field(default=1.0, ge=0, le=1)
     strategy_canary_reissue_max_opportunities: int = Field(default=4, ge=1, le=100)
+    s0_continuous_permit_enabled: bool = True
+    s0_continuous_initial_multiplier: float = Field(default=0.75, ge=0, le=1)
+    s0_continuous_loss_1_multiplier: float = Field(default=0.75, ge=0, le=1)
+    s0_continuous_loss_2_multiplier: float = Field(default=0.50, ge=0, le=1)
+    s0_continuous_loss_3_multiplier: float = Field(default=0.25, ge=0, le=1)
+    s0_continuous_daily_tier_1_pct: float = Field(default=10.0, ge=0, le=100)
+    s0_continuous_daily_tier_1_multiplier: float = Field(default=0.75, ge=0, le=1)
+    s0_continuous_daily_tier_2_pct: float = Field(default=20.0, ge=0, le=100)
+    s0_continuous_daily_tier_2_multiplier: float = Field(default=0.50, ge=0, le=1)
+    s0_continuous_daily_pause_pct: float = Field(default=30.0, ge=0.1, le=100)
+    s0_continuous_profit_recovery_cost_multiple: float = Field(default=2.0, ge=0, le=100)
+    s0_continuous_strong_profit_cost_multiple: float = Field(default=6.0, ge=0, le=100)
+    s0_continuous_full_recovery_wins: int = Field(default=2, ge=1, le=20)
     v3_credit_score_weight: float = Field(default=0.15, ge=0, le=2)
     v3_credit_quick_stop_seconds: int = Field(default=300, ge=30, le=3600)
     v3_credit_win_reward: float = Field(default=4.0, ge=0, le=30)

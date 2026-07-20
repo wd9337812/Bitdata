@@ -155,6 +155,34 @@ def test_risk_allows_sprint_consecutive_loss_override():
     assert allowed.allowed is True
 
 
+def test_v45_continuous_admission_ignores_legacy_loss_cooldowns_but_keeps_daily_stop():
+    config = {
+        **base_config(),
+        "opportunity_v4_strategy_version": "v4.5",
+        "s0_continuous_permit_enabled": True,
+        "s0_continuous_daily_pause_pct": 30,
+        "legacy_symbol_cooldown_blocks": True,
+        "_stage_route": {"stage": "S0"},
+    }
+    future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    state = {
+        "bot_status": "running",
+        "daily_start_equity": 20,
+        "equity_high_watermark": 100,
+        "consecutive_losses": 9,
+        "cooldown_until": future,
+        "symbol_direction_cooldowns": {"SOLUSDT:LONG": future},
+        "symbol_cooldowns": {"SOLUSDT": future},
+    }
+
+    allowed = assess_new_position(config, state, 14.01, "SOLUSDT", [], overrides={"direction": "LONG"})
+    paused = assess_new_position(config, state, 14.0, "SOLUSDT", [], overrides={"direction": "LONG"})
+
+    assert allowed.allowed is True
+    assert paused.allowed is False
+    assert paused.reason == "daily_loss_limit"
+
+
 def test_equity_guard_scales_then_pauses_on_high_watermark_drawdown():
     config = {
         **base_config(),

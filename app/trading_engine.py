@@ -220,7 +220,7 @@ def build_position_rotation_plan(
     min_delta = rotation_required_delta(config, mode, current_pnl_pct, current_type)
     cost_metrics = rotation_cost_metrics(candidate, config)
     opportunity = candidate.get("opportunity_v4") or {}
-    v44_rotation = str(opportunity.get("strategy_version") or "").lower().startswith("v4.4")
+    v44_rotation = str(opportunity.get("strategy_version") or "").lower().startswith(("v4.4", "v4.5"))
     if v44_rotation:
         min_cost_ratio = float(config.get("opportunity_v44_min_cost_ratio", 1.50))
         min_net_cost_ratio = max(1.0, float(config.get("opportunity_v44_rotation_min_cost_ratio", 1.25)))
@@ -469,7 +469,7 @@ def build_stage1_decision(
                     "mode": active_mode["mode"],
                     "strategy": active_mode["strategy"],
                     "entry_type": entry_type,
-                    "decision_reason": "V4.4 试运行许可证继续保留：当前候选未通过相对排名、确认项、成本或流动性硬门",
+                    "decision_reason": "当前版本准入继续有效：候选本身未通过相对排名、确认项、成本或流动性硬门",
                     "primary_block_reason": canary_reason,
                     "performance_guard": performance_guard,
                     "protection_plan": protection_plan,

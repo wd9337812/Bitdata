@@ -782,7 +782,7 @@ def _coarse_rank_symbols(
     ranked = rows[: max(1, limits["coarse"])]
     rank_limit = max(1, limits["rank"])
     v44_active = bool(
-        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.4")
+        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5"))
         and config.get("opportunity_v4_enabled", True)
     )
     if not v44_active or rank_limit < 3:
@@ -1904,7 +1904,7 @@ def _apply_v4_live_selection(
     base_risk = float(candidate.get("base_risk_pct") or mode.get("risk_pct") or 0.0)
     version = str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.3.2")
     version_label = version.upper()
-    full_bet = bool(version.lower().startswith("v4.4") and v4.get("full_bet_admitted"))
+    full_bet = bool(version.lower().startswith(("v4.4", "v4.5")) and v4.get("full_bet_admitted"))
     signal = dict(candidate.get("signal") or {})
     if v4.get("protection_profile"):
         signal["protection_profile"] = dict(v4["protection_profile"])
@@ -1977,16 +1977,16 @@ def _apply_v4_live_selection(
         }
     )
     if full_bet:
-        result["quality_risk_reasons"] = ["V4.4 当前轮相对排名与五项确认通过"]
+        result["quality_risk_reasons"] = [f"{version.upper()} 当前轮相对排名与五项确认通过"]
         result["symbol_quality"] = {
             **(result.get("symbol_quality") or {}),
-            "tier": "V4.4-FULL-BET",
+            "tier": f"{version.upper()}-FULL-BET",
             "quality_risk_multiplier": 1.0,
-            "quality_risk_reasons": [str(v4.get("reason") or "V4.4 独立排序")],
+            "quality_risk_reasons": [str(v4.get("reason") or f"{version.upper()} 独立排序")],
             "continuous_position_confidence": v4.get("position_confidence") or {},
             "simulation": {
                 "passed": None,
-                "diagnostic": "只使用 V4.4 当前版本影子和实盘证据，旧版本信用不参与准入",
+                "diagnostic": f"只使用 {version.upper()} 当前版本影子和实盘证据，旧版本信用不参与准入",
             },
         }
         result["risk_adjustment"] = {
@@ -2924,7 +2924,7 @@ def scan_growth_candidates(
             ),
             "live_enabled": bool(config.get("opportunity_v4_live_enabled", False)),
             "label": (
-                "V4.4 单仓全进全出、相对排名与五项确认"
+                "V4.5 单仓全进全出、相对排名与五项确认"
                 if v44_active
                 else "V4.3.2 连续质量仓位、局部熔断与顺势双通道排序"
             ),

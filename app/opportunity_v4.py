@@ -15,7 +15,7 @@ from app.telemetry import connect, db_path
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.4"
+V4_FEATURE_SCHEMA = "v4.5"
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -400,7 +400,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
             "reason": "恐慌行情只记录影子，不在失序盘口追价",
         }
     v44_active = bool(
-        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.4")
+        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5"))
         and config.get("opportunity_v44_full_bet_enabled", True)
     )
     v44_structure = bool(
@@ -414,7 +414,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
             "canary_scope": True,
             "exploration_scope": False,
             "trend_aligned": True,
-            "reason": "V4.4 当前方向与中周期趋势一致，进入全仓短打候选通道",
+            "reason": f"{version.upper()} 当前方向与中周期趋势一致，进入全仓短打候选通道",
         }
     if regime == "quiet" and direction == "LONG" and aligned and setup_type == "pullback" and phase == "RETEST":
         return {
@@ -511,7 +511,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
 
 def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2").lower()
-    if version.startswith("v4.4") and config.get("opportunity_v44_full_bet_enabled", True):
+    if version.startswith(("v4.4", "v4.5")) and config.get("opportunity_v44_full_bet_enabled", True):
         stop_atr = float(config.get("opportunity_v44_stop_atr", 0.85))
         take_profit_r = float(config.get("opportunity_v44_take_profit_r", 1.05))
         return {
@@ -655,7 +655,7 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
             "display_label": "仅影子观察",
             "target_initial_risk_pct": None,
             "add_on_eligible": False,
-            "reason": "V4.4 只对通过相对排名和三重确认的 S0 候选计算全仓风险",
+            "reason": f"{version.upper()} 只对通过相对排名和三重确认的 S0 候选计算全仓风险",
         }
 
     rank_floor = float(config.get("opportunity_v44_min_rank_percentile", 0.80))
@@ -724,7 +724,7 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
     min_symbols = int(config.get("opportunity_v41_validation_min_symbols", 3))
     prior_trades = float(config.get("opportunity_v41_empirical_prior_trades", 40))
     version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
-    v44_active = bool(version.lower().startswith("v4.4") and config.get("opportunity_v44_full_bet_enabled", True))
+    v44_active = bool(version.lower().startswith(("v4.4", "v4.5")) and config.get("opportunity_v44_full_bet_enabled", True))
     v44_rank = float(config.get("opportunity_v44_min_rank_percentile", 0.80))
     v44_quality = float(config.get("opportunity_v44_min_quality_score", 52.0)) / 100
     v44_expected = float(config.get("opportunity_v44_min_expected_net_pct", 0.02))
@@ -1001,7 +1001,7 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
                 f"受限探索确认不足：{momentum_confirmations}/{exploration_confirmations_required}，或回踩/突破结构未确认"
             )
         if v44_active and v44_confirmations < v44_confirmations_required:
-            blockers.append(f"V4.4 五项确认仅通过 {v44_confirmations}/{v44_confirmations_required}")
+            blockers.append(f"{version.upper()} 五项确认仅通过 {v44_confirmations}/{v44_confirmations_required}")
         if not v44_active and not exploring and not alignment_ok:
             blockers.append("中周期方向未对齐")
         if negative_evidence and not v44_active:
@@ -1097,9 +1097,9 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         }
         if v44_active:
             opportunity["reason"] = (
-                "V4.4 相对排名、五项确认、扣费后期望和流动性均达标，允许 S0 全仓短打"
+                f"{version.upper()} 相对排名、五项确认、扣费后期望和流动性均达标，允许 S0 全仓短打"
                 if v44_admitted
-                else "；".join(blockers or ["继续积累 V4.4 当前版本影子证据"])
+                else "；".join(blockers or [f"继续积累 {version.upper()} 当前版本影子证据"])
             )
         opportunity["position_confidence"] = (
             v44_position_confidence(opportunity, config)

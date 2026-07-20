@@ -24,6 +24,7 @@ from app.strategy_releases import (
 )
 from app.opportunity_v4 import V4_CONTROL_FAMILY, V4_STRATEGY_FAMILY
 from app.telemetry import connect, now_iso
+from app.v4_evidence import executable_single_position_shadows, filter_live_eligible_v4_shadows
 
 
 def ensure_shadow_tables(conn: sqlite3.Connection) -> None:
@@ -708,6 +709,19 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
     # controls remain visible by evidence type, but cannot inflate live admission.
     if current_family == V4_STRATEGY_FAMILY:
         active_rows = [row for row in active_rows if str(row.get("evidence_type") or "decision") == "decision"]
+        if str(current_version or "").lower().startswith("v4.5"):
+            eligible_active_rows = filter_live_eligible_v4_shadows(
+                active_rows,
+                strategy_version=current_version,
+                allow_unclassified_legacy=False,
+            )
+            executable_active_rows = executable_single_position_shadows(eligible_active_rows)
+            research_parallel_excluded = max(0, len(eligible_active_rows) - len(executable_active_rows))
+            active_rows = executable_active_rows
+        else:
+            research_parallel_excluded = 0
+    else:
+        research_parallel_excluded = 0
     candidate_rows = [row for row in candidate_rows if str(row.get("evidence_type") or "decision") == "decision"]
     active_closed = [row for row in active_rows if str(row.get("status")) == "CLOSED"]
     candidate_closed = [row for row in candidate_rows if str(row.get("status")) == "CLOSED"]
@@ -746,6 +760,10 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             "recent": _shadow_stats(active_closed[:shadow_window]),
             "recovery": _shadow_stats(active_closed[:recovery_window]),
             "primary_evidence_type": "decision" if current_family == V4_STRATEGY_FAMILY else "all",
+            "execution_scope": "single_position_non_overlapping"
+            if str(current_version or "").lower().startswith("v4.5")
+            else "all_eligible_decisions",
+            "research_parallel_excluded": research_parallel_excluded,
         },
         "challenger_release": None if v4_live else {
             "strategy_family": V4_STRATEGY_FAMILY,

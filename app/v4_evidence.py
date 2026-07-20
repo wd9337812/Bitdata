@@ -31,7 +31,7 @@ def admission_lane_from_row(row: dict[str, Any]) -> str:
 
 def live_evidence_lanes(strategy_version: str) -> frozenset[str]:
     version = str(strategy_version or "").strip().lower()
-    if version.startswith("v4.4"):
+    if version.startswith(("v4.4", "v4.5")):
         return V44_LIVE_ADMISSION_LANES
     return LEGACY_LIVE_ADMISSION_LANES
 
@@ -76,3 +76,26 @@ def filter_live_eligible_v4_shadows(
         item["admission_lane"] = admission_lane_from_row(item) or "legacy_decision"
         result.append(item)
     return result
+
+
+def executable_single_position_shadows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Select the deterministic shadow path one real S0 account could execute.
+
+    Rows are considered in opening order. While one selected shadow is open,
+    overlapping candidates remain research evidence and cannot influence a
+    release permit or recovery statistic.
+    """
+    ordered = sorted(
+        (dict(row) for row in rows),
+        key=lambda row: (str(row.get("opened_at") or row.get("closed_at") or ""), int(row.get("id") or 0)),
+    )
+    selected: list[dict[str, Any]] = []
+    occupied_until = ""
+    for row in ordered:
+        opened_at = str(row.get("opened_at") or "")
+        closed_at = str(row.get("closed_at") or opened_at)
+        if not opened_at or (occupied_until and opened_at < occupied_until):
+            continue
+        selected.append(row)
+        occupied_until = max(occupied_until, closed_at)
+    return sorted(selected, key=lambda row: int(row.get("id") or 0), reverse=True)
