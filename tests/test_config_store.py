@@ -74,7 +74,7 @@ def test_v42_loads_legacy_execution_limits_without_changing_values(tmp_path, mon
     assert loaded["execution_min_depth_notional_usdt"] == 4321.0
 
 
-def test_v462_migrates_v461_version_canary_and_default_time_exit(tmp_path, monkeypatch):
+def test_v47_migrates_v461_version_canary_and_default_time_exit(tmp_path, monkeypatch):
     path = tmp_path / "config.json"
     path.write_text(
         json.dumps(
@@ -92,8 +92,8 @@ def test_v462_migrates_v461_version_canary_and_default_time_exit(tmp_path, monke
     importlib.reload(config_store)
     loaded = config_store.load_config(include_secret=True)
 
-    assert loaded["opportunity_v4_strategy_version"] == "v4.6.2"
-    assert loaded["strategy_canary_release_id"] == "extreme_v4_roll@v4.6.2"
+    assert loaded["opportunity_v4_strategy_version"] == "v4.7"
+    assert loaded["strategy_canary_release_id"] == "extreme_v4_roll@v4.7"
     assert loaded["opportunity_v44_max_hold_bars"] == 2
     assert loaded["opportunity_v462_time_exit_migrated"] is True
 

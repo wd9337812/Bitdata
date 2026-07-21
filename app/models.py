@@ -598,7 +598,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v4.6.2"
+    opportunity_v4_strategy_version: str = "v4.7"
     opportunity_v4_decision_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
     opportunity_v4_bootstrap_enabled: bool = True
     opportunity_v4_bootstrap_min_rank_percentile: float = Field(default=0.85, ge=0, le=1)
@@ -719,6 +719,26 @@ class TradingConfig(BaseModel):
     opportunity_v462_short_min_regime_fit: float = Field(default=0.85, ge=0, le=1)
     opportunity_v462_short_min_medium_path: float = Field(default=0.45, ge=0, le=1)
     opportunity_v462_short_risk_multiplier: float = Field(default=0.65, ge=0, le=1)
+    opportunity_v47_adaptive_enabled: bool = True
+    opportunity_v47_seed_version: str = "v4.6.2"
+    opportunity_v47_seed_weight: float = Field(default=0.25, ge=0, le=1)
+    opportunity_v47_seed_effective_sample_cap: float = Field(default=4.0, ge=0, le=100)
+    opportunity_v47_calibration_lookback_hours: float = Field(default=72, ge=24, le=8760)
+    opportunity_v47_calibration_max_rows: int = Field(default=4000, ge=100, le=100000)
+    opportunity_v47_calibration_cache_seconds: int = Field(default=300, ge=30, le=3600)
+    opportunity_v47_min_current_samples: int = Field(default=6, ge=1, le=1000)
+    opportunity_v47_full_current_samples: int = Field(default=16, ge=1, le=1000)
+    opportunity_v47_threshold_min_current_samples: int = Field(default=12, ge=1, le=1000)
+    opportunity_v47_exact_min_samples: int = Field(default=4, ge=1, le=1000)
+    opportunity_v47_aligned_multiplier: float = Field(default=1.0, ge=0, le=2)
+    opportunity_v47_neutral_multiplier: float = Field(default=0.85, ge=0, le=2)
+    opportunity_v47_countertrend_multiplier: float = Field(default=0.65, ge=0, le=2)
+    opportunity_v47_min_multiplier: float = Field(default=0.55, ge=0, le=2)
+    opportunity_v47_max_multiplier: float = Field(default=1.15, ge=0, le=2)
+    opportunity_v47_max_step: float = Field(default=0.10, ge=0, le=0.5)
+    opportunity_v47_countertrend_min_directed_flow: float = Field(default=0.72, ge=0, le=1)
+    opportunity_v47_countertrend_min_regime_fit: float = Field(default=0.85, ge=0, le=1)
+    opportunity_v47_countertrend_min_medium_path: float = Field(default=0.45, ge=0, le=1)
     opportunity_v44_loss_reduced_after: int = Field(default=2, ge=1, le=20)
     opportunity_v44_loss_reduced_risk_pct: float = Field(default=8.0, ge=0.01, le=100)
     opportunity_v44_max_consecutive_losses: int = Field(default=5, ge=1, le=20)
@@ -732,7 +752,7 @@ class TradingConfig(BaseModel):
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
     strategy_canary_startup_cap_enabled: bool = True
-    strategy_canary_release_id: str = "extreme_v4_roll@v4.6.2"
+    strategy_canary_release_id: str = "extreme_v4_roll@v4.7"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
     strategy_canary_level_1_multiplier: float = Field(default=1.0, ge=0, le=1)
     strategy_canary_level_1_max_opportunities: int = Field(default=6, ge=1, le=100)

@@ -83,6 +83,33 @@ def test_v462_feature_weights_are_normalized_and_flow_led():
     assert V462_FEATURE_WEIGHTS["liquidity"] == min(V462_FEATURE_WEIGHTS.values())
 
 
+def test_v47_full_bet_uses_adaptive_calibration_and_keeps_risk_cap(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    candidate = _candidate("V47LONGUSDT", 0.95, 2.0)
+    candidate["entry_type"] = "v3_momentum"
+    config = {
+        "opportunity_v4_strategy_version": "v4.7",
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v44_full_bet_enabled": True,
+        "opportunity_v44_min_rank_percentile": 0.80,
+        "opportunity_v44_min_quality_score": 52.0,
+        "opportunity_v44_min_expected_net_pct": 0.02,
+        "opportunity_v44_min_lower_expectancy_pct": -0.05,
+        "opportunity_v44_min_cost_ratio": 1.50,
+        "opportunity_v44_min_confirmations": 3,
+        "opportunity_v44_min_risk_pct": 8.0,
+        "opportunity_v44_max_risk_pct": 15.0,
+        "opportunity_v44_stressed_risk_cap_pct": 15.0,
+    }
+
+    attach_v4_rankings([candidate], config)
+    opportunity = candidate["opportunity_v4"]
+
+    assert opportunity["strategy_version"] == "v4.7"
+    assert opportunity["adaptive_calibration"]["relation"] == "aligned"
+    assert opportunity["position_confidence"]["target_initial_risk_pct"] <= 15.0
+
+
 def test_v462_rewards_momentum_and_penalizes_pullback_before_smart_flow():
     momentum = _candidate("MOMENTUMUSDT", 0.90, 2.0)
     momentum["entry_type"] = "v3_momentum"
