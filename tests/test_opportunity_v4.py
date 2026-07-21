@@ -47,31 +47,31 @@ def _candidate(symbol: str, strength: float, volume: float) -> dict:
     }
 
 
-def test_v46_trend_aligned_policy_uses_configured_version_label():
+def test_v461_trend_aligned_policy_uses_configured_version_label():
     candidate = _candidate("ALTUSDT", 0.95, 2.0)
     candidate["entry_type"] = "v3_momentum"
 
     policy = _regime_policy(
         candidate,
         {
-            "opportunity_v4_strategy_version": "v4.6",
+            "opportunity_v4_strategy_version": "v4.6.1",
             "opportunity_v44_full_bet_enabled": True,
         },
     )
 
     assert policy["scope"] == "v44_trend_aligned_full_bet"
     assert policy["live_scope"] is True
-    assert "V4.6" in policy["reason"]
+    assert "V4.6.1" in policy["reason"]
 
 
-def test_v46_non_admitted_position_confidence_uses_configured_version_label():
+def test_v461_non_admitted_position_confidence_uses_configured_version_label():
     confidence = v44_position_confidence(
         {"admission_lane": "shadow_only", "admitted": False},
-        {"opportunity_v4_strategy_version": "v4.6"},
+        {"opportunity_v4_strategy_version": "v4.6.1"},
     )
 
     assert confidence["applied"] is False
-    assert "V4.6" in confidence["reason"]
+    assert "V4.6.1" in confidence["reason"]
 
 
 def test_v4_ranks_net_expectancy_but_does_not_promote_when_bootstrap_is_disabled(monkeypatch, tmp_path):

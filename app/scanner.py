@@ -2727,8 +2727,28 @@ def scan_growth_candidates(
         except Exception as exc:
             candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})
 
-    candidates = enrich_smart_flow_candidates(client, candidates, config, fast_lane=fast_lane)
+    # V4.6.1 uses a two-pass selector: establish the executable V4 shortlist
+    # first, spend smart-flow REST budget on that shortlist, then recompute the
+    # final rank with the bounded directional adjustment.
     candidates = attach_v4_rankings(candidates, config)
+    for candidate in candidates:
+        preliminary = candidate.get("opportunity_v4") or {}
+        if preliminary.get("enabled"):
+            candidate["opportunity_v4_pre_rank"] = {
+                "score": preliminary.get("score"),
+                "rank_percentile": preliminary.get("rank_percentile"),
+                "rank_bucket": preliminary.get("rank_bucket"),
+                "lower_expected_net_pct": preliminary.get("lower_expected_net_pct"),
+                "decision_candidate": preliminary.get("decision_candidate"),
+            }
+    candidates = enrich_smart_flow_candidates(
+        client,
+        candidates,
+        config,
+        fast_lane=fast_lane,
+        v4_shortlist_only=bool(config.get("opportunity_v4_enabled", True)),
+    )
+    candidates = attach_v4_rankings(candidates, config, reuse_existing_context=True)
     if v3_enabled and config.get("opportunity_v4_enabled", True):
         candidates = [
             _finalize_candidate(
@@ -2851,6 +2871,21 @@ def scan_growth_candidates(
         blocked_categories[category] = blocked_categories.get(category, 0) + 1
     if not fast_lane:
         _publish_stream_intent(config, account_summary, coarse_rows, candidates, trade_pool)
+    smart_flow_selected_symbols = {
+        str(candidate.get("symbol") or "").upper()
+        for candidate in candidates
+        if (candidate.get("smart_flow") or {}).get("shortlist_selected")
+    }
+    smart_flow_available_symbols = {
+        str(candidate.get("symbol") or "").upper()
+        for candidate in candidates
+        if (candidate.get("smart_flow") or {}).get("available")
+    }
+    smart_flow_adjusted_symbols = {
+        str(candidate.get("symbol") or "").upper()
+        for candidate in candidates
+        if abs(float(candidate.get("smart_flow_score_delta") or 0)) > 0
+    }
     funnel = {
         "recall": {
             "count": len(recalled_symbols),
@@ -2926,7 +2961,7 @@ def scan_growth_candidates(
             ),
             "live_enabled": bool(config.get("opportunity_v4_live_enabled", False)),
             "label": (
-                "V4.6 单仓全进全出、相对排名、五项确认与聪明钱软评分"
+                "V4.6.1 两阶段排名、单仓全进全出、五项确认与聪明钱软评分"
                 if v44_active
                 else "V4.3.2 连续质量仓位、局部熔断与顺势双通道排序"
             ),
@@ -2934,11 +2969,13 @@ def scan_growth_candidates(
         "smart_flow": {
             "enabled": bool(config.get("smart_flow_enabled", True)),
             "live_soft_score_enabled": bool(config.get("smart_flow_live_soft_score_enabled", False)),
-            "available": sum(1 for candidate in candidates if (candidate.get("smart_flow") or {}).get("available")),
-            "adjusted": sum(1 for candidate in candidates if abs(float(candidate.get("smart_flow_score_delta") or 0)) > 0),
+            "shortlisted": len(smart_flow_selected_symbols),
+            "available": len(smart_flow_available_symbols),
+            "adjusted": len(smart_flow_adjusted_symbols),
             "symbol_limit": int(config.get("smart_flow_symbol_limit", 12)),
             "max_soft_points": float(config.get("smart_flow_max_soft_points", 5.0)),
-            "label": "聪明钱复合软评分",
+            "selection_stage": "v4_pre_rank",
+            "label": "V4 决策短名单聪明钱复合软评分",
         },
         "opportunity_queue": {
             "enabled": bool(config.get("opportunity_queue_enabled", True)),

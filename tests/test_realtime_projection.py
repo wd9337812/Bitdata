@@ -120,3 +120,64 @@ def test_smart_flow_is_bounded_soft_score(monkeypatch, tmp_path):
     assert result[0]["smart_flow"]["available"] is True
     assert result[0]["smart_flow"]["confidence"] >= 0.45
     assert 0 < result[0]["smart_flow_score_delta"] <= 5
+
+
+def test_smart_flow_spends_budget_on_v4_shortlist_and_deduplicates_symbol(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    rows = [{"longShortRatio": "1.2"}, {"longShortRatio": "1.4"}] * 3
+
+    class Client:
+        def __init__(self):
+            self.calls = 0
+
+        def top_trader_position_ratio(self, *args):
+            self.calls += 1
+            return rows
+
+        def top_trader_account_ratio(self, *args):
+            self.calls += 1
+            return rows
+
+        def taker_buy_sell_ratio(self, *args):
+            self.calls += 1
+            return [{"buySellRatio": "1.2"}] * 6
+
+        def open_interest_hist(self, *args):
+            self.calls += 1
+            return [{"sumOpenInterestValue": "100"}, {"sumOpenInterestValue": "110"}] * 3
+
+    client = Client()
+    v4 = {"enabled": True, "admitted": True, "decision_candidate": True, "rank_percentile": 0.95}
+    candidates = [
+        {"symbol": "OBSERVE461USDT", "direction": "LONG", "score": 999},
+        {"symbol": "DECISION461USDT", "direction": "LONG", "score": 10, "opportunity_v4": dict(v4)},
+        {"symbol": "DECISION461USDT", "direction": "SHORT", "score": 9, "opportunity_v4": dict(v4)},
+        {
+            "symbol": "OUTSIDE461USDT",
+            "direction": "LONG",
+            "score": 8,
+            "opportunity_v4": {"enabled": True, "rank_percentile": 0.80},
+        },
+    ]
+    result = enrich_smart_flow_candidates(
+        client,
+        candidates,
+        {
+            "smart_flow_enabled": True,
+            "smart_flow_live_soft_score_enabled": True,
+            "smart_flow_symbol_limit": 1,
+            "smart_flow_max_soft_points": 5,
+            "smart_flow_min_confidence": 0.45,
+            "smart_flow_cache_seconds": 300,
+            "smart_flow_period": "5m",
+            "smart_flow_history_points": 12,
+        },
+        v4_shortlist_only=True,
+    )
+
+    assert client.calls == 4
+    assert result[0]["smart_flow"]["status"] == "no_v4_trigger"
+    assert result[1]["smart_flow"]["status"] == "applied"
+    assert result[2]["smart_flow"]["status"] == "applied"
+    assert result[1]["smart_flow_score_delta"] == -result[2]["smart_flow_score_delta"]
+    assert result[3]["smart_flow"]["status"] == "outside_v4_shortlist"

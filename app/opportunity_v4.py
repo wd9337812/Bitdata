@@ -15,7 +15,7 @@ from app.telemetry import connect, db_path
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.6"
+V4_FEATURE_SCHEMA = "v4.6.1"
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -650,7 +650,7 @@ def continuous_position_confidence(opportunity: dict[str, Any], config: dict[str
 
 
 def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    version_label = str(config.get("opportunity_v4_strategy_version") or "v4.6").upper()
+    version_label = str(config.get("opportunity_v4_strategy_version") or "v4.6.1").upper()
     lane = str(opportunity.get("admission_lane") or "shadow_only")
     admitted = bool(opportunity.get("admitted"))
     if lane != "full_bet" or not admitted:
@@ -710,7 +710,12 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
         "add_on_eligible": False,
         "reason": "按本轮相对排名、五项确认、成本效率和流动性连续计算 8%-15% 计划风险",
     }
-def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[str, Any]]:
+def attach_v4_rankings(
+    candidates: list[dict[str, Any]],
+    config: dict[str, Any],
+    *,
+    reuse_existing_context: bool = False,
+) -> list[dict[str, Any]]:
     if not config.get("opportunity_v4_enabled", True):
         return candidates
     prepared: list[tuple[dict[str, Any], dict[str, float], dict[str, float]]] = []
@@ -799,11 +804,16 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
     )
     ranked: list[tuple[float, dict[str, Any]]] = []
     circuit_state = local_circuit_state(f"{V4_STRATEGY_FAMILY}@{version}")
-    loaded_evidence = evidence_rows(config)
+    loaded_evidence = [] if reuse_existing_context else evidence_rows(config)
 
     for candidate, features, model in prepared:
         rank = _percentile_rank(model_values, model["expected_net_pct"])
-        evidence = _cohort_evidence(candidate, config)
+        existing_opportunity = candidate.get("opportunity_v4") or {}
+        evidence = (
+            existing_opportunity.get("evidence")
+            if reuse_existing_context and existing_opportunity.get("evidence")
+            else _cohort_evidence(candidate, config)
+        )
         selected = evidence["selected"]
         hierarchical = evidence["hierarchical"]
         empirical_weight = float(hierarchical["local_trades"]) / (
@@ -826,11 +836,15 @@ def attach_v4_rankings(candidates: list[dict[str, Any]], config: dict[str, Any])
         blended_model_ok = expected >= min_expected and lower > min_lower
         shadow_eligible = bool(setup_type != "unknown" and model["reward_pct"] > model["cost_pct"])
         evidence_risk_multiplier = 1.0 if v44_active else _direction_evidence_multiplier(evidence, config)
-        local_circuit = candidate_local_circuit_status(
-            candidate,
-            loaded_evidence,
-            config,
-            state=circuit_state,
+        local_circuit = (
+            existing_opportunity.get("local_circuit")
+            if reuse_existing_context and existing_opportunity.get("local_circuit")
+            else candidate_local_circuit_status(
+                candidate,
+                loaded_evidence,
+                config,
+                state=circuit_state,
+            )
         )
         negative_evidence = bool(local_circuit.get("blocked"))
         validated_liquidity = _liquidity_gate(candidate, config, validated_risk * evidence_risk_multiplier)

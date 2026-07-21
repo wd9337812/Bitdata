@@ -615,7 +615,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v4.6",
+    "opportunity_v4_strategy_version": "v4.6.1",
     "opportunity_v4_decision_min_rank_percentile": 0.75,
     "opportunity_v4_bootstrap_enabled": True,
     "opportunity_v4_bootstrap_min_rank_percentile": 0.85,
@@ -744,7 +744,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "strategy_canary_enabled": True,
     "strategy_canary_auto_issue": True,
     "strategy_canary_startup_cap_enabled": True,
-    "strategy_canary_release_id": "extreme_v4_roll@v4.6",
+    "strategy_canary_release_id": "extreme_v4_roll@v4.6.1",
     "strategy_canary_permit_hours": 24.0,
     "strategy_canary_level_1_multiplier": 1.0,
     "strategy_canary_level_1_max_opportunities": 6,
@@ -1048,15 +1048,16 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         config["execution_max_spread_pct"] = loaded["opportunity_v3_max_spread_pct"]
     if "execution_min_depth_notional_usdt" not in loaded and "opportunity_v3_min_depth_notional_usdt" in loaded:
         config["execution_min_depth_notional_usdt"] = loaded["opportunity_v3_min_depth_notional_usdt"]
-    # V4.6 keeps V4.5 continuous admission and adds real-time state projection
-    # plus a bounded smart-flow feature without weakening hard safety gates.
-    if str(loaded.get("opportunity_v4_strategy_version") or "").lower() in {"v4.4", "v4.5"}:
-        config["opportunity_v4_strategy_version"] = "v4.6"
+    # V4.6.1 keeps V4.6 safety and moves smart-flow enrichment behind the
+    # preliminary V4 rank so REST budget is spent on executable candidates.
+    if str(loaded.get("opportunity_v4_strategy_version") or "").lower() in {"v4.4", "v4.5", "v4.6"}:
+        config["opportunity_v4_strategy_version"] = "v4.6.1"
     if str(loaded.get("strategy_canary_release_id") or "").lower() in {
         "extreme_v4_roll@v4.4",
         "extreme_v4_roll@v4.5",
+        "extreme_v4_roll@v4.6",
     }:
-        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.6"
+        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.6.1"
     if not include_secret:
         config["api_secret"] = "********" if config.get("api_secret") else ""
         config["api_key"] = mask(config.get("api_key", ""))

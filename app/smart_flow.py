@@ -162,18 +162,50 @@ def enrich_smart_flow_candidates(
     config: dict[str, Any],
     *,
     fast_lane: bool = False,
+    v4_shortlist_only: bool = False,
 ) -> list[dict[str, Any]]:
     if not config.get("smart_flow_enabled", True):
         return candidates
     limit = int(config.get("smart_flow_symbol_limit", 12))
-    ranked = sorted(candidates, key=lambda item: float(item.get("score") or -999), reverse=True)
-    selected = {str(item.get("symbol") or "").upper() for item in ranked[:limit]}
+
+    def shortlist_priority(item: dict[str, Any]) -> tuple[Any, ...]:
+        opportunity = item.get("opportunity_v4") or {}
+        return (
+            bool(opportunity.get("enabled")),
+            bool(opportunity.get("admitted")),
+            bool(opportunity.get("decision_candidate")),
+            float(opportunity.get("rank_percentile") or -1),
+            float(opportunity.get("lower_expected_net_pct") or -999),
+            float(item.get("score") or -999),
+        )
+
+    ranked = sorted(candidates, key=shortlist_priority, reverse=True)
+    selected: set[str] = set()
+    for item in ranked:
+        symbol = str(item.get("symbol") or "").upper()
+        opportunity = item.get("opportunity_v4") or {}
+        if not symbol or (v4_shortlist_only and not opportunity.get("enabled")):
+            continue
+        selected.add(symbol)
+        if len(selected) >= limit:
+            break
+
     max_points = float(config.get("smart_flow_max_soft_points", 5.0))
     live_enabled = bool(config.get("smart_flow_live_soft_score_enabled", False))
     for candidate in candidates:
         symbol = str(candidate.get("symbol") or "").upper()
         if not symbol or symbol not in selected:
-            candidate["smart_flow"] = {"enabled": True, "available": False, "score": 0.0, "bias": "NEUTRAL"}
+            opportunity = candidate.get("opportunity_v4") or {}
+            candidate["smart_flow"] = {
+                "enabled": True,
+                "available": False,
+                "score": 0.0,
+                "bias": "NEUTRAL",
+                "shortlist_selected": False,
+                "selection_stage": "v4_pre_rank" if v4_shortlist_only else "candidate_score",
+                "status": "outside_v4_shortlist" if opportunity.get("enabled") else "no_v4_trigger",
+                "reason": "outside_v4_shortlist" if opportunity.get("enabled") else "no_executable_v4_trigger",
+            }
             candidate["smart_flow_score_delta"] = 0.0
             continue
         derivatives = candidate.get("derivatives") or {}
@@ -199,6 +231,15 @@ def enrich_smart_flow_candidates(
             "directional_alignment": round(directional_score, 6),
             "live_soft_score_enabled": live_enabled,
             "minimum_confidence": minimum_confidence,
+            "shortlist_selected": True,
+            "selection_stage": "v4_pre_rank" if v4_shortlist_only else "candidate_score",
+            "status": (
+                "applied"
+                if signal.get("available") and live_enabled and confidence >= minimum_confidence
+                else "insufficient_confidence"
+                if signal.get("available")
+                else str(signal.get("reason") or "unavailable")
+            ),
         }
         candidate["smart_flow_score_delta"] = round(delta, 6)
     return candidates
