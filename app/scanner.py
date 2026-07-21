@@ -2727,7 +2727,7 @@ def scan_growth_candidates(
         except Exception as exc:
             candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})
 
-    # V4.6.1 uses a two-pass selector: establish the executable V4 shortlist
+    # V4.6.2 uses a two-pass selector: establish the executable V4 shortlist
     # first, spend smart-flow REST budget on that shortlist, then recompute the
     # final rank with the bounded directional adjustment.
     candidates = attach_v4_rankings(candidates, config)
@@ -2961,7 +2961,7 @@ def scan_growth_candidates(
             ),
             "live_enabled": bool(config.get("opportunity_v4_live_enabled", False)),
             "label": (
-                "V4.6.1 两阶段排名、单仓全进全出、五项确认与聪明钱软评分"
+                "V4.6.2 资金流加权排名、单仓短打、做空强化确认与聪明钱软评分"
                 if v44_active
                 else "V4.3.2 连续质量仓位、局部熔断与顺势双通道排序"
             ),

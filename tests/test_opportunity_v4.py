@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from app.opportunity_v4 import (
+    V462_FEATURE_WEIGHTS,
+    _model_expectancy,
+    _model_features,
     _regime_policy,
     attach_v4_rankings,
     clear_v4_evidence_cache,
@@ -47,31 +50,114 @@ def _candidate(symbol: str, strength: float, volume: float) -> dict:
     }
 
 
-def test_v461_trend_aligned_policy_uses_configured_version_label():
+def test_v462_trend_aligned_policy_uses_configured_version_label():
     candidate = _candidate("ALTUSDT", 0.95, 2.0)
     candidate["entry_type"] = "v3_momentum"
 
     policy = _regime_policy(
         candidate,
         {
-            "opportunity_v4_strategy_version": "v4.6.1",
+            "opportunity_v4_strategy_version": "v4.6.2",
             "opportunity_v44_full_bet_enabled": True,
         },
     )
 
     assert policy["scope"] == "v44_trend_aligned_full_bet"
     assert policy["live_scope"] is True
-    assert "V4.6.1" in policy["reason"]
+    assert "V4.6.2" in policy["reason"]
 
 
-def test_v461_non_admitted_position_confidence_uses_configured_version_label():
+def test_v462_non_admitted_position_confidence_uses_configured_version_label():
     confidence = v44_position_confidence(
         {"admission_lane": "shadow_only", "admitted": False},
-        {"opportunity_v4_strategy_version": "v4.6.1"},
+        {"opportunity_v4_strategy_version": "v4.6.2"},
     )
 
     assert confidence["applied"] is False
-    assert "V4.6.1" in confidence["reason"]
+    assert "V4.6.2" in confidence["reason"]
+
+
+def test_v462_feature_weights_are_normalized_and_flow_led():
+    assert sum(V462_FEATURE_WEIGHTS.values()) == 1.0
+    assert V462_FEATURE_WEIGHTS["directed_flow"] == max(V462_FEATURE_WEIGHTS.values())
+    assert V462_FEATURE_WEIGHTS["liquidity"] == min(V462_FEATURE_WEIGHTS.values())
+
+
+def test_v462_rewards_momentum_and_penalizes_pullback_before_smart_flow():
+    momentum = _candidate("MOMENTUMUSDT", 0.90, 2.0)
+    momentum["entry_type"] = "v3_momentum"
+    pullback = _candidate("PULLBACKUSDT", 0.90, 2.0)
+    pullback["entry_type"] = "v3_pullback"
+
+    momentum_model = _model_expectancy(momentum, _model_features(momentum), {})
+    pullback_model = _model_expectancy(pullback, _model_features(pullback), {})
+
+    assert momentum_model["setup_adjustment"] == 0.04
+    assert pullback_model["setup_adjustment"] == -0.03
+    assert momentum_model["quality"] > pullback_model["quality"]
+
+
+def test_v462_short_position_confidence_applies_direction_risk_discount():
+    base = {
+        "admission_lane": "full_bet",
+        "admitted": True,
+        "rank_percentile": 1.0,
+        "v44_confirmations": 5,
+        "cost_ratio": 8.0,
+        "lower_expected_net_pct": 0.15,
+        "liquidity_gate": {"passed": True},
+    }
+    config = {
+        "opportunity_v4_strategy_version": "v4.6.2",
+        "opportunity_v44_min_rank_percentile": 0.8,
+        "opportunity_v44_min_confirmations": 3,
+        "opportunity_v44_min_cost_ratio": 1.5,
+        "opportunity_v44_min_lower_expectancy_pct": -0.05,
+        "opportunity_v44_min_risk_pct": 8.0,
+        "opportunity_v44_max_risk_pct": 15.0,
+        "opportunity_v462_short_risk_multiplier": 0.65,
+    }
+
+    long_result = v44_position_confidence({**base, "direction": "LONG"}, config)
+    short_result = v44_position_confidence({**base, "direction": "SHORT"}, config)
+
+    assert short_result["target_initial_risk_pct"] == long_result["target_initial_risk_pct"] * 0.65
+    assert short_result["components"]["direction_risk"] == 0.65
+
+
+def test_v462_short_full_bet_requires_stronger_directional_flow(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    clear_v4_evidence_cache()
+    config = {
+        "opportunity_v4_strategy_version": "v4.6.2",
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v44_full_bet_enabled": True,
+        "opportunity_v44_min_rank_percentile": 0.8,
+        "opportunity_v44_min_quality_score": 52.0,
+        "opportunity_v44_min_expected_net_pct": 0.02,
+        "opportunity_v44_min_lower_expectancy_pct": -0.05,
+        "opportunity_v44_min_cost_ratio": 1.5,
+        "opportunity_v44_min_confirmations": 3,
+        "opportunity_v462_short_min_directed_flow": 0.72,
+        "opportunity_v462_short_min_regime_fit": 0.85,
+        "opportunity_v462_short_min_medium_path": 0.45,
+    }
+
+    weak = _candidate("WEAKSHORTUSDT", 0.95, 2.0)
+    weak.update({"direction": "SHORT", "entry_type": "v3_momentum"})
+    weak["signal"].update({"signal": "SHORT", "directed_trade_flow": 0.50})
+    weak["opportunity_v3"].update({"market_regime": "broad_down", "medium_trend_aligned": True})
+    attach_v4_rankings([weak], config)
+
+    strong = _candidate("STRONGSHORTUSDT", 0.95, 2.0)
+    strong.update({"direction": "SHORT", "entry_type": "v3_momentum"})
+    strong["signal"].update({"signal": "SHORT", "directed_trade_flow": 0.62})
+    strong["opportunity_v3"].update({"market_regime": "broad_down", "medium_trend_aligned": True})
+    attach_v4_rankings([strong], config)
+
+    assert weak["opportunity_v4"]["full_bet_admitted"] is False
+    assert any("做空需要更强" in reason for reason in weak["opportunity_v4"]["blockers"])
+    assert strong["opportunity_v4"]["full_bet_admitted"] is True
 
 
 def test_v4_ranks_net_expectancy_but_does_not_promote_when_bootstrap_is_disabled(monkeypatch, tmp_path):

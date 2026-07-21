@@ -615,7 +615,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v4.6.1",
+    "opportunity_v4_strategy_version": "v4.6.2",
     "opportunity_v4_decision_min_rank_percentile": 0.75,
     "opportunity_v4_bootstrap_enabled": True,
     "opportunity_v4_bootstrap_min_rank_percentile": 0.85,
@@ -729,8 +729,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v44_stop_atr": 0.85,
     "opportunity_v44_take_profit_r": 1.05,
     "opportunity_v44_break_even_trigger_r": 0.45,
-    "opportunity_v44_max_hold_bars": 6,
+    "opportunity_v44_max_hold_bars": 2,
     "opportunity_v44_runtime_exit_enabled": True,
+    "opportunity_v462_short_min_directed_flow": 0.72,
+    "opportunity_v462_short_min_regime_fit": 0.85,
+    "opportunity_v462_short_min_medium_path": 0.45,
+    "opportunity_v462_short_risk_multiplier": 0.65,
     "opportunity_v44_loss_reduced_after": 2,
     "opportunity_v44_loss_reduced_risk_pct": 8.0,
     "opportunity_v44_max_consecutive_losses": 5,
@@ -744,7 +748,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "strategy_canary_enabled": True,
     "strategy_canary_auto_issue": True,
     "strategy_canary_startup_cap_enabled": True,
-    "strategy_canary_release_id": "extreme_v4_roll@v4.6.1",
+    "strategy_canary_release_id": "extreme_v4_roll@v4.6.2",
     "strategy_canary_permit_hours": 24.0,
     "strategy_canary_level_1_multiplier": 1.0,
     "strategy_canary_level_1_max_opportunities": 6,
@@ -1048,16 +1052,20 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         config["execution_max_spread_pct"] = loaded["opportunity_v3_max_spread_pct"]
     if "execution_min_depth_notional_usdt" not in loaded and "opportunity_v3_min_depth_notional_usdt" in loaded:
         config["execution_min_depth_notional_usdt"] = loaded["opportunity_v3_min_depth_notional_usdt"]
-    # V4.6.1 keeps V4.6 safety and moves smart-flow enrichment behind the
-    # preliminary V4 rank so REST budget is spent on executable candidates.
-    if str(loaded.get("opportunity_v4_strategy_version") or "").lower() in {"v4.4", "v4.5", "v4.6"}:
-        config["opportunity_v4_strategy_version"] = "v4.6.1"
+    # V4.6.2 keeps the two-stage smart-flow pipeline and starts a clean evidence
+    # scope for the data-backed feature weights and faster time decay.
+    loaded_v4_version = str(loaded.get("opportunity_v4_strategy_version") or "").lower()
+    if loaded_v4_version in {"v4.4", "v4.5", "v4.6", "v4.6.1"}:
+        config["opportunity_v4_strategy_version"] = "v4.6.2"
+    if loaded_v4_version == "v4.6.1" and int(loaded.get("opportunity_v44_max_hold_bars", 6)) == 6:
+        config["opportunity_v44_max_hold_bars"] = 2
     if str(loaded.get("strategy_canary_release_id") or "").lower() in {
         "extreme_v4_roll@v4.4",
         "extreme_v4_roll@v4.5",
         "extreme_v4_roll@v4.6",
+        "extreme_v4_roll@v4.6.1",
     }:
-        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.6.1"
+        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.6.2"
     if not include_secret:
         config["api_secret"] = "********" if config.get("api_secret") else ""
         config["api_key"] = mask(config.get("api_key", ""))

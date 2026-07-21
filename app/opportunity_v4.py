@@ -15,7 +15,26 @@ from app.telemetry import connect, db_path
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.6.1"
+V4_FEATURE_SCHEMA = "v4.6.2"
+
+V462_FEATURE_WEIGHTS = {
+    "cross_sectional_strength": 0.08,
+    "regime_fit": 0.15,
+    "volume_persistence": 0.15,
+    "directed_flow": 0.20,
+    "medium_path": 0.17,
+    "medium_alignment": 0.08,
+    "entry_quality": 0.12,
+    "anti_chase": 0.04,
+    "liquidity": 0.01,
+}
+
+V462_SETUP_ADJUSTMENTS = {
+    "momentum": 0.04,
+    "breakout": 0.01,
+    "pullback": -0.03,
+    "prebreakout": -0.03,
+}
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
@@ -286,19 +305,12 @@ def _dynamic_cost_pct(candidate: dict[str, Any], config: dict[str, Any]) -> floa
 
 
 def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], config: dict[str, Any]) -> dict[str, float]:
-    base_quality = (
-        features["cross_sectional_strength"] * 0.14
-        + features["regime_fit"] * 0.14
-        + features["volume_persistence"] * 0.10
-        + features["directed_flow"] * 0.10
-        + features["medium_path"] * 0.12
-        + features["medium_alignment"] * 0.18
-        + features["entry_quality"] * 0.14
-        + features["anti_chase"] * 0.05
-        + features["liquidity"] * 0.03
-    )
+    base_quality = sum(features[name] * weight for name, weight in V462_FEATURE_WEIGHTS.items())
+    structure = market_structure(candidate)
+    setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
+    setup_adjustment = V462_SETUP_ADJUSTMENTS.get(setup_type, 0.0)
     quality = _clamp(
-        base_quality + float(candidate.get("smart_flow_score_delta") or 0.0) / 100.0,
+        base_quality + setup_adjustment + float(candidate.get("smart_flow_score_delta") or 0.0) / 100.0,
         0.0,
         1.0,
     )
@@ -313,6 +325,8 @@ def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], con
     uncertainty = 0.04 + (1.0 - quality) * 0.12
     return {
         "quality": quality,
+        "base_quality": base_quality,
+        "setup_adjustment": setup_adjustment,
         "win_probability": win_probability,
         "expected_net_pct": expected,
         "lower_expected_net_pct": expected - uncertainty,
@@ -526,7 +540,7 @@ def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> di
             "profile": "s0_full_bet_v44",
             "stop_atr": stop_atr,
             "take_profit_atr": stop_atr * take_profit_r,
-            "max_hold_bars": int(config.get("opportunity_v44_max_hold_bars", 6)),
+            "max_hold_bars": int(config.get("opportunity_v44_max_hold_bars", 2)),
             "fast_invalid_atr": stop_atr * 0.45,
             "break_even_trigger_atr": stop_atr
             * float(config.get("opportunity_v44_break_even_trigger_r", 0.45)),
@@ -650,7 +664,7 @@ def continuous_position_confidence(opportunity: dict[str, Any], config: dict[str
 
 
 def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    version_label = str(config.get("opportunity_v4_strategy_version") or "v4.6.1").upper()
+    version_label = str(config.get("opportunity_v4_strategy_version") or "v4.6.2").upper()
     lane = str(opportunity.get("admission_lane") or "shadow_only")
     admitted = bool(opportunity.get("admitted"))
     if lane != "full_bet" or not admitted:
@@ -690,7 +704,13 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
     )
     minimum_risk = float(config.get("opportunity_v44_min_risk_pct", 8.0))
     maximum_risk = max(minimum_risk, float(config.get("opportunity_v44_max_risk_pct", 15.0)))
-    target = minimum_risk + (maximum_risk - minimum_risk) * confidence
+    direction = str(opportunity.get("direction") or "LONG").upper()
+    direction_risk_multiplier = (
+        float(config.get("opportunity_v462_short_risk_multiplier", 0.65))
+        if direction == "SHORT"
+        else 1.0
+    )
+    target = (minimum_risk + (maximum_risk - minimum_risk) * confidence) * direction_risk_multiplier
     return {
         "enabled": True,
         "applied": True,
@@ -704,6 +724,7 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
             "cost_efficiency": round(cost_component, 6),
             "conservative_expectancy": round(lower_component, 6),
             "liquidity": round(liquidity_component, 6),
+            "direction_risk": round(direction_risk_multiplier, 6),
         },
         "target_initial_risk_pct": round(target, 6),
         "configured_initial_range_pct": [round(minimum_risk, 6), round(maximum_risk, 6)],
@@ -899,10 +920,20 @@ def attach_v4_rankings(
         v44_confirmations = sum(
             (
                 features["volume_persistence"] >= 0.55,
-                features["directed_flow"] >= 0.55,
-                features["cross_sectional_strength"] >= 0.70,
+                features["directed_flow"] >= 0.70,
+                features["regime_fit"] >= 0.80,
                 features["medium_path"] >= 0.45 or bool(policy["trend_aligned"]),
                 features["anti_chase"] >= 0.60,
+            )
+        )
+        direction = str(candidate.get("direction") or "").upper()
+        short_quality_ok = bool(
+            direction != "SHORT"
+            or (
+                features["directed_flow"] >= float(config.get("opportunity_v462_short_min_directed_flow", 0.72))
+                and features["regime_fit"] >= float(config.get("opportunity_v462_short_min_regime_fit", 0.85))
+                and features["medium_path"] >= float(config.get("opportunity_v462_short_min_medium_path", 0.45))
+                and bool(policy["trend_aligned"])
             )
         )
         momentum_confirmed = setup_type in {"momentum", "prebreakout"} and (
@@ -949,6 +980,7 @@ def attach_v4_rankings(
             and lower >= v44_lower
             and model["cost_ratio"] >= v44_cost_ratio
             and v44_confirmations >= v44_confirmations_required
+            and short_quality_ok
             and executable
             and full_bet_liquidity["passed"]
         )
@@ -1024,6 +1056,8 @@ def attach_v4_rankings(
             )
         if v44_active and v44_confirmations < v44_confirmations_required:
             blockers.append(f"{version.upper()} 五项确认仅通过 {v44_confirmations}/{v44_confirmations_required}")
+        if v44_active and direction == "SHORT" and not short_quality_ok:
+            blockers.append("做空需要更强的方向资金流、市场匹配和中周期路径确认")
         if not v44_active and not exploring and not alignment_ok:
             blockers.append("中周期方向未对齐")
         if negative_evidence and not v44_active:
@@ -1068,7 +1102,12 @@ def attach_v4_rankings(
             "feature_schema_version": V4_FEATURE_SCHEMA,
             "market_structure_schema": MARKET_STRUCTURE_SCHEMA,
             "setup_type": setup_type,
+            "direction": direction,
             "score": round(model["quality"] * 100, 4),
+            "base_quality_score": round(model["base_quality"] * 100, 4),
+            "setup_adjustment_points": round(model["setup_adjustment"] * 100, 4),
+            "smart_flow_adjustment_points": round(float(candidate.get("smart_flow_score_delta") or 0.0), 4),
+            "feature_weights": dict(V462_FEATURE_WEIGHTS),
             "rank_percentile": round(rank, 6),
             "rank_bucket": "top" if rank >= 0.75 else "middle" if rank >= 0.35 else "tail",
             "model_expected_net_pct": round(model["expected_net_pct"], 6),
