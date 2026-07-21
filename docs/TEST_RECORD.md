@@ -9,8 +9,9 @@ This file tracks local verification for the two-stage futures system.
 - SHORT admission requires stronger flow, regime and medium-path confirmation and receives a 0.65 direction risk multiplier for this release. The 15% stressed risk cap remains unchanged.
 - Low-return full-bet positions use a two-bar time exit (about 10 minutes) instead of the prior six-bar default. Exchange stop-loss and take-profit orders remain authoritative.
 - V4.6.1 configuration migrates to an isolated V4.6.2 evidence scope, canary id and two-bar time exit without deleting history.
-- Focused regression: `python -m pytest tests/test_config_store.py tests/test_opportunity_v4.py -q`: `23 passed`.
-- Complete backend regression: `python -m pytest -q`: `300 passed`; one existing local `requests` dependency compatibility warning remains.
+- A one-time migration marker repairs partially persisted multi-container upgrades without overriding a later explicit user change back to six bars.
+- Focused regression: `python -m pytest tests/test_config_store.py tests/test_opportunity_v4.py -q`: `24 passed`.
+- Complete backend regression: `python -m pytest -q`: `301 passed`; one existing local `requests` dependency compatibility warning remains.
 - `python -m compileall -q app`: passed.
 - Frontend `npm run build`: passed; generated `index-BdyugdOT.js` and the existing split React/chart chunks.
 - Local HTTP smoke on `127.0.0.1:8097`: `/`, `/openapi.json` and all five referenced static assets returned `200`; OpenAPI reported `0.16.2`.

@@ -714,6 +714,7 @@ class TradingConfig(BaseModel):
     opportunity_v44_break_even_trigger_r: float = Field(default=0.45, ge=0.05, le=5)
     opportunity_v44_max_hold_bars: int = Field(default=2, ge=1, le=200)
     opportunity_v44_runtime_exit_enabled: bool = True
+    opportunity_v462_time_exit_migrated: bool = True
     opportunity_v462_short_min_directed_flow: float = Field(default=0.72, ge=0, le=1)
     opportunity_v462_short_min_regime_fit: float = Field(default=0.85, ge=0, le=1)
     opportunity_v462_short_min_medium_path: float = Field(default=0.45, ge=0, le=1)

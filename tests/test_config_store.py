@@ -95,3 +95,30 @@ def test_v462_migrates_v461_version_canary_and_default_time_exit(tmp_path, monke
     assert loaded["opportunity_v4_strategy_version"] == "v4.6.2"
     assert loaded["strategy_canary_release_id"] == "extreme_v4_roll@v4.6.2"
     assert loaded["opportunity_v44_max_hold_bars"] == 2
+    assert loaded["opportunity_v462_time_exit_migrated"] is True
+
+
+def test_v462_time_exit_migration_repairs_partially_persisted_upgrade_once(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "opportunity_v4_strategy_version": "v4.6.2",
+                "opportunity_v44_max_hold_bars": 6,
+                "strategy_canary_release_id": "extreme_v4_roll@v4.6.2",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APP_CONFIG_PATH", str(path))
+    import app.config_store as config_store
+
+    importlib.reload(config_store)
+    migrated = config_store.load_config(include_secret=True)
+    assert migrated["opportunity_v44_max_hold_bars"] == 2
+    assert migrated["opportunity_v462_time_exit_migrated"] is True
+
+    config_store.save_config(migrated)
+    config_store.save_config({"opportunity_v44_max_hold_bars": 6})
+    explicitly_changed = config_store.load_config(include_secret=True)
+    assert explicitly_changed["opportunity_v44_max_hold_bars"] == 6

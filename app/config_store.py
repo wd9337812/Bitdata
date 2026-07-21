@@ -731,6 +731,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v44_break_even_trigger_r": 0.45,
     "opportunity_v44_max_hold_bars": 2,
     "opportunity_v44_runtime_exit_enabled": True,
+    "opportunity_v462_time_exit_migrated": True,
     "opportunity_v462_short_min_directed_flow": 0.72,
     "opportunity_v462_short_min_regime_fit": 0.85,
     "opportunity_v462_short_min_medium_path": 0.45,
@@ -1057,8 +1058,10 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
     loaded_v4_version = str(loaded.get("opportunity_v4_strategy_version") or "").lower()
     if loaded_v4_version in {"v4.4", "v4.5", "v4.6", "v4.6.1"}:
         config["opportunity_v4_strategy_version"] = "v4.6.2"
-    if loaded_v4_version == "v4.6.1" and int(loaded.get("opportunity_v44_max_hold_bars", 6)) == 6:
-        config["opportunity_v44_max_hold_bars"] = 2
+    if not bool(loaded.get("opportunity_v462_time_exit_migrated", False)):
+        if int(loaded.get("opportunity_v44_max_hold_bars", 6)) == 6:
+            config["opportunity_v44_max_hold_bars"] = 2
+        config["opportunity_v462_time_exit_migrated"] = True
     if str(loaded.get("strategy_canary_release_id") or "").lower() in {
         "extreme_v4_roll@v4.4",
         "extreme_v4_roll@v4.5",
