@@ -201,6 +201,7 @@ def status() -> dict[str, Any]:
         "runtime": runtime_status,
         "storage": telemetry_storage_status(),
         "v49_global_adaptive": adaptive_calibration_status(config),
+        "global_adaptive": adaptive_calibration_status(config),
     }
 
 

@@ -120,3 +120,28 @@ def test_v49_uses_one_global_current_version_calibration(monkeypatch):
     assert long_result["rank_threshold_delta"] < 0
     assert short_result["rank_threshold_delta"] == long_result["rank_threshold_delta"]
     assert short_result["risk_multiplier"] == long_result["risk_multiplier"]
+
+
+def test_v410_adds_global_regime_direction_and_smart_context(monkeypatch):
+    rows = []
+    for index in range(20):
+        row = _row("LONG", 0.25, version="v4.10", source="shadow", age=index / 2, symbol=f"ALT{index % 3}USDT", regime="broad_up")
+        row["smart_score"] = 0.25
+        rows.append(row)
+    for index in range(8):
+        row = _row("SHORT", -0.10, version="v4.10", source="live", age=index / 2, symbol=f"ALT{index % 3}USDT", regime="broad_up")
+        row["smart_score"] = 0.10
+        rows.append(row)
+    monkeypatch.setattr(module, "calibration_rows", lambda config: rows)
+    module.clear_adaptive_calibration_cache()
+
+    result = module.adaptive_calibration(
+        _candidate("LONG", "broad_up"),
+        {"opportunity_v4_strategy_version": "v4.10", "opportunity_v49_global_target_live_trades": 12},
+    )
+
+    assert result["schema"] == "adaptive_v410_global"
+    assert result["market_regime_state"] == "trend"
+    assert result["global_direction_bias"] == "LONG"
+    assert result["smart_flow_global"]["available"] is True
+    assert result["risk_multiplier"] > 1.0

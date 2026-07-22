@@ -15,13 +15,14 @@ from app.telemetry import connect, db_path
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _GLOBAL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+GLOBAL_ADAPTIVE_VERSIONS = ("v4.9", "v4.10")
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
-def _payload_metadata(payload_text: Any) -> tuple[str, str]:
+def _payload_metadata(payload_text: Any) -> tuple[str, str, float]:
     try:
         payload = json.loads(payload_text or "{}")
     except (json.JSONDecodeError, TypeError):
@@ -45,12 +46,19 @@ def _payload_metadata(payload_text: Any) -> tuple[str, str]:
         or candidate.get("entry_type")
         or "unknown"
     )
-    return regime, setup
+    smart = candidate.get("smart_flow") if isinstance(candidate.get("smart_flow"), dict) else {}
+    try:
+        smart_score = float(smart.get("score") or 0.0)
+    except (TypeError, ValueError):
+        smart_score = 0.0
+    return regime, setup, max(-1.0, min(1.0, smart_score))
 
 
 def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
     current_version = str(config.get("opportunity_v4_strategy_version") or "v4.9")
-    if current_version.lower().startswith("v4.9"):
+    if current_version.lower().startswith("v4.10"):
+        seed_version = str(config.get("opportunity_v410_seed_version") or "v4.9")
+    elif current_version.lower().startswith("v4.9"):
         seed_version = ""
     elif current_version.lower().startswith("v4.8"):
         seed_version = str(config.get("opportunity_v48_seed_version") or "v4.7")
@@ -127,7 +135,7 @@ def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
         close_time = int(item.get("close_time") or 0)
         if close_time <= 0:
             continue
-        regime, setup = _payload_metadata(item.get("payload"))
+        regime, setup, smart_score = _payload_metadata(item.get("payload"))
         notional = max(float(item.get("open_notional") or 0), 0.00000001)
         rows.append(
             {
@@ -137,6 +145,7 @@ def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "direction": str(item.get("direction") or "").upper(),
                 "market_regime": regime,
                 "setup_type": setup,
+                "smart_score": smart_score,
                 "age_hours": max(0.0, time.time() - close_time / 1000) / 3600,
                 "net_pct": float(item.get("net_pnl") or 0) / notional * 100,
                 "opportunity_id": f"live:{item.get('id')}",
@@ -299,6 +308,7 @@ def _global_v49_calibration(config: dict[str, Any]) -> dict[str, Any]:
     rows = [row for row in calibration_rows(config) if str(row.get("version") or "") == version]
     stats_12h = _global_stats(rows, 12.0)
     stats_24h = _global_stats(rows, float(config.get("opportunity_v49_global_window_hours", 24.0)))
+    stats_72h = _global_stats(rows, 72.0)
     enough = bool(
         stats_24h["shadow_trades"] >= int(config.get("opportunity_v49_global_min_shadow_trades", 20))
         and stats_24h["live_trades"] >= int(config.get("opportunity_v49_global_min_live_trades", 8))
@@ -328,6 +338,28 @@ def _global_v49_calibration(config: dict[str, Any]) -> dict[str, Any]:
     elif negative:
         cost_ratio_delta = float(config.get("opportunity_v49_global_negative_tightening_step", 0.05))
         action = "当前版本扣费后负期望，提高全局成本收益门槛"
+    context_rows = [row for row in rows if float(row.get("age_hours") or 0) <= 72.0]
+    direction_net: dict[str, float] = {"LONG": 0.0, "SHORT": 0.0}
+    direction_counts: dict[str, int] = {"LONG": 0, "SHORT": 0}
+    regime_net: dict[str, float] = {}
+    smart_values: list[float] = []
+    for row in context_rows:
+        direction = str(row.get("direction") or "").upper()
+        value = float(row.get("net_pct") or 0.0)
+        if direction in direction_net:
+            direction_net[direction] += value
+            direction_counts[direction] += 1
+        regime = str(row.get("market_regime") or "unknown").lower()
+        regime_net[regime] = regime_net.get(regime, 0.0) + value
+        smart_values.append(float(row.get("smart_score") or 0.0))
+    direction_bias = "NEUTRAL"
+    if direction_net["LONG"] - direction_net["SHORT"] > 0.10:
+        direction_bias = "LONG"
+    elif direction_net["SHORT"] - direction_net["LONG"] > 0.10:
+        direction_bias = "SHORT"
+    current_regime = max(regime_net, key=regime_net.get) if regime_net else "unknown"
+    smart_average = sum(smart_values) / len(smart_values) if smart_values else 0.0
+
     result = {
         "enabled": bool(config.get("opportunity_v49_global_adaptive_enabled", True)),
         "schema": "adaptive_v49_global",
@@ -338,6 +370,19 @@ def _global_v49_calibration(config: dict[str, Any]) -> dict[str, Any]:
         "negative": negative,
         "stats_12h": stats_12h,
         "stats_24h": stats_24h,
+        "stats_72h": stats_72h,
+        "market_regime": current_regime,
+        "market_regime_state": "trend" if current_regime in {"broad_up", "broad_down", "trend_up", "trend_down"} else "range_or_unknown",
+        "global_direction_bias": direction_bias,
+        "direction_net_pct": {key: round(value, 6) for key, value in direction_net.items()},
+        "direction_counts": direction_counts,
+        "smart_flow_global": {
+            "available": bool(smart_values),
+            "average_score": round(smart_average, 6),
+            "bias": "LONG" if smart_average > 0.08 else "SHORT" if smart_average < -0.08 else "NEUTRAL",
+            "sample_count": len(smart_values),
+            "scope": "current_version_global_72h",
+        },
         "risk_multiplier": round(_clamp(risk_multiplier, float(config.get("opportunity_v49_global_min_multiplier", 0.70)), float(config.get("opportunity_v49_global_max_multiplier", 1.10))), 4),
         "rank_threshold_delta": round(rank_delta, 4),
         "expectancy_threshold_delta_pct": round(expectancy_delta, 4),
@@ -361,15 +406,27 @@ def _global_v49_calibration(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.9"):
+    if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(GLOBAL_ADAPTIVE_VERSIONS):
         global_result = _global_v49_calibration(config)
+        candidate_multiplier = 1.0
+        if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.10"):
+            direction_bias = str(global_result.get("global_direction_bias") or "NEUTRAL").upper()
+            candidate_direction = str(candidate.get("direction") or "").upper()
+            if direction_bias in {"LONG", "SHORT"} and candidate_direction in {"LONG", "SHORT"}:
+                candidate_multiplier = (
+                    float(config.get("opportunity_v410_direction_aligned_multiplier", 1.05))
+                    if candidate_direction == direction_bias
+                    else float(config.get("opportunity_v410_direction_countertrend_multiplier", 0.90))
+                )
         return {
             **global_result,
+            "schema": "adaptive_v410_global" if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.10") else "adaptive_v49_global",
             "relation": "global",
             "direction": "GLOBAL",
             "market_regime": "global",
             "setup_type": "global",
-            "prior_multiplier": 1.0,
+            "risk_multiplier": round(float(global_result.get("risk_multiplier") or 1.0) * candidate_multiplier, 4),
+            "prior_multiplier": candidate_multiplier,
             "evidence_delta": 0.0,
             "seed_version": None,
             "seed_weight": 0.0,
@@ -455,6 +512,9 @@ def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> d
 def adaptive_calibration_status(config: dict[str, Any]) -> dict[str, Any]:
     """Return the current global V4.9 decision for Dashboard/API consumers."""
     version = str(config.get("opportunity_v4_strategy_version") or "")
-    if not version.lower().startswith("v4.9"):
+    if not version.lower().startswith(GLOBAL_ADAPTIVE_VERSIONS):
         return {"enabled": False, "version": version, "scope": "inactive"}
-    return _global_v49_calibration(config)
+    result = dict(_global_v49_calibration(config))
+    if version.lower().startswith("v4.10"):
+        result["schema"] = "adaptive_v410_global"
+    return result

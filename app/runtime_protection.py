@@ -827,7 +827,7 @@ def _manage_runtime_protection(
         if action["action"] not in {"close_fast_invalid", "close_time_stop", "close_orderbook_invalid"}:
             continue
         v44_runtime_exit = bool(
-            str(tracked_item.get("strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9"))
+            str(tracked_item.get("strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10"))
             and config.get("opportunity_v44_runtime_exit_enabled", True)
         )
         if not (

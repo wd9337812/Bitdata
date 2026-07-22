@@ -618,7 +618,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v4.9",
+    "opportunity_v4_strategy_version": "v4.10",
+    "opportunity_v410_seed_version": "v4.9",
+    "opportunity_v410_global_regime_enabled": True,
+    "opportunity_v410_global_smart_flow_enabled": True,
+    "opportunity_v410_direction_aligned_multiplier": 1.05,
+    "opportunity_v410_direction_countertrend_multiplier": 0.90,
     "opportunity_v49_global_adaptive_enabled": True,
     "opportunity_v49_global_window_hours": 24.0,
     "opportunity_v49_global_min_shadow_trades": 20,
@@ -823,7 +828,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "strategy_canary_enabled": True,
     "strategy_canary_auto_issue": True,
     "strategy_canary_startup_cap_enabled": True,
-    "strategy_canary_release_id": "extreme_v4_roll@v4.9",
+    "strategy_canary_release_id": "extreme_v4_roll@v4.10",
     "strategy_canary_permit_hours": 24.0,
     "strategy_canary_level_1_multiplier": 1.0,
     "strategy_canary_level_1_max_opportunities": 6,
@@ -1130,7 +1135,8 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
     # V4.9 uses a global current-version calibration; older V4 versions are historical only.
     loaded_v4_version = str(loaded.get("opportunity_v4_strategy_version") or "").lower()
     if loaded_v4_version in {"v4.4", "v4.5", "v4.6", "v4.6.1", "v4.6.2", "v4.7", "v4.8", "v4.9"}:
-        config["opportunity_v4_strategy_version"] = "v4.9"
+        config["opportunity_v4_strategy_version"] = "v4.10"
+        config["opportunity_v410_seed_version"] = "v4.9"
     if not bool(loaded.get("opportunity_v462_time_exit_migrated", False)):
         if int(loaded.get("opportunity_v44_max_hold_bars", 6)) == 6:
             config["opportunity_v44_max_hold_bars"] = 2
@@ -1143,8 +1149,9 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         "extreme_v4_roll@v4.6.2",
         "extreme_v4_roll@v4.7",
         "extreme_v4_roll@v4.8",
+        "extreme_v4_roll@v4.9",
     }:
-        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.9"
+        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.10"
     if not include_secret:
         config["api_secret"] = "********" if config.get("api_secret") else ""
         config["api_key"] = mask(config.get("api_key", ""))
