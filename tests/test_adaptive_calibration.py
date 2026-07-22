@@ -82,3 +82,18 @@ def test_v47_seed_evidence_is_shrunk_and_cannot_open_thresholds(monkeypatch):
     assert result["risk_multiplier"] == 1.0
     assert result["threshold_adjustment_ready"] is False
     assert result["rank_threshold_delta"] == 0.0
+
+
+def test_v48_reports_v47_only_as_capped_seed(monkeypatch):
+    rows = [_row("LONG", 1.0, version="v4.7") for _ in range(30)]
+    monkeypatch.setattr(module, "calibration_rows", lambda config: rows)
+
+    result = module.adaptive_calibration(
+        _candidate("LONG", "broad_up"),
+        {"opportunity_v4_strategy_version": "v4.8", "opportunity_v48_seed_version": "v4.7"},
+    )
+
+    assert result["schema"] == "adaptive_v48"
+    assert result["seed_version"] == "v4.7"
+    assert result["stats_24h"]["current_trades"] == 0
+    assert result["threshold_adjustment_ready"] is False

@@ -783,7 +783,7 @@ def _coarse_rank_symbols(
     ranked = rows[: max(1, limits["coarse"])]
     rank_limit = max(1, limits["rank"])
     v44_active = bool(
-        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7"))
+        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8"))
         and config.get("opportunity_v4_enabled", True)
     )
     if not v44_active or rank_limit < 3:
@@ -1905,7 +1905,7 @@ def _apply_v4_live_selection(
     base_risk = float(candidate.get("base_risk_pct") or mode.get("risk_pct") or 0.0)
     version = str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.3.2")
     version_label = version.upper()
-    full_bet = bool(version.lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7")) and v4.get("full_bet_admitted"))
+    full_bet = bool(version.lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8")) and v4.get("full_bet_admitted"))
     signal = dict(candidate.get("signal") or {})
     if v4.get("protection_profile"):
         signal["protection_profile"] = dict(v4["protection_profile"])
@@ -2727,7 +2727,7 @@ def scan_growth_candidates(
         except Exception as exc:
             candidates.append({"symbol": symbol, "passed": False, "reason": str(exc), "score": -999})
 
-    # V4.7 uses a two-pass selector: establish the executable V4 shortlist
+    # V4.8 uses a two-pass selector: establish the executable V4 shortlist
     # first, spend smart-flow REST budget on that shortlist, then recompute the
     # final rank with the bounded directional adjustment.
     candidates = attach_v4_rankings(candidates, config)
@@ -2961,7 +2961,7 @@ def scan_growth_candidates(
             ),
             "live_enabled": bool(config.get("opportunity_v4_live_enabled", False)),
             "label": (
-                "V4.7 资金流加权排名、动态方向校准、单仓短打与聪明钱软评分"
+                "V4.8 双门槛排名、趋势衰竭、结构化再入场与聪明钱确认"
                 if v44_active
                 else "V4.3.2 连续质量仓位、局部熔断与顺势双通道排序"
             ),

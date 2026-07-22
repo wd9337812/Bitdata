@@ -615,7 +615,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v4.7",
+    "opportunity_v4_strategy_version": "v4.8",
     "opportunity_v4_decision_min_rank_percentile": 0.75,
     "opportunity_v4_bootstrap_enabled": True,
     "opportunity_v4_bootstrap_min_rank_percentile": 0.85,
@@ -756,6 +756,32 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v47_countertrend_min_directed_flow": 0.72,
     "opportunity_v47_countertrend_min_regime_fit": 0.85,
     "opportunity_v47_countertrend_min_medium_path": 0.45,
+    "opportunity_v48_seed_version": "v4.7",
+    "opportunity_v48_min_quality_score": 56.0,
+    "opportunity_v48_min_expected_net_pct": 0.03,
+    "opportunity_v48_min_lower_expectancy_pct": -0.03,
+    "opportunity_v48_min_cost_ratio": 1.70,
+    "opportunity_v48_smart_flow_max_points": 2.0,
+    "opportunity_v48_exhaustion_enabled": True,
+    "opportunity_v48_exhaustion_extension_atr": 0.85,
+    "opportunity_v48_exhaustion_impulse_atr": 1.60,
+    "opportunity_v48_exhaustion_wick_ratio": 2.50,
+    "opportunity_v48_exhaustion_volume_floor": 1.05,
+    "opportunity_v48_exhaustion_path_floor": 0.18,
+    "opportunity_v48_exhaustion_caution_score": 0.42,
+    "opportunity_v48_exhaustion_block_score": 0.62,
+    "opportunity_v48_exhaustion_caution_multiplier": 0.65,
+    "opportunity_v48_local_evidence_enabled": True,
+    "opportunity_v48_evidence_hard_min_trades": 20,
+    "opportunity_v48_evidence_hard_pf": 0.55,
+    "opportunity_v48_evidence_caution_multiplier": 0.60,
+    "opportunity_v48_evidence_caution_quality_delta": 0.04,
+    "opportunity_v48_reentry_enabled": True,
+    "opportunity_v48_reentry_hard_losses": 2,
+    "opportunity_v48_reentry_caution_multiplier": 0.70,
+    "opportunity_v48_reentry_reset_path": 0.25,
+    "opportunity_v48_reentry_reset_volume": 1.05,
+    "opportunity_v48_reentry_reset_extension_atr": 0.35,
     "opportunity_v44_loss_reduced_after": 2,
     "opportunity_v44_loss_reduced_risk_pct": 8.0,
     "opportunity_v44_max_consecutive_losses": 5,
@@ -769,7 +795,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "strategy_canary_enabled": True,
     "strategy_canary_auto_issue": True,
     "strategy_canary_startup_cap_enabled": True,
-    "strategy_canary_release_id": "extreme_v4_roll@v4.7",
+    "strategy_canary_release_id": "extreme_v4_roll@v4.8",
     "strategy_canary_permit_hours": 24.0,
     "strategy_canary_level_1_multiplier": 1.0,
     "strategy_canary_level_1_max_opportunities": 6,
@@ -1073,11 +1099,11 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         config["execution_max_spread_pct"] = loaded["opportunity_v3_max_spread_pct"]
     if "execution_min_depth_notional_usdt" not in loaded and "opportunity_v3_min_depth_notional_usdt" in loaded:
         config["execution_min_depth_notional_usdt"] = loaded["opportunity_v3_min_depth_notional_usdt"]
-    # V4.7 replaces the fixed short bias with bounded, version-isolated
-    # direction calibration. V4.6.2 remains a low-weight startup prior only.
+    # V4.8 adds absolute quality, exhaustion and structural re-entry gates.
+    # V4.7 remains a capped startup prior and never directly admits V4.8 live trades.
     loaded_v4_version = str(loaded.get("opportunity_v4_strategy_version") or "").lower()
-    if loaded_v4_version in {"v4.4", "v4.5", "v4.6", "v4.6.1", "v4.6.2"}:
-        config["opportunity_v4_strategy_version"] = "v4.7"
+    if loaded_v4_version in {"v4.4", "v4.5", "v4.6", "v4.6.1", "v4.6.2", "v4.7"}:
+        config["opportunity_v4_strategy_version"] = "v4.8"
     if not bool(loaded.get("opportunity_v462_time_exit_migrated", False)):
         if int(loaded.get("opportunity_v44_max_hold_bars", 6)) == 6:
             config["opportunity_v44_max_hold_bars"] = 2
@@ -1088,8 +1114,9 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         "extreme_v4_roll@v4.6",
         "extreme_v4_roll@v4.6.1",
         "extreme_v4_roll@v4.6.2",
+        "extreme_v4_roll@v4.7",
     }:
-        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.7"
+        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.8"
     if not include_secret:
         config["api_secret"] = "********" if config.get("api_secret") else ""
         config["api_key"] = mask(config.get("api_key", ""))

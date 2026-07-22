@@ -598,7 +598,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v4.7"
+    opportunity_v4_strategy_version: str = "v4.8"
     opportunity_v4_decision_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
     opportunity_v4_bootstrap_enabled: bool = True
     opportunity_v4_bootstrap_min_rank_percentile: float = Field(default=0.85, ge=0, le=1)
@@ -739,6 +739,32 @@ class TradingConfig(BaseModel):
     opportunity_v47_countertrend_min_directed_flow: float = Field(default=0.72, ge=0, le=1)
     opportunity_v47_countertrend_min_regime_fit: float = Field(default=0.85, ge=0, le=1)
     opportunity_v47_countertrend_min_medium_path: float = Field(default=0.45, ge=0, le=1)
+    opportunity_v48_seed_version: str = "v4.7"
+    opportunity_v48_min_quality_score: float = Field(default=56.0, ge=0, le=100)
+    opportunity_v48_min_expected_net_pct: float = Field(default=0.03, ge=-100, le=100)
+    opportunity_v48_min_lower_expectancy_pct: float = Field(default=-0.03, ge=-100, le=100)
+    opportunity_v48_min_cost_ratio: float = Field(default=1.70, ge=0, le=1000)
+    opportunity_v48_smart_flow_max_points: float = Field(default=2.0, ge=0, le=20)
+    opportunity_v48_exhaustion_enabled: bool = True
+    opportunity_v48_exhaustion_extension_atr: float = Field(default=0.85, ge=0.01, le=20)
+    opportunity_v48_exhaustion_impulse_atr: float = Field(default=1.60, ge=0.01, le=20)
+    opportunity_v48_exhaustion_wick_ratio: float = Field(default=2.50, ge=0.01, le=20)
+    opportunity_v48_exhaustion_volume_floor: float = Field(default=1.05, ge=0, le=20)
+    opportunity_v48_exhaustion_path_floor: float = Field(default=0.18, ge=0, le=1)
+    opportunity_v48_exhaustion_caution_score: float = Field(default=0.42, ge=0, le=1)
+    opportunity_v48_exhaustion_block_score: float = Field(default=0.62, ge=0, le=1)
+    opportunity_v48_exhaustion_caution_multiplier: float = Field(default=0.65, ge=0, le=1)
+    opportunity_v48_local_evidence_enabled: bool = True
+    opportunity_v48_evidence_hard_min_trades: int = Field(default=20, ge=1, le=100000)
+    opportunity_v48_evidence_hard_pf: float = Field(default=0.55, ge=0, le=100)
+    opportunity_v48_evidence_caution_multiplier: float = Field(default=0.60, ge=0, le=1)
+    opportunity_v48_evidence_caution_quality_delta: float = Field(default=0.04, ge=0, le=1)
+    opportunity_v48_reentry_enabled: bool = True
+    opportunity_v48_reentry_hard_losses: int = Field(default=2, ge=1, le=20)
+    opportunity_v48_reentry_caution_multiplier: float = Field(default=0.70, ge=0, le=1)
+    opportunity_v48_reentry_reset_path: float = Field(default=0.25, ge=0, le=1)
+    opportunity_v48_reentry_reset_volume: float = Field(default=1.05, ge=0, le=20)
+    opportunity_v48_reentry_reset_extension_atr: float = Field(default=0.35, ge=0, le=20)
     opportunity_v44_loss_reduced_after: int = Field(default=2, ge=1, le=20)
     opportunity_v44_loss_reduced_risk_pct: float = Field(default=8.0, ge=0.01, le=100)
     opportunity_v44_max_consecutive_losses: int = Field(default=5, ge=1, le=20)
@@ -752,7 +778,7 @@ class TradingConfig(BaseModel):
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
     strategy_canary_startup_cap_enabled: bool = True
-    strategy_canary_release_id: str = "extreme_v4_roll@v4.7"
+    strategy_canary_release_id: str = "extreme_v4_roll@v4.8"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
     strategy_canary_level_1_multiplier: float = Field(default=1.0, ge=0, le=1)
     strategy_canary_level_1_max_opportunities: int = Field(default=6, ge=1, le=100)

@@ -220,7 +220,7 @@ function App() {
     funnel?.opportunity_v4?.local_circuit_blocked
       ?? Object.values(localCircuit.cohorts || {}).filter((item: any) => item?.blocked_at).length,
   );
-  const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v4_roll"}@${performanceGuard.active_strategy_version || "v4.7"}`;
+  const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v4_roll"}@${performanceGuard.active_strategy_version || "v4.8"}`;
   const liveEvidenceIsCurrent = performanceGuard.live_evidence_scope === currentPerformanceScope;
   const recoveryEligibleLanes = performanceGuard.recovery_requirements?.eligible_admission_lanes || [];
   const recoveryEvidenceLabel = recoveryEligibleLanes.includes("full_bet") ? "全仓决策影子" : "实盘准入决策影子";
@@ -669,7 +669,7 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>离触发价</span><strong>{fmt(signal.distance_to_trigger_pct, 3)}%</strong></div>
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
         <div><span>V4 本轮排名</span><strong>{v4.enabled ? `前 ${fmt((1 - Number(v4.rank_percentile || 0)) * 100, 0)}%` : "-"}</strong></div>
-        <div><span>V4.7 准入通道</span><strong>{v4.admission_lane === "full_bet" ? "全仓短打" : "仅影子"}</strong></div>
+        <div><span>V4.8 准入通道</span><strong>{v4.admission_lane === "full_bet" ? "全仓短打" : "仅影子"}</strong></div>
         <div><span>方向关系</span><strong>{adaptive.relation === "aligned" ? "顺势" : adaptive.relation === "countertrend" ? "逆势" : adaptive.relation === "neutral" ? "中性" : "等待校准"}</strong></div>
         <div><span>动态仓位倍率</span><strong>{adaptive.enabled ? `${fmt(adaptive.risk_multiplier, 2)}x` : "未启用"}</strong></div>
         <div><span>12 / 24小时样本</span><strong>{adaptive.enabled ? `${fmt(adaptive.stats_12h?.current_trades, 0)} / ${fmt(adaptive.stats_24h?.current_trades, 0)}` : "-"}</strong></div>
@@ -677,8 +677,10 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>计划止损风险</span><strong>{positionConfidence.target_initial_risk_pct != null ? `${fmt(positionConfidence.target_initial_risk_pct, 2)}%` : "等待准入"}</strong></div>
         <div><span>保证金方式</span><strong>{v4.admission_lane === "full_bet" ? "约 90% · 单仓全进全出" : "不下单"}</strong></div>
         <div><span>动态杠杆范围</span><strong>{v4.admission_lane === "full_bet" ? "3x - 10x" : "-"}</strong></div>
-        <div><span>V4.7 保守净期望</span><strong>{v4.enabled ? `${fmt(v4.lower_expected_net_pct, 3)}%` : "未形成 V4 触发"}</strong></div>
-        <div><span>V4.7 成本比</span><strong>{v4.enabled ? `${fmt(v4.cost_ratio, 2)}x` : "未形成 V4 触发"}</strong></div>
+        <div><span>V4.8 保守净期望</span><strong>{v4.enabled ? `${fmt(v4.lower_expected_net_pct, 3)}%` : "未形成 V4 触发"}</strong></div>
+        <div><span>V4.8 成本比</span><strong>{v4.enabled ? `${fmt(v4.cost_ratio, 2)}x` : "未形成 V4 触发"}</strong></div>
+        <div><span>趋势衰竭</span><strong>{v4.exhaustion?.enabled ? `${fmt(Number(v4.exhaustion.score || 0) * 100, 0)}% · ${v4.exhaustion.blocked ? "禁止追价" : v4.exhaustion.caution ? "谨慎" : "健康"}` : "未启用"}</strong></div>
+        <div><span>同币再入场</span><strong>{v4.reentry_policy?.state === "blocked" ? "等待结构重置" : v4.reentry_policy?.state === "reset" ? "新结构已确认" : v4.reentry_policy?.state === "caution" ? "降仓观察" : "正常"}</strong></div>
         <div><span>五项确认</span><strong>{v4.enabled ? `${fmt(v4.v44_confirmations, 0)} / ${fmt(v4.v44_confirmations_required, 0)}` : "-"}</strong></div>
         <div><span>旧版本证据</span><strong>仅作 0.25 权重启动先验</strong></div>
         <div><span>当前版本局部证据</span><strong>{localCircuit.blocked ? "仅作风险背景" : "正常记录"}</strong></div>
@@ -756,7 +758,7 @@ function V4OpportunityPanel({ funnel, performanceGuard }: { funnel: any; perform
     <div className="panel">
       <div className="panel-head">
         <div>
-          <h2>{v4.strategy_version || "v4.7"} 事件证据与全仓短打</h2>
+          <h2>{v4.strategy_version || "v4.8"} 事件证据与全仓短打</h2>
           <p>先形成 V4 基础排名，再对决策短名单补齐聪明钱并最终重排；合格后使用单仓全进全出，旧版本信用和全局 PF 只作背景。</p>
         </div>
       </div>
@@ -767,7 +769,7 @@ function V4OpportunityPanel({ funnel, performanceGuard }: { funnel: any; perform
         <MetricCard title="结构可交易" value={`${fmt(v4.structure_ready, 0)} 个`} sub="方向、入场形态与当前市场结构有效" />
         <MetricCard title="盘口可执行" value={`${fmt(v4.liquidity_ready, 0)} 个`} sub="按本次预计下单额动态检查深度与点差" />
         <MetricCard title="聪明钱覆盖" value={`${fmt(smartFlow.available, 0)} / ${fmt(smartFlow.shortlisted, 0)} 个`} sub={`短名单上限 ${fmt(smartFlow.symbol_limit, 0)} 个；${fmt(smartFlow.adjusted, 0)} 个获得软评分修正`} tone={smartFlow.enabled ? "positive" : ""} />
-        <MetricCard title="旧证据阻断" value={`${fmt(v4.local_circuit_blocked, 0)} 个`} sub="V4.7 仅把旧版本作为低权重启动先验" tone="positive" />
+        <MetricCard title="旧证据阻断" value={`${fmt(v4.local_circuit_blocked, 0)} 个`} sub="V4.8 只把 V4.7 作为有上限的启动先验" tone="positive" />
         <MetricCard title="连续准入" value={performanceGuard?.allowed ? "可开仓" : "安全暂停"} sub="普通亏损只递进降仓；仅 5U 硬停止、当日 30% 回撤或运行安全异常暂停" tone={performanceGuard?.allowed ? "positive" : "negative"} />
         <MetricCard title="全仓短打" value={`${fmt(v4.admitted, 0)} 个`} sub="约 90% 可用保证金，单币单向、一次全平" tone={Number(v4.admitted || 0) > 0 ? "positive" : ""} />
         <MetricCard title="计划风险" value="8% - 15%" sub="仅最强机会接近 15%，连续两次亏损后回落至 8%" />
@@ -809,6 +811,8 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
             <th>同类证据</th>
             <th>聪明钱</th>
             <th>动态校准</th>
+            <th>趋势衰竭</th>
+            <th>再入场</th>
             {!compact && <th>不开仓原因</th>}
             {!compact && <th>距离触发</th>}
             {!compact && <th>市场状态</th>}
@@ -832,6 +836,8 @@ function CandidateTable({ rows, compact = false }: { rows: any[]; compact?: bool
               <td>{finalRank?.enabled ? `${fmt(finalRank.evidence?.selected?.trades, 0)} 笔` : "未形成触发"}<small>{finalRank?.enabled ? pfLabel(finalRank.evidence?.selected?.profit_factor, finalRank.evidence?.selected?.trades) : ""}</small></td>
               <td>{smartFlow.value}<small>{smartFlow.sub}</small></td>
               <td>{finalRank?.adaptive_calibration?.enabled ? `${finalRank.adaptive_calibration.relation === "aligned" ? "顺势" : finalRank.adaptive_calibration.relation === "countertrend" ? "逆势" : "中性"} ${fmt(finalRank.adaptive_calibration.risk_multiplier, 2)}x` : "-"}<small>{finalRank?.adaptive_calibration?.enabled ? `12/24h ${fmt(finalRank.adaptive_calibration.stats_12h?.current_trades, 0)}/${fmt(finalRank.adaptive_calibration.stats_24h?.current_trades, 0)} 笔` : ""}</small></td>
+              <td>{finalRank?.exhaustion?.enabled ? `${fmt(Number(finalRank.exhaustion.score || 0) * 100, 0)}%` : "-"}<small>{finalRank?.exhaustion?.blocked ? "禁止追价" : finalRank?.exhaustion?.caution ? "降仓" : finalRank?.exhaustion?.enabled ? "健康" : ""}</small></td>
+              <td>{finalRank?.reentry_policy?.state === "blocked" ? "等待重置" : finalRank?.reentry_policy?.state === "reset" ? "已重置" : finalRank?.reentry_policy?.state === "caution" ? "谨慎" : "正常"}<small>{finalRank?.reentry_policy?.live_loss_streak ? `同结构连亏 ${fmt(finalRank.reentry_policy.live_loss_streak, 0)}` : ""}</small></td>
               {!compact && <td className="reason-cell">{row.decision_reason || row.reason}</td>}
               {!compact && <td>{fmt(row.signal?.distance_to_trigger_pct, 3)}%</td>}
               {!compact && <td>{row.market_structure?.market_regime_label || row.market_state?.label || "-"}</td>}
@@ -1112,7 +1118,7 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
         <div className="metrics">
           <MetricCard title={`${active.strategy_version || "V4"} 近期基线`} value={`${fmt(activeRecent.closed, 0)} 笔`} sub={`${pfLabel(activeRecent.profit_factor, activeRecent.closed)} · 净收益 ${fmt(activeRecent.net_pnl, 4)} U`} tone={Number(activeRecent.net_pnl || 0) >= 0 ? "positive" : "negative"} />
           <MetricCard title="当前安全观察窗" value={`${fmt(recovery.closed, 0)} / 20 笔`} sub={`${pfLabel(recovery.profit_factor, recovery.closed)} · 只对应当前 V4`} tone={Number(recovery.net_pnl || 0) >= 0 ? "positive" : "negative"} />
-          <MetricCard title="V4.7 运行方式" value="单仓全进全出" sub="约 90% 可用保证金，动态 3-10 倍；计划风险 8%-15%，方向倍率由 12/24 小时证据校准" />
+          <MetricCard title="V4.8 运行方式" value="单仓全进全出" sub="约 90% 可用保证金，动态 3-10 倍；计划风险 8%-15%，并检查绝对质量、衰竭与再入场结构" />
         </div>
       </div>
       {hasChallenger && <div className="panel table-wrap">
@@ -1126,14 +1132,14 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
         </table>
       </div>}
       <div className="panel table-wrap">
-        <h2>V4.7 三类证据</h2>
+        <h2>V4.8 三类证据</h2>
         <table><thead><tr><th>类型</th><th>含义</th><th>已结束</th><th>胜率</th><th>PF</th><th>净收益</th><th>成本</th></tr></thead><tbody>
           {evidenceTypes.map((row: any) => <tr key={row.evidence_type}><td>{row.evidence_type === "decision" ? "决策样本" : row.evidence_type === "exploration" ? "探索样本" : "同机会对照"}</td><td>{row.evidence_type === "decision" ? "V4.7 本轮排名靠前、确认充分且按事件去重的机会；准入口径只取单账户可执行的非重叠路径" : row.evidence_type === "exploration" ? "从仅影子机会中抽样，用于检查是否漏判" : "同一时刻用简单规则做基线，不参与准入"}</td><td>{fmt(row.opportunities || row.closed, 0)}</td><td>{fmt(row.win_rate, 1)}%</td><td>{pfLabel(row.profit_factor, row.closed)}</td><td>{fmt(row.net_pnl, 4)} U</td><td>{fmt(row.cost, 4)} U</td></tr>)}
           {!evidenceTypes.length && <tr><td colSpan={7}>V4 刚启用，等待第一批决策、探索和对照样本结束。</td></tr>}
         </tbody></table>
       </div>
       <div className="panel table-wrap">
-        <h2>V4.7 通道表现</h2>
+        <h2>V4.8 通道表现</h2>
         <table><thead><tr><th>通道</th><th>独立机会</th><th>已结束</th><th>胜率</th><th>PF</th><th>净收益</th><th>成本</th></tr></thead><tbody>
           {admissionLanes.map((row: any) => <tr key={row.admission_lane}><td>{row.admission_lane === "full_bet" ? "全仓短打" : row.admission_lane === "shadow_only" ? "仅影子" : row.admission_lane === "validated" ? "旧核心已验证" : row.admission_lane === "core_provisional" ? "旧核心受限" : row.admission_lane === "core_canary" ? "旧核心试运行" : row.admission_lane === "limited_exploration" ? "旧受限探索" : "旧数据未分类"}</td><td>{fmt(row.opportunities, 0)}</td><td>{fmt(row.closed, 0)}</td><td>{fmt(row.win_rate, 1)}%</td><td>{pfLabel(row.profit_factor, row.closed)}</td><td>{fmt(row.net_pnl, 4)} U</td><td>{fmt(row.cost, 4)} U</td></tr>)}
           {!admissionLanes.length && <tr><td colSpan={7}>V4.7 刚启用，等待第一批按通道分类的事件级影子结果。</td></tr>}
@@ -1732,29 +1738,35 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("yolo_scalp_min_order_lift_min_net_profit_usdt", "补齐订单最低净利润U", "默认 0.03U；太小的毛利不强行成交")}
           {toggle("opportunity_v4_enabled", "启用 V4 机会引擎", "推荐开启：计算扣费后净期望并记录公平影子证据，不增加 Binance 下单请求")}
           {toggle("opportunity_v4_live_enabled", "V4 作为当前实盘排序器", "默认开启；旧策略实验已退出实盘和日常界面")}
-          {text("opportunity_v4_strategy_version", "V4 当前版本号", "当前 v4.7；不同版本实盘和影子证据严格隔离")}
-          {toggle("opportunity_v44_full_bet_enabled", "V4.7 S0 单仓全进全出", "只持有一个币种和一个方向；一次建仓、一次全平，禁止盈利追加和分批止盈")}
-          {toggle("opportunity_v47_adaptive_enabled", "V4.7 动态校准", "只读取本地实盘与影子数据库，不增加 Binance API 请求")}
+          {text("opportunity_v4_strategy_version", "V4 当前版本号", "当前 v4.8；不同版本实盘和影子证据严格隔离")}
+          {toggle("opportunity_v44_full_bet_enabled", "V4.8 S0 单仓全进全出", "只持有一个币种和一个方向；一次建仓、一次全平，禁止盈利追加和分批止盈")}
+          {toggle("opportunity_v47_adaptive_enabled", "V4.8 动态校准", "只读取本地实盘与影子数据库，不增加 Binance API 请求")}
           {number("opportunity_v47_aligned_multiplier", "顺势基础倍率", "默认 1.00x；多空使用完全对称的行情关系")}
           {number("opportunity_v47_neutral_multiplier", "中性基础倍率", "默认 0.85x")}
           {number("opportunity_v47_countertrend_multiplier", "逆势基础倍率", "默认 0.65x；并要求更强确认")}
           {number("opportunity_v47_min_current_samples", "仓位校准最少当前样本", "默认 6 个独立结束机会")}
           {number("opportunity_v47_threshold_min_current_samples", "门槛校准最少当前样本", "默认 12 个；不足时只显示证据，不放宽门槛")}
-          {number("opportunity_v47_seed_weight", "V4.6.2 启动先验权重", "默认 0.25；当前版本样本成熟后自动失去主导作用")}
-          {number("opportunity_v47_seed_effective_sample_cap", "旧版本先验有效样本上限", "默认最多折算 4 个样本，防止大量旧记录压过 V4.7")}
+          {number("opportunity_v47_seed_weight", "V4.7 启动先验权重", "默认 0.25；只作受限启动背景，不能直接放行 V4.8")}
+          {number("opportunity_v47_seed_effective_sample_cap", "旧版本先验有效样本上限", "默认最多折算 4 个样本，防止大量旧记录压过 V4.8")}
           {number("opportunity_v47_max_step", "单次校准最大变化", "默认 0.10；防止短窗口追涨杀跌")}
-          {number("opportunity_v44_min_rank_percentile", "V4.7 最低相对排名分位", "默认 0.80，即只考虑本轮前 20%")}
-          {number("opportunity_v44_min_quality_score", "V4.7 最低当前质量分", "默认 52；旧版本信用分不参与")}
-          {number("opportunity_v44_min_expected_net_pct", "V4.7 最低扣费后期望%", "默认 0.02%")}
-          {number("opportunity_v44_min_lower_expectancy_pct", "V4.7 保守期望下限%", "默认 -0.05%；只容忍小样本的不确定区间")}
-          {number("opportunity_v44_min_cost_ratio", "V4.7 最低毛利成本比", "默认 1.50 倍")}
-          {number("opportunity_v44_min_confirmations", "V4.7 最低确认项", "默认五项中至少 3 项")}
-          {number("opportunity_v44_margin_pct", "V4.7 使用可用保证金%", "默认 90%；剩余约 10% 作为费用和波动缓冲")}
-          {number("opportunity_v44_min_risk_pct", "V4.7 最低计划风险%", "默认 8%")}
-          {number("opportunity_v44_max_risk_pct", "V4.7 最高计划风险%", "默认 15%；仅最强机会接近上限")}
-          {number("opportunity_v44_stressed_risk_cap_pct", "V4.7 压力风险硬上限%", "默认 15%，包含放大的手续费和滑点")}
-          {number("opportunity_v44_min_leverage", "V4.7 最低动态杠杆", "默认 3 倍")}
-          {number("opportunity_v44_max_leverage", "V4.7 最高动态杠杆", "默认 10 倍")}
+          {number("opportunity_v48_min_quality_score", "V4.8 绝对质量底线", "默认 56；即使本轮排名第一，低于底线也不开仓")}
+          {number("opportunity_v48_min_expected_net_pct", "V4.8 最低扣费后期望%", "默认 0.03%")}
+          {number("opportunity_v48_min_lower_expectancy_pct", "V4.8 保守期望下限%", "默认 -0.03%")}
+          {number("opportunity_v48_min_cost_ratio", "V4.8 最低毛利成本比", "默认 1.70 倍")}
+          {number("opportunity_v48_smart_flow_max_points", "聪明钱最大排名修正分", "默认正负 2 分；只在路径和防追价确认后使用")}
+          {toggle("opportunity_v48_exhaustion_enabled", "启用趋势衰竭检测", "扩张过远、量能衰退、上影或路径失效时降仓或禁止追价")}
+          {number("opportunity_v48_exhaustion_caution_score", "衰竭谨慎线", "默认 0.42；达到后降低仓位")}
+          {number("opportunity_v48_exhaustion_block_score", "衰竭禁止线", "默认 0.62；达到后不在趋势末端追价")}
+          {toggle("opportunity_v48_reentry_enabled", "启用结构化再入场", "同币同方向亏损后，必须出现回踩、路径、量能与扩张重置才重新放行")}
+          {number("opportunity_v48_reentry_hard_losses", "同结构连续亏损硬门", "默认 2 次；新结构确认后自动解除")}
+          {number("opportunity_v44_min_rank_percentile", "V4.8 最低相对排名分位", "默认 0.80，即只考虑本轮前 20%")}
+          {number("opportunity_v44_min_confirmations", "V4.8 最低确认项", "默认五项中至少 3 项")}
+          {number("opportunity_v44_margin_pct", "V4.8 使用可用保证金%", "默认 90%；剩余约 10% 作为费用和波动缓冲")}
+          {number("opportunity_v44_min_risk_pct", "V4.8 最低计划风险%", "默认 8%")}
+          {number("opportunity_v44_max_risk_pct", "V4.8 最高计划风险%", "默认 15%；仅最强机会接近上限")}
+          {number("opportunity_v44_stressed_risk_cap_pct", "V4.8 压力风险硬上限%", "默认 15%，包含放大的手续费和滑点")}
+          {number("opportunity_v44_min_leverage", "V4.8 最低动态杠杆", "默认 3 倍")}
+          {number("opportunity_v44_max_leverage", "V4.8 最高动态杠杆", "默认 10 倍")}
           {number("opportunity_v44_cost_stress_multiplier", "V4.7 成本压力倍数", "默认 1.5 倍")}
           {number("opportunity_v44_stop_atr", "V4.7 初始止损 ATR", "默认 0.85 ATR")}
           {number("opportunity_v44_take_profit_r", "V4.7 初始止盈 R", "默认 1.05R")}

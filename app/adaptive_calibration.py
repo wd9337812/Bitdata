@@ -46,8 +46,11 @@ def _payload_metadata(payload_text: Any) -> tuple[str, str]:
 
 
 def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
-    current_version = str(config.get("opportunity_v4_strategy_version") or "v4.7")
-    seed_version = str(config.get("opportunity_v47_seed_version") or "v4.6.2")
+    current_version = str(config.get("opportunity_v4_strategy_version") or "v4.8")
+    if current_version.lower().startswith("v4.8"):
+        seed_version = str(config.get("opportunity_v48_seed_version") or "v4.7")
+    else:
+        seed_version = str(config.get("opportunity_v47_seed_version") or "v4.6.2")
     versions = tuple(dict.fromkeys((current_version, seed_version)))
     lookback_hours = float(config.get("opportunity_v47_calibration_lookback_hours", 72))
     cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
@@ -134,7 +137,7 @@ def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def calibration_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
-    key = f"{db_path()}:{config.get('opportunity_v4_strategy_version', 'v4.7')}"
+    key = f"{db_path()}:{config.get('opportunity_v4_strategy_version', 'v4.8')}"
     now = time.monotonic()
     ttl = float(config.get("opportunity_v47_calibration_cache_seconds", 300))
     cached = _CACHE.get(key)
@@ -241,7 +244,7 @@ def _performance_delta(stats_12h: dict[str, Any], stats_24h: dict[str, Any], con
 
 def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     enabled = bool(config.get("opportunity_v47_adaptive_enabled", True))
-    current_version = str(config.get("opportunity_v4_strategy_version") or "v4.7")
+    current_version = str(config.get("opportunity_v4_strategy_version") or "v4.8")
     relation = direction_relation(candidate)
     priors = {
         "aligned": float(config.get("opportunity_v47_aligned_multiplier", 1.0)),
@@ -293,7 +296,7 @@ def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> d
     )
     return {
         "enabled": True,
-        "schema": "adaptive_v47",
+        "schema": "adaptive_v48" if current_version.lower().startswith("v4.8") else "adaptive_v47",
         "relation": relation,
         "direction": direction,
         "market_regime": regime,
@@ -308,7 +311,11 @@ def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> d
         "threshold_adjustment_ready": threshold_ready,
         "stats_12h": stats_12h,
         "stats_24h": stats_24h,
-        "seed_version": str(config.get("opportunity_v47_seed_version") or "v4.6.2"),
+        "seed_version": (
+            str(config.get("opportunity_v48_seed_version") or "v4.7")
+            if current_version.lower().startswith("v4.8")
+            else str(config.get("opportunity_v47_seed_version") or "v4.6.2")
+        ),
         "seed_weight": seed_weight,
         "reason": reason,
     }

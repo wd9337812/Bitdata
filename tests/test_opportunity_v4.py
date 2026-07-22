@@ -5,6 +5,7 @@ from app.opportunity_v4 import (
     _model_expectancy,
     _model_features,
     _regime_policy,
+    _v48_reentry_policy,
     attach_v4_rankings,
     clear_v4_evidence_cache,
     v44_position_confidence,
@@ -108,6 +109,72 @@ def test_v47_full_bet_uses_adaptive_calibration_and_keeps_risk_cap(monkeypatch, 
     assert opportunity["strategy_version"] == "v4.7"
     assert opportunity["adaptive_calibration"]["relation"] == "aligned"
     assert opportunity["position_confidence"]["target_initial_risk_pct"] <= 15.0
+
+
+def test_v48_requires_absolute_quality_even_when_candidate_ranks_first(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    candidate = _candidate("WEAKTOPUSDT", 0.95, 2.0)
+    config = {
+        "opportunity_v4_strategy_version": "v4.8",
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v44_full_bet_enabled": True,
+        "opportunity_v44_min_rank_percentile": 0.80,
+        "opportunity_v48_min_quality_score": 95.0,
+        "opportunity_v48_min_expected_net_pct": -1.0,
+        "opportunity_v48_min_lower_expectancy_pct": -1.0,
+        "opportunity_v48_min_cost_ratio": 0.1,
+        "opportunity_v44_min_confirmations": 2,
+    }
+
+    attach_v4_rankings([candidate], config)
+
+    v4 = candidate["opportunity_v4"]
+    assert v4["rank_percentile"] == 1.0
+    assert v4["full_bet_admitted"] is False
+    assert v4["score"] < 95.0
+
+
+def test_v48_exhaustion_blocks_late_chase(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    candidate = _candidate("LATEUSDT", 0.99, 0.50)
+    candidate["signal"].update(
+        {"breakout_extension_atr": 2.0, "impulse_atr": 2.5, "adverse_wick_ratio": 3.0}
+    )
+    config = {
+        "opportunity_v4_strategy_version": "v4.8",
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v44_full_bet_enabled": True,
+        "opportunity_v44_min_rank_percentile": 0.0,
+        "opportunity_v48_min_quality_score": 0.0,
+        "opportunity_v48_min_expected_net_pct": -1.0,
+        "opportunity_v48_min_lower_expectancy_pct": -1.0,
+        "opportunity_v48_min_cost_ratio": 0.0,
+        "opportunity_v44_min_confirmations": 2,
+    }
+
+    attach_v4_rankings([candidate], config)
+
+    v4 = candidate["opportunity_v4"]
+    assert v4["exhaustion"]["blocked"] is True
+    assert v4["full_bet_admitted"] is False
+
+
+def test_v48_reentry_requires_new_structure_after_two_losses():
+    candidate = _candidate("REENTERUSDT", 0.95, 1.0)
+    features = _model_features(candidate)
+    local = {"live_loss_streak": 2}
+    config = {"opportunity_v48_reentry_enabled": True}
+
+    blocked = _v48_reentry_policy(candidate, features, local, config)
+    candidate["signal"].update(
+        {"volume_acceleration": 1.20, "breakout_extension_atr": 0.20, "entry_phase": "RETEST"}
+    )
+    candidate["opportunity_v3"]["medium_path_efficiency"] = 0.40
+    reset = _v48_reentry_policy(candidate, _model_features(candidate), local, config)
+
+    assert blocked["blocked"] is True
+    assert reset["blocked"] is False
+    assert reset["structural_reset"] is True
 
 
 def test_v462_rewards_momentum_and_penalizes_pullback_before_smart_flow():
