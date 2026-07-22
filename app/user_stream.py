@@ -127,6 +127,7 @@ def seed_user_account(account: dict[str, Any]) -> None:
             "initialized": True,
             "account": account_copy,
             "account_updated_at": now,
+            "rest_snapshot_at": now,
             "updated_at": now,
         }
     )

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from app.market_structure import market_structure, normalize_setup_type
@@ -12,6 +14,7 @@ from app.telemetry import connect, db_path
 
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_GLOBAL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -46,13 +49,19 @@ def _payload_metadata(payload_text: Any) -> tuple[str, str]:
 
 
 def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
-    current_version = str(config.get("opportunity_v4_strategy_version") or "v4.8")
-    if current_version.lower().startswith("v4.8"):
+    current_version = str(config.get("opportunity_v4_strategy_version") or "v4.9")
+    if current_version.lower().startswith("v4.9"):
+        seed_version = ""
+    elif current_version.lower().startswith("v4.8"):
         seed_version = str(config.get("opportunity_v48_seed_version") or "v4.7")
     else:
         seed_version = str(config.get("opportunity_v47_seed_version") or "v4.6.2")
-    versions = tuple(dict.fromkeys((current_version, seed_version)))
-    lookback_hours = float(config.get("opportunity_v47_calibration_lookback_hours", 72))
+    versions = tuple(dict.fromkeys(value for value in (current_version, seed_version) if value))
+    lookback_hours = float(
+        config.get("opportunity_v49_global_window_hours", 24)
+        if current_version.lower().startswith("v4.9")
+        else config.get("opportunity_v47_calibration_lookback_hours", 72)
+    )
     cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
     cutoff_iso = cutoff_dt.isoformat()
     cutoff_ms = int(cutoff_dt.timestamp() * 1000)
@@ -137,7 +146,7 @@ def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def calibration_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
-    key = f"{db_path()}:{config.get('opportunity_v4_strategy_version', 'v4.8')}"
+    key = f"{db_path()}:{config.get('opportunity_v4_strategy_version', 'v4.9')}"
     now = time.monotonic()
     ttl = float(config.get("opportunity_v47_calibration_cache_seconds", 300))
     cached = _CACHE.get(key)
@@ -150,6 +159,33 @@ def calibration_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 def clear_adaptive_calibration_cache() -> None:
     _CACHE.clear()
+    _GLOBAL_CACHE.clear()
+
+
+def _global_state_path() -> Path:
+    config_path = Path(os.getenv("APP_CONFIG_PATH", "./data/config.json"))
+    return config_path.with_name("v49_global_adaptive.json")
+
+
+def _persist_global_result(result: dict[str, Any]) -> None:
+    """Keep a small audit trail without adding high-frequency SQLite writes."""
+    path = _global_state_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        history = list(previous.get("history") or [])[-95:]
+        snapshot = {**result, "updated_at": datetime.now(timezone.utc).isoformat()}
+        keys = ("version", "positive", "negative", "ready", "rank_threshold_delta", "cost_ratio_delta", "risk_multiplier")
+        fingerprint = tuple(snapshot.get(key) for key in keys)
+        last_fingerprint = tuple((history[-1] if history else {}).get(key) for key in keys)
+        if fingerprint != last_fingerprint:
+            history.append(snapshot)
+        payload = {"version": result.get("version"), "current": snapshot, "history": history}
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return
 
 
 def _stats(
@@ -242,7 +278,102 @@ def _performance_delta(stats_12h: dict[str, Any], stats_24h: dict[str, Any], con
     return raw * confidence
 
 
+def _global_stats(rows: list[dict[str, Any]], hours: float) -> dict[str, Any]:
+    selected = [row for row in rows if float(row.get("age_hours") or 0) <= hours]
+    stats = _stats(selected, str(selected[0].get("version") or "v4.9") if selected else "v4.9", 0.0, 0.0)
+    stats["shadow_trades"] = sum(row.get("source") == "shadow" for row in selected)
+    stats["live_trades"] = sum(row.get("source") == "live" for row in selected)
+    stats["regimes"] = len({str(row.get("market_regime") or "unknown") for row in selected})
+    stats["opportunities"] = len({str(row.get("opportunity_id") or "") for row in selected})
+    return stats
+
+
+def _global_v49_calibration(config: dict[str, Any]) -> dict[str, Any]:
+    """Calibrate one global V4.9 gate set from current-version evidence only."""
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.9")
+    key = f"{db_path()}:{version}:global"
+    now = time.monotonic()
+    cached = _GLOBAL_CACHE.get(key)
+    if cached and now - cached[0] <= float(config.get("opportunity_v49_global_update_hours", 2.0)) * 3600:
+        return cached[1]
+    rows = [row for row in calibration_rows(config) if str(row.get("version") or "") == version]
+    stats_12h = _global_stats(rows, 12.0)
+    stats_24h = _global_stats(rows, float(config.get("opportunity_v49_global_window_hours", 24.0)))
+    enough = bool(
+        stats_24h["shadow_trades"] >= int(config.get("opportunity_v49_global_min_shadow_trades", 20))
+        and stats_24h["live_trades"] >= int(config.get("opportunity_v49_global_min_live_trades", 8))
+        and stats_24h["symbols"] >= int(config.get("opportunity_v49_global_min_symbols", 3))
+        and stats_24h["regimes"] >= int(config.get("opportunity_v49_global_min_regimes", 2))
+    )
+    pf = float(stats_24h.get("profit_factor") or 0)
+    net = float(stats_24h.get("net_pct") or 0)
+    positive = enough and pf >= float(config.get("opportunity_v49_global_min_profit_factor", 1.15)) and net > float(config.get("opportunity_v49_global_min_net_pct", 0.0))
+    negative = enough and (pf < 1.0 or net < 0)
+    rank_delta = 0.0
+    expectancy_delta = 0.0
+    cost_ratio_delta = 0.0
+    confirmation_delta = 0
+    risk_multiplier = 1.0
+    action = "观察中，样本不足以调整全局门槛"
+    target_live_trades = int(config.get("opportunity_v49_global_target_live_trades", 12))
+    if positive and stats_24h["live_trades"] < target_live_trades:
+        rank_delta = -float(config.get("opportunity_v49_global_positive_relaxation_step", 0.03))
+        action = "扣费后正期望但机会偏少，降低全局排名门槛"
+    elif positive:
+        risk_multiplier = min(
+            float(config.get("opportunity_v49_global_max_multiplier", 1.10)),
+            1.0 + float(config.get("opportunity_v49_global_positive_relaxation_step", 0.03)),
+        )
+        action = "当前版本扣费后正期望，允许全局仓位倍率小步恢复"
+    elif negative:
+        cost_ratio_delta = float(config.get("opportunity_v49_global_negative_tightening_step", 0.05))
+        action = "当前版本扣费后负期望，提高全局成本收益门槛"
+    result = {
+        "enabled": bool(config.get("opportunity_v49_global_adaptive_enabled", True)),
+        "schema": "adaptive_v49_global",
+        "scope": "current_version_global_24h",
+        "version": version,
+        "ready": enough,
+        "positive": positive,
+        "negative": negative,
+        "stats_12h": stats_12h,
+        "stats_24h": stats_24h,
+        "risk_multiplier": round(_clamp(risk_multiplier, float(config.get("opportunity_v49_global_min_multiplier", 0.70)), float(config.get("opportunity_v49_global_max_multiplier", 1.10))), 4),
+        "rank_threshold_delta": round(rank_delta, 4),
+        "expectancy_threshold_delta_pct": round(expectancy_delta, 4),
+        "cost_ratio_delta": round(cost_ratio_delta, 4),
+        "quality_threshold_delta": 0.0,
+        "confirmation_delta": confirmation_delta,
+        "adjustment_action": action,
+        "adjustment_interval_hours": float(config.get("opportunity_v49_global_update_hours", 2.0)),
+        "target_live_trades": target_live_trades,
+        "effective_thresholds": {
+            "rank_percentile": round(_clamp(float(config.get("opportunity_v44_min_rank_percentile", 0.80)) + rank_delta, float(config.get("opportunity_v49_global_min_rank_percentile", 0.65)), float(config.get("opportunity_v49_global_max_rank_percentile", 0.90))), 4),
+            "expected_net_pct": round(_clamp(float(config.get("opportunity_v48_min_expected_net_pct", 0.03)) + expectancy_delta, float(config.get("opportunity_v49_global_min_expectancy_pct", 0.0)), float(config.get("opportunity_v49_global_max_expectancy_pct", 0.20))), 4),
+            "cost_ratio": round(_clamp(float(config.get("opportunity_v48_min_cost_ratio", 1.70)) + cost_ratio_delta, float(config.get("opportunity_v49_global_min_cost_ratio", 1.35)), float(config.get("opportunity_v49_global_max_cost_ratio", 2.50))), 4),
+            "confirmations": int(_clamp(float(config.get("opportunity_v44_min_confirmations", 3)) + confirmation_delta, float(config.get("opportunity_v49_global_min_confirmations", 3)), float(config.get("opportunity_v49_global_max_confirmations", 5)))),
+        },
+        "reason": f"全局 V4.9 24h：{stats_24h['trades']} 笔，PF {pf:.2f}，净收益 {net:.4f}%",
+    }
+    _persist_global_result(result)
+    _GLOBAL_CACHE[key] = (now, result)
+    return result
+
+
 def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+    if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.9"):
+        global_result = _global_v49_calibration(config)
+        return {
+            **global_result,
+            "relation": "global",
+            "direction": "GLOBAL",
+            "market_regime": "global",
+            "setup_type": "global",
+            "prior_multiplier": 1.0,
+            "evidence_delta": 0.0,
+            "seed_version": None,
+            "seed_weight": 0.0,
+        }
     enabled = bool(config.get("opportunity_v47_adaptive_enabled", True))
     current_version = str(config.get("opportunity_v4_strategy_version") or "v4.8")
     relation = direction_relation(candidate)
@@ -319,3 +450,11 @@ def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> d
         "seed_weight": seed_weight,
         "reason": reason,
     }
+
+
+def adaptive_calibration_status(config: dict[str, Any]) -> dict[str, Any]:
+    """Return the current global V4.9 decision for Dashboard/API consumers."""
+    version = str(config.get("opportunity_v4_strategy_version") or "")
+    if not version.lower().startswith("v4.9"):
+        return {"enabled": False, "version": version, "scope": "inactive"}
+    return _global_v49_calibration(config)

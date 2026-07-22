@@ -25,16 +25,23 @@ def canonical_account_projection(
     *,
     websocket_max_age_seconds: int = 45,
     force_rest: bool = False,
+    require_fresh_available_balance: bool = False,
+    available_balance_max_age_seconds: int = 15,
 ) -> dict[str, Any]:
     """Return one timestamped account view, preferring the private stream."""
     snapshot = read_user_stream_snapshot()
     stream_age = _age_seconds(snapshot.get("updated_at"))
     stream_live = bool(snapshot.get("connected")) and stream_age is not None and stream_age <= websocket_max_age_seconds
+    rest_snapshot_age = _age_seconds(snapshot.get("rest_snapshot_at"))
     raw_account = (
         dict(snapshot.get("account") or {})
         if snapshot.get("initialized") and stream_live and not force_rest
         else None
     )
+    if require_fresh_available_balance and (
+        rest_snapshot_age is None or rest_snapshot_age > max(1, int(available_balance_max_age_seconds))
+    ):
+        raw_account = None
     source = "private_websocket"
     as_of = snapshot.get("account_updated_at")
 
@@ -46,6 +53,8 @@ def canonical_account_projection(
         as_of = snapshot.get("account_updated_at")
 
     account = summarize_account(raw_account)
+    account["available_balance_source"] = "binance_rest" if source == "binance_rest" else "private_websocket_rest_seed"
+    account["available_balance_age_seconds"] = rest_snapshot_age if source != "binance_rest" else 0.0
     age = _age_seconds(as_of)
     positions = list(account.get("positions") or [])
     return {
@@ -57,4 +66,10 @@ def canonical_account_projection(
         "stale": source == "private_websocket" and not stream_live,
         "position_count": len(positions),
         "revision": int(snapshot.get("account_update_ms") or 0),
+        "available_balance_source": account["available_balance_source"],
+        "available_balance_age_seconds": account["available_balance_age_seconds"],
+        "fresh_available_balance": bool(
+            source == "binance_rest"
+            or (rest_snapshot_age is not None and rest_snapshot_age <= max(1, int(available_balance_max_age_seconds)))
+        ),
     }

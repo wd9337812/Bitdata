@@ -16,13 +16,13 @@ def _candidate(direction: str, regime: str = "broad_up", setup: str = "momentum"
     }
 
 
-def _row(direction: str, net_pct: float, *, age: float = 2, version: str = "v4.7") -> dict:
+def _row(direction: str, net_pct: float, *, age: float = 2, version: str = "v4.7", source: str = "shadow", symbol: str | None = None, regime: str | None = None) -> dict:
     return {
-        "source": "shadow",
+        "source": source,
         "version": version,
-        "symbol": f"ALT{abs(hash((direction, net_pct, age))) % 1000}USDT",
+        "symbol": symbol or f"ALT{abs(hash((direction, net_pct, age, source))) % 1000}USDT",
         "direction": direction,
-        "market_regime": "broad_up" if direction == "LONG" else "broad_down",
+        "market_regime": regime or ("broad_up" if direction == "LONG" else "broad_down"),
         "setup_type": "momentum",
         "age_hours": age,
         "net_pct": net_pct,
@@ -97,3 +97,26 @@ def test_v48_reports_v47_only_as_capped_seed(monkeypatch):
     assert result["seed_version"] == "v4.7"
     assert result["stats_24h"]["current_trades"] == 0
     assert result["threshold_adjustment_ready"] is False
+
+
+def test_v49_uses_one_global_current_version_calibration(monkeypatch):
+    rows = []
+    for index in range(20):
+        rows.append(_row("LONG", 0.30, version="v4.9", source="shadow", age=index / 2, symbol=f"ALT{index % 3}USDT", regime="broad_up" if index % 2 else "rotation"))
+    for index in range(8):
+        rows.append(_row("SHORT", 0.30, version="v4.9", source="live", age=index / 2, symbol=f"ALT{index % 3}USDT", regime="broad_down" if index % 2 else "rotation"))
+    rows.append(_row("LONG", 9.0, version="v4.8", source="shadow"))
+    monkeypatch.setattr(module, "calibration_rows", lambda config: rows)
+    module.clear_adaptive_calibration_cache()
+    config = {"opportunity_v4_strategy_version": "v4.9", "opportunity_v49_global_target_live_trades": 12}
+
+    long_result = module.adaptive_calibration(_candidate("LONG", "broad_up"), config)
+    short_result = module.adaptive_calibration(_candidate("SHORT", "broad_down"), config)
+
+    assert long_result["schema"] == "adaptive_v49_global"
+    assert long_result["scope"] == "current_version_global_24h"
+    assert long_result["stats_24h"]["live_trades"] == 8
+    assert long_result["stats_24h"]["shadow_trades"] == 20
+    assert long_result["rank_threshold_delta"] < 0
+    assert short_result["rank_threshold_delta"] == long_result["rank_threshold_delta"]
+    assert short_result["risk_multiplier"] == long_result["risk_multiplier"]

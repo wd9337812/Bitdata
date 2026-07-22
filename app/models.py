@@ -45,6 +45,9 @@ class TradingConfig(BaseModel):
     user_stream_max_session_seconds: int = Field(default=82_800, ge=3600, le=86_400)
     user_stream_account_max_age_seconds: int = Field(default=90, ge=5, le=3600)
     account_projection_ws_max_age_seconds: int = Field(default=45, ge=5, le=300)
+    account_projection_available_balance_max_age_seconds: int = Field(default=15, ge=1, le=120)
+    account_projection_refresh_before_sizing: bool = True
+    account_projection_balance_mismatch_pct: float = Field(default=2.0, ge=0.1, le=25.0)
     account_supervisor_enabled: bool = True
     account_supervisor_poll_seconds: int = Field(default=2, ge=1, le=60)
     account_supervisor_position_audit_seconds: int = Field(default=10, ge=2, le=300)
@@ -598,7 +601,32 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v4.8"
+    opportunity_v4_strategy_version: str = "v4.9"
+    opportunity_v49_global_adaptive_enabled: bool = True
+    opportunity_v49_global_window_hours: float = Field(default=24.0, ge=1, le=168)
+    opportunity_v49_global_min_shadow_trades: int = Field(default=20, ge=5, le=10000)
+    opportunity_v49_global_min_live_trades: int = Field(default=8, ge=2, le=10000)
+    opportunity_v49_global_target_live_trades: int = Field(default=12, ge=2, le=10000)
+    opportunity_v49_global_min_symbols: int = Field(default=3, ge=1, le=100)
+    opportunity_v49_global_min_regimes: int = Field(default=2, ge=1, le=20)
+    opportunity_v49_global_min_profit_factor: float = Field(default=1.15, ge=0, le=100)
+    opportunity_v49_global_min_net_pct: float = Field(default=0.0, ge=-100, le=100)
+    opportunity_v49_global_update_hours: float = Field(default=2.0, ge=0.5, le=24)
+    opportunity_v49_global_max_step: float = Field(default=0.05, ge=0.01, le=0.2)
+    opportunity_v49_global_min_multiplier: float = Field(default=0.70, ge=0, le=1)
+    opportunity_v49_global_max_multiplier: float = Field(default=1.10, ge=0, le=2)
+    opportunity_v49_global_positive_relaxation_step: float = Field(default=0.03, ge=0, le=0.2)
+    opportunity_v49_global_negative_tightening_step: float = Field(default=0.05, ge=0, le=0.2)
+    opportunity_v49_global_min_rank_percentile: float = Field(default=0.65, ge=0, le=1)
+    opportunity_v49_global_max_rank_percentile: float = Field(default=0.90, ge=0, le=1)
+    opportunity_v49_global_min_quality_score: float = Field(default=52.0, ge=0, le=100)
+    opportunity_v49_global_max_quality_score: float = Field(default=70.0, ge=0, le=100)
+    opportunity_v49_global_min_expectancy_pct: float = Field(default=0.0, ge=-100, le=100)
+    opportunity_v49_global_max_expectancy_pct: float = Field(default=0.20, ge=-100, le=100)
+    opportunity_v49_global_min_cost_ratio: float = Field(default=1.35, ge=0, le=100)
+    opportunity_v49_global_max_cost_ratio: float = Field(default=2.50, ge=0, le=100)
+    opportunity_v49_global_min_confirmations: int = Field(default=3, ge=1, le=5)
+    opportunity_v49_global_max_confirmations: int = Field(default=5, ge=1, le=5)
     opportunity_v4_decision_min_rank_percentile: float = Field(default=0.75, ge=0, le=1)
     opportunity_v4_bootstrap_enabled: bool = True
     opportunity_v4_bootstrap_min_rank_percentile: float = Field(default=0.85, ge=0, le=1)
@@ -778,7 +806,7 @@ class TradingConfig(BaseModel):
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
     strategy_canary_startup_cap_enabled: bool = True
-    strategy_canary_release_id: str = "extreme_v4_roll@v4.8"
+    strategy_canary_release_id: str = "extreme_v4_roll@v4.9"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
     strategy_canary_level_1_multiplier: float = Field(default=1.0, ge=0, le=1)
     strategy_canary_level_1_max_opportunities: int = Field(default=6, ge=1, le=100)

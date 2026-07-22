@@ -220,7 +220,7 @@ def build_position_rotation_plan(
     min_delta = rotation_required_delta(config, mode, current_pnl_pct, current_type)
     cost_metrics = rotation_cost_metrics(candidate, config)
     opportunity = candidate.get("opportunity_v4") or {}
-    v44_rotation = str(opportunity.get("strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8"))
+    v44_rotation = str(opportunity.get("strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9"))
     if v44_rotation:
         min_cost_ratio = float(config.get("opportunity_v44_min_cost_ratio", 1.50))
         min_net_cost_ratio = max(1.0, float(config.get("opportunity_v44_rotation_min_cost_ratio", 1.25)))
@@ -629,6 +629,7 @@ def build_stage1_decision(
         candidate=scan_candidate,
         config=config,
         consecutive_losses=int(state.get("consecutive_losses") or 0),
+        account_projection=account_summary.get("projection"),
     )
     if full_bet_sizing.get("applied"):
         quantity = float(full_bet_sizing["quantity"])

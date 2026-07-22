@@ -39,6 +39,7 @@ from app.state_store import load_state, save_state
 from app.strategy import StrategyParams, backtest, latest_signal
 from app.target import target_progress
 from app.binance_rate import BinanceRateLimitError, cache_status, rate_status, request_priority
+from app.adaptive_calibration import adaptive_calibration_status
 from app.telemetry import (
     heartbeat,
     latest_strategy_payload,
@@ -63,7 +64,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.18.0")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.19.0")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -199,6 +200,7 @@ def status() -> dict[str, Any]:
         ),
         "runtime": runtime_status,
         "storage": telemetry_storage_status(),
+        "v49_global_adaptive": adaptive_calibration_status(config),
     }
 
 

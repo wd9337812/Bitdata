@@ -13,7 +13,7 @@ def s0_full_bet_profile_active(config: dict[str, Any]) -> bool:
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
     return bool(
         config.get("opportunity_v44_full_bet_enabled", True)
-        and version.startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8"))
+        and version.startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9"))
         and stage == "S0"
     )
 
@@ -29,7 +29,7 @@ def is_s0_full_bet(candidate: dict[str, Any] | None, config: dict[str, Any]) -> 
         or config.get("opportunity_v4_strategy_version")
         or ""
     ).lower()
-    return bool(version.startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8")) and opportunity.get("full_bet_admitted"))
+    return bool(version.startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9")) and opportunity.get("full_bet_admitted"))
 
 
 def build_s0_full_bet_sizing(
@@ -42,6 +42,7 @@ def build_s0_full_bet_sizing(
     candidate: dict[str, Any] | None,
     config: dict[str, Any],
     consecutive_losses: int = 0,
+    account_projection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Use almost all available margin while bounding loss at the protected stop.
 
@@ -84,7 +85,7 @@ def build_s0_full_bet_sizing(
     )
     target_risk = _clamp(float(requested_risk_pct), 0.0, maximum_risk)
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
-    if not version.startswith(("v4.5", "v4.6", "v4.7", "v4.8")) and int(consecutive_losses) >= int(config.get("opportunity_v44_loss_reduced_after", 2)):
+    if not version.startswith(("v4.5", "v4.6", "v4.7", "v4.8", "v4.9")) and int(consecutive_losses) >= int(config.get("opportunity_v44_loss_reduced_after", 2)):
         target_risk = min(target_risk, float(config.get("opportunity_v44_loss_reduced_risk_pct", 8.0)))
     safety_cap_active = target_risk + 1e-9 < minimum_risk
 
@@ -117,6 +118,9 @@ def build_s0_full_bet_sizing(
         "applied": True,
         "profile": "s0_full_bet_v48" if version.startswith("v4.8") else ("s0_full_bet_v47" if version.startswith("v4.7") else ("s0_full_bet_v46" if version.startswith("v4.6") else ("s0_full_bet_v45" if version.startswith("v4.5") else "s0_full_bet_v44"))),
         "margin_budget_pct": round(margin_pct, 6),
+        "sizing_available_balance": round(available, 8),
+        "sizing_available_balance_source": (account_projection or {}).get("available_balance_source"),
+        "sizing_available_balance_age_seconds": (account_projection or {}).get("available_balance_age_seconds"),
         "margin_budget": round(margin_budget, 8),
         "margin_used": round(margin_used, 8),
         "margin_utilization_pct": round(margin_used / capital * 100, 6) if capital > 0 else 0.0,

@@ -58,3 +58,28 @@ def test_open_signal_executes_through_fresh_account_guard(monkeypatch):
     )
 
     assert result == {"mode": "live_test", "symbol": "SOLUSDT"}
+
+
+def test_open_signal_blocks_when_available_balance_changed(monkeypatch):
+    class Client:
+        def account_live(self):
+            return {
+                "totalWalletBalance": "30",
+                "totalUnrealizedProfit": "0",
+                "availableBalance": "30",
+                "positions": [],
+            }
+
+    monkeypatch.setattr(
+        runner,
+        "execute_stage1_market_order",
+        lambda client, decision, config: {"mode": "should_not_execute"},
+    )
+    result = runner.execute_with_freshness_guard(
+        Client(),
+        {"action": "OPEN_LONG", "symbol": "SOLUSDT", "full_bet_sizing": {"sizing_available_balance": 3.0}},
+        {"account_projection_balance_mismatch_pct": 2.0},
+        {"positions": []},
+    )
+
+    assert result["reason"] == "stale_available_balance"

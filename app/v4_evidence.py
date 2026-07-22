@@ -31,7 +31,7 @@ def admission_lane_from_row(row: dict[str, Any]) -> str:
 
 def live_evidence_lanes(strategy_version: str) -> frozenset[str]:
     version = str(strategy_version or "").strip().lower()
-    if version.startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8")):
+    if version.startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9")):
         return V44_LIVE_ADMISSION_LANES
     return LEGACY_LIVE_ADMISSION_LANES
 

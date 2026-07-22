@@ -389,6 +389,23 @@ def execute_with_freshness_guard(client: BinanceFuturesClient, decision: dict, c
                 "message": "持仓在决策期间发生变化，本次信号作废并等待重新评估。",
                 "reason": "stale_position_snapshot",
             }
+        sizing = decision.get("full_bet_sizing") or {}
+        sized_balance = sizing.get("sizing_available_balance")
+        fresh_balance = fresh_account.get("available_balance")
+        if sized_balance is not None and fresh_balance is not None:
+            sized_balance = max(0.0, float(sized_balance))
+            fresh_balance = max(0.0, float(fresh_balance))
+            mismatch_pct = abs(fresh_balance - sized_balance) / max(sized_balance, 1e-9) * 100.0
+            allowed_mismatch = float(config.get("account_projection_balance_mismatch_pct", 2.0))
+            if mismatch_pct > allowed_mismatch:
+                return {
+                    "mode": "blocked",
+                    "message": "下单前可用余额与决策快照不一致，已阻止使用过期仓位下单",
+                    "reason": "stale_available_balance",
+                    "sized_available_balance": sized_balance,
+                    "fresh_available_balance": fresh_balance,
+                    "mismatch_pct": round(mismatch_pct, 4),
+                }
         return execute_stage1_market_order(client, decision, config)
 
 
@@ -435,8 +452,16 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             projection = canonical_account_projection(
                 client,
                 websocket_max_age_seconds=int(config.get("account_projection_ws_max_age_seconds", 45)),
+                require_fresh_available_balance=bool(config.get("account_projection_refresh_before_sizing", True)),
+                available_balance_max_age_seconds=int(config.get("account_projection_available_balance_max_age_seconds", 15)),
             )
             account = projection["account"]
+            account["projection"] = {
+                "source": projection.get("source"),
+                "as_of": projection.get("as_of"),
+                "fresh_available_balance": projection.get("fresh_available_balance"),
+                "available_balance_age_seconds": projection.get("available_balance_age_seconds"),
+            }
         except BinanceRateLimitError:
             raise
         except Exception as exc:

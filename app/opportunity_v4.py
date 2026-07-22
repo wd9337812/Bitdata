@@ -16,7 +16,7 @@ from app.telemetry import connect, db_path
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.8"
+V4_FEATURE_SCHEMA = "v4.9"
 
 V462_FEATURE_WEIGHTS = {
     "cross_sectional_strength": 0.08,
@@ -427,7 +427,7 @@ def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], con
     setup_adjustment = V462_SETUP_ADJUSTMENTS.get(setup_type, 0.0)
     smart_points = float(candidate.get("smart_flow_score_delta") or 0.0)
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
-    if version.startswith("v4.8"):
+    if version.startswith(("v4.8", "v4.9")):
         smart = candidate.get("smart_flow") or {}
         confirmed = bool(
             smart.get("available")
@@ -550,7 +550,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
             "reason": "恐慌行情只记录影子，不在失序盘口追价",
         }
     v44_active = bool(
-        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8"))
+        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9"))
         and config.get("opportunity_v44_full_bet_enabled", True)
     )
     v44_structure = bool(
@@ -661,7 +661,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
 
 def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2").lower()
-    if version.startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8")) and config.get("opportunity_v44_full_bet_enabled", True):
+    if version.startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9")) and config.get("opportunity_v44_full_bet_enabled", True):
         stop_atr = float(config.get("opportunity_v44_stop_atr", 0.85))
         take_profit_r = float(config.get("opportunity_v44_take_profit_r", 1.05))
         return {
@@ -793,7 +793,7 @@ def continuous_position_confidence(opportunity: dict[str, Any], config: dict[str
 
 
 def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    version_label = str(config.get("opportunity_v4_strategy_version") or "v4.8").upper()
+    version_label = str(config.get("opportunity_v4_strategy_version") or "v4.9").upper()
     lane = str(opportunity.get("admission_lane") or "shadow_only")
     admitted = bool(opportunity.get("admitted"))
     if lane != "full_bet" or not admitted:
@@ -897,8 +897,8 @@ def attach_v4_rankings(
     min_symbols = int(config.get("opportunity_v41_validation_min_symbols", 3))
     prior_trades = float(config.get("opportunity_v41_empirical_prior_trades", 40))
     version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
-    v44_active = bool(version.lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8")) and config.get("opportunity_v44_full_bet_enabled", True))
-    v48_active = bool(version.lower().startswith("v4.8"))
+    v44_active = bool(version.lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9")) and config.get("opportunity_v44_full_bet_enabled", True))
+    v48_active = bool(version.lower().startswith(("v4.8", "v4.9")))
     v44_rank = float(config.get("opportunity_v44_min_rank_percentile", 0.80))
     v44_quality = float(config.get("opportunity_v44_min_quality_score", 52.0)) / 100
     v44_expected = float(config.get("opportunity_v44_min_expected_net_pct", 0.02))
@@ -994,7 +994,7 @@ def attach_v4_rankings(
         execution = candidate.get("execution_filter") or {}
         executable = not execution.get("enabled") or bool(execution.get("executable"))
         policy = _regime_policy(candidate, config)
-        calibration = adaptive_calibration(candidate, config) if version.lower().startswith(("v4.7", "v4.8")) else {
+        calibration = adaptive_calibration(candidate, config) if version.lower().startswith(("v4.7", "v4.8", "v4.9")) else {
             "enabled": False,
             "relation": "legacy",
             "risk_multiplier": 1.0,
@@ -1101,7 +1101,7 @@ def attach_v4_rankings(
             )
         )
         direction = str(candidate.get("direction") or "").upper()
-        if version.lower().startswith(("v4.7", "v4.8")):
+        if version.lower().startswith(("v4.7", "v4.8", "v4.9")):
             direction_quality_ok = bool(
                 calibration.get("relation") != "countertrend"
                 or (
@@ -1154,7 +1154,31 @@ def attach_v4_rankings(
             and not negative_evidence
         )
         v44_scope = bool(policy["live_scope"] or policy["canary_scope"] or policy["exploration_scope"])
-        effective_absolute_quality = v44_quality + float(evidence_policy.get("threshold_delta") or 0.0)
+        effective_v44_rank = v44_rank
+        effective_v44_expected = v44_expected
+        effective_v44_confirmations = v44_confirmations_required
+        if version.lower().startswith("v4.9"):
+            effective_v44_rank = _clamp(
+                v44_rank + float(calibration.get("rank_threshold_delta") or 0.0),
+                float(config.get("opportunity_v49_global_min_rank_percentile", 0.65)),
+                float(config.get("opportunity_v49_global_max_rank_percentile", 0.90)),
+            )
+            effective_v44_expected = _clamp(
+                v44_expected + float(calibration.get("expectancy_threshold_delta_pct") or 0.0),
+                float(config.get("opportunity_v49_global_min_expectancy_pct", 0.0)),
+                float(config.get("opportunity_v49_global_max_expectancy_pct", 0.20)),
+            )
+            effective_v44_confirmations = int(_clamp(
+                v44_confirmations_required + int(calibration.get("confirmation_delta") or 0),
+                float(config.get("opportunity_v49_global_min_confirmations", 3)),
+                float(config.get("opportunity_v49_global_max_confirmations", 5)),
+            ))
+        effective_absolute_quality = (
+            v44_quality
+            + float(evidence_policy.get("threshold_delta") or 0.0)
+            + float(calibration.get("quality_threshold_delta") or 0.0)
+        )
+        effective_v44_cost_ratio = v44_cost_ratio + float(calibration.get("cost_ratio_delta") or 0.0)
         v44_admitted = bool(
             v44_active
             and live_enabled
@@ -1164,7 +1188,7 @@ def attach_v4_rankings(
             and model["quality"] >= effective_absolute_quality
             and expected >= effective_v44_expected
             and lower >= v44_lower
-            and model["cost_ratio"] >= v44_cost_ratio
+            and model["cost_ratio"] >= effective_v44_cost_ratio
             and v44_confirmations >= effective_v44_confirmations
             and direction_quality_ok
             and executable
@@ -1232,7 +1256,7 @@ def attach_v4_rankings(
         applicable_quality = effective_absolute_quality if v44_active else exploration_quality if exploring else bootstrap_quality
         applicable_expected = effective_v44_expected if v44_active else exploration_expected if exploring else min_expected
         applicable_lower = v44_lower if v44_active else exploration_lower if exploring else min_lower
-        applicable_cost_ratio = v44_cost_ratio if v44_active else exploration_cost_ratio if exploring else min_cost_ratio
+        applicable_cost_ratio = effective_v44_cost_ratio if v44_active else exploration_cost_ratio if exploring else min_cost_ratio
         if not policy["canary_scope"] and not policy["live_scope"] and not policy["exploration_scope"]:
             blockers.append(policy["reason"])
         if rank < applicable_rank:
@@ -1254,7 +1278,7 @@ def attach_v4_rankings(
         if v44_active and not direction_quality_ok:
             blockers.append(
                 "逆市场方向需要更强的资金流、市场匹配和中周期路径确认"
-                if version.lower().startswith(("v4.7", "v4.8"))
+                if version.lower().startswith(("v4.7", "v4.8", "v4.9"))
                 else "做空需要更强的方向资金流、市场匹配和中周期路径确认"
             )
         if not v44_active and not exploring and not alignment_ok:
