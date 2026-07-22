@@ -164,6 +164,8 @@ button:hover { transform: translateY(-1px); }
 .explain-grid span { display: block; color: #7aa6c7; font-size: 12px; }
 .explain-grid strong { display: block; margin-top: 5px; color: #f8fdff; }
 .table-wrap { overflow-x: auto; margin-top: 12px; }
+.table-hint { margin: 0 0 10px; padding: 10px 12px; border-left: 3px solid #22d3ee; color: #9fb7d1; background: rgba(8, 47, 73, 0.22); font-size: 12px; line-height: 1.6; white-space: normal; }
+.table-hint strong { color: #d9faff; }
 table { width: 100%; border-collapse: collapse; min-width: 720px; }
 th, td { padding: 12px 9px; border-bottom: 1px solid rgba(148, 163, 184, 0.12); text-align: left; white-space: nowrap; }
 th { color: #7aa6c7; font-size: 12px; font-weight: 700; }
