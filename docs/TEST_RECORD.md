@@ -473,3 +473,10 @@ This file tracks local verification for the two-stage futures system.
 - Python 编译检查通过；完整后端测试 `309 passed`。
 - 前端 `npm run build` 通过，生成 `index-CQYgJrWP.js` 等版本化生产资源。
 - 本地 HTTP 冒烟：首页、OpenAPI 与 5 个 JS/CSS 资源全部返回 HTTP 200；OpenAPI 版本为 `0.18.0`。
+## v0.18.0 / V4.8 VPS deployment verification (2026-07-22)
+
+- Deployed commit `825906f` to `/opt/bitdata`; pre-deployment backup stored at `/opt/bitdata/backups/v0.18.0-20260722T053201Z`.
+- Dashboard and runner containers rebuilt successfully. Dashboard root, V4.8 JavaScript asset, and OpenAPI each returned HTTP 200.
+- Runtime route verified as `extreme_v4_roll@v4.8`; the live `DEXEUSDT` position was tracked with `s0_full_bet_v48` and remained protected by one exchange stop-loss and one take-profit order.
+- Public and private WebSocket streams were connected; REST cooldown was inactive. No recent 429/500/502, database-lock, traceback, or container restart errors were found.
+- Post-deployment account check: equity about `28.67 U`, one protected position, zero normal open orders, and two conditional protection orders. The robot remained running.
