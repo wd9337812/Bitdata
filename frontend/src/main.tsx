@@ -36,6 +36,16 @@ type LiveReactionData = { reactions: any[]; recent_trades: any[] };
 type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; by_release?: any[]; by_evidence_type?: any[]; by_admission_lane?: any[]; active_release?: Record<string, any>; challenger_release?: Record<string, any>; trades: any[] };
 type SimulationData = Record<string, any>;
 type ReportData = Record<string, any>;
+type TrainingQualityData = {
+  schema_version?: string;
+  generated_at?: string;
+  lineage?: Record<string, number>;
+  live?: Record<string, number>;
+  shadow?: Record<string, number>;
+  high_weight_training_ready?: boolean;
+  exact_live_link_rate_pct?: number;
+  message?: string;
+};
 
 const menu = [
   { id: "overview", label: "控制台", icon: Activity },
@@ -92,6 +102,7 @@ function useData() {
   const [health, setHealth] = useState<any>(null);
   const [simulation, setSimulation] = useState<any>(null);
   const [report, setReport] = useState<any>(null);
+  const [trainingQuality, setTrainingQuality] = useState<TrainingQualityData | null>(null);
   const [error, setError] = useState("");
 
   async function refresh(light = false, throwOnError = false) {
@@ -128,6 +139,7 @@ function useData() {
       setShadow(await api<ShadowData>("/api/shadow-trades?limit=100"));
       setSimulation(await api<SimulationData>("/api/simulation/stage"));
       setReport(await api<ReportData>("/api/reports/latest"));
+      setTrainingQuality(await api<TrainingQualityData>("/api/training-data/quality"));
       setError("");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -146,7 +158,7 @@ function useData() {
     };
   }, []);
 
-  return { status, decisions, market, snapshots, logs, liveLearning, liveReaction, shadow, health, simulation, report, error, refresh };
+  return { status, decisions, market, snapshots, logs, liveLearning, liveReaction, shadow, health, simulation, report, trainingQuality, error, refresh };
 }
 
 function MetricCard({ title, value, sub, tone }: { title: string; value: string; sub?: string; tone?: string }) {
@@ -561,6 +573,7 @@ function App() {
         {active === "system" && (
           <section className="stack">
             <StageRoutePanel route={stageRoute} profiles={stageProfiles} stream={stream} userStream={userStream} rate={binanceRate} equity={account.equity} storage={data.status?.storage || {}} />
+            <TrainingDataQualityPanel quality={data.trainingQuality} />
             <LogsPanel rows={data.logs} />
           </section>
         )}
@@ -2107,6 +2120,32 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
         <button className="primary" onClick={() => onSave(form)}>保存配置</button>
         <button className="secondary" onClick={onTestApi}>测试 Binance API</button>
       </div>
+    </section>
+  );
+}
+
+function TrainingDataQualityPanel({ quality }: { quality?: TrainingQualityData | null }) {
+  const lineage = quality?.lineage || {};
+  const live = quality?.live || {};
+  const shadow = quality?.shadow || {};
+  const ready = Boolean(quality?.high_weight_training_ready);
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>模型训练数据质量</h2>
+          <p>从机会出现、下单成交到最终平仓使用同一个编号。这里只统计可追溯数据，不会自动改变实盘策略。</p>
+        </div>
+        <span className={ready ? "pill ok" : "pill"}>{ready ? "达到首轮训练门槛" : "继续积累样本"}</span>
+      </div>
+      <div className="metrics">
+        <MetricCard title="机会快照" value={`${fmt(lineage.total, 0)} 条`} sub={`含分钟特征 ${fmt(lineage.feature_rows, 0)} 条 · ${quality?.schema_version || "-"}`} />
+        <MetricCard title="实盘精确回连" value={`${fmt(live.exact_matches, 0)} / ${fmt(live.total, 0)}`} sub={`按 Binance 订单号匹配 · 覆盖率 ${fmt(quality?.exact_live_link_rate_pct, 1)}%`} tone={ready ? "positive" : ""} />
+        <MetricCard title="实盘未匹配" value={`${fmt(live.unmatched, 0)} 条`} sub="旧交易可能缺少机会编号，只作低权重历史参考" tone={Number(live.unmatched || 0) > 0 ? "negative" : "positive"} />
+        <MetricCard title="真实滑点样本" value={`${fmt(live.slippage_rows, 0)} 条`} sub="多空按各自方向计算，不再使用统一估算值" />
+        <MetricCard title="影子样本" value={`${fmt(shadow.closed, 0)} / ${fmt(shadow.total, 0)}`} sub={`已带机会编号 ${fmt(shadow.linked, 0)} 条`} />
+      </div>
+      <div className="notice">{quality?.message || "等待后端完成第一批结构化样本。"}</div>
     </section>
   );
 }

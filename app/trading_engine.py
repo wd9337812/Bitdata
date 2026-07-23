@@ -26,6 +26,7 @@ from app.state_store import daily_session_state_updates, save_state
 from app.strategy import StrategyParams
 from app.strategy_releases import active_family, active_release_version
 from app.target import target_progress, target_state_updates
+from app.training_lineage import ensure_opportunity_id
 
 
 def position_direction(position: dict[str, Any]) -> str:
@@ -750,6 +751,8 @@ def build_best_growth_decision(
         symbols_override=symbols_override,
         fast_lane=fast_lane,
     )
+    for candidate in scan.get("candidates") or []:
+        ensure_opportunity_id(candidate)
     best = next((item for item in scan["candidates"] if item.get("passed")), None)
     if not best:
         return {

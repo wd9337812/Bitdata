@@ -50,6 +50,7 @@ from app.telemetry import (
     record_event,
     telemetry_storage_status,
 )
+from app.training_lineage import training_data_quality, training_dataset
 from app.user_stream import user_stream_status
 from app.trading_engine import (
     build_best_growth_decision,
@@ -64,7 +65,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.19.1")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.20.1")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -287,6 +288,17 @@ def live_learning(limit: int = 100) -> dict[str, Any]:
         "extreme_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V2_FAMILY),
         "v4_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V4_FAMILY),
     }
+
+
+@app.get("/api/training-data/quality", dependencies=[Depends(require_auth)])
+def training_quality() -> dict[str, Any]:
+    return training_data_quality()
+
+
+@app.get("/api/training-data/dataset", dependencies=[Depends(require_auth)])
+def training_rows(limit: int = 500) -> dict[str, Any]:
+    rows = training_dataset(limit)
+    return {"rows": rows, "count": len(rows)}
 
 
 @app.post("/api/live-learning/sync", dependencies=[Depends(require_auth)])

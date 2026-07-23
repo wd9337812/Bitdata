@@ -39,6 +39,7 @@ from app.trading_engine import (
 from app.state_store import load_state, save_state
 from app.runtime_snapshot import market_rows_from_scan, update_runtime_snapshot
 from app.telemetry import compact_decision, maintain_telemetry, record_equity_snapshot, record_event, record_event_throttled, record_strategy_run
+from app.training_lineage import record_decision_opportunity, record_execution_result
 from app.user_stream import start_user_stream_thread
 
 
@@ -230,6 +231,11 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
     tracked = dict(load_state().get("runtime_protection_positions") or {})
     tracked[f"{symbol}:{direction}"] = {
         "opened_at": datetime.now(timezone.utc).isoformat(),
+        "opportunity_id": str(decision.get("opportunity_id") or candidate.get("opportunity_id") or ""),
+        "entry_order_id": entry_order.get("orderId"),
+        "entry_client_order_id": entry_order.get("clientOrderId"),
+        "stop_order_id": ((result or {}).get("stop_order") or {}).get("algoId"),
+        "take_profit_order_id": ((result or {}).get("take_profit_order") or {}).get("algoId"),
         "entry_type": decision.get("entry_type"),
         "max_hold_bars": protection_plan.get("max_hold_bars"),
         "max_hold_seconds": protection_profile.get("max_hold_seconds"),
@@ -688,6 +694,16 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         )
     shadow_status = update_shadow_trades(shadow_candidates, config)
     try:
+        record_decision_opportunity(decision)
+    except Exception as exc:
+        record_event_throttled(
+            "warning",
+            "training_lineage",
+            "训练数据血缘写入失败，本轮交易决策不受影响。",
+            {"error": str(exc), "symbol": decision.get("symbol")},
+            throttle_seconds=300,
+        )
+    try:
         result = execute_with_freshness_guard(client, decision, config, account)
     except RuntimeError as exc:
         if is_reduce_only_rejection(exc) and not has_live_position(client):
@@ -720,6 +736,16 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             "order_min_notional",
             "Binance 拒绝了低于最小名义金额的订单，本轮信号已跳过，机器人继续运行。",
             {"decision": {"symbol": decision.get("symbol"), "action": decision.get("action")}, "error": str(exc)},
+        )
+    try:
+        record_execution_result(decision, result)
+    except Exception as exc:
+        record_event_throttled(
+            "warning",
+            "training_lineage",
+            "成交血缘写入失败，机器人继续运行，后续按 Binance 成交补录。",
+            {"error": str(exc), "symbol": decision.get("symbol")},
+            throttle_seconds=300,
         )
     if result.get("mode") in {"protection_failed_closed", "protection_confirm_failed_closed"}:
         revoke_recovery_permit("exchange_protection_confirmation_failed")

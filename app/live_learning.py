@@ -10,6 +10,11 @@ from typing import Any
 from app.binance_client import BinanceFuturesClient
 from app.strategy_releases import ACTIVE_ROLE, ensure_live_release_columns, release_id
 from app.telemetry import connect, now_iso, record_event
+from app.training_lineage import (
+    ensure_live_lineage_columns,
+    finalize_trade_lineage,
+    match_trade_record,
+)
 
 
 DEFAULT_SCORE = 50.0
@@ -113,6 +118,7 @@ def init_live_learning_schema() -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_live_trade_close_time ON live_trade_records(close_time)")
         ensure_live_release_columns(conn)
+        ensure_live_lineage_columns(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_live_trade_symbol_direction_close ON live_trade_records(symbol, direction, close_time)"
         )
@@ -391,8 +397,11 @@ def upsert_trade_records(records: list[dict[str, Any]]) -> int:
                 INSERT OR REPLACE INTO live_trade_records (
                     symbol, direction, open_time, close_time, open_price, close_price,
                     quantity, open_notional, close_notional, realized_pnl, commission,
-                    funding_fee, net_pnl, hold_seconds, trade_count, source, payload, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    funding_fee, net_pnl, hold_seconds, trade_count, source, payload, created_at,
+                    opportunity_id, entry_order_ids, exit_order_ids, entry_slippage_bps,
+                    exit_reason, lineage_quality, strategy_family, strategy_version,
+                    strategy_role, release_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["symbol"],
@@ -413,6 +422,16 @@ def upsert_trade_records(records: list[dict[str, Any]]) -> int:
                     record.get("source", "binance"),
                     json.dumps(record.get("payload") or {}, ensure_ascii=False),
                     now_iso(),
+                    record.get("opportunity_id"),
+                    json.dumps(record.get("entry_order_ids") or []),
+                    json.dumps(record.get("exit_order_ids") or []),
+                    record.get("entry_slippage_bps"),
+                    record.get("exit_reason"),
+                    record.get("lineage_quality"),
+                    record.get("strategy_family"),
+                    record.get("strategy_version"),
+                    record.get("strategy_role"),
+                    record.get("release_id"),
                 ),
             )
             inserted += 1
@@ -1089,7 +1108,11 @@ def build_trade_records_from_user_trades(
                     "close_quantity": 0.0,
                     "realized_pnl": 0.0,
                     "commission": 0.0,
+                    "entry_commission": 0.0,
+                    "close_commission": 0.0,
                     "trade_count": 0,
+                    "entry_order_ids": [],
+                    "exit_order_ids": [],
                     "payload": {"fills": []},
                 }
                 active[direction] = item
@@ -1100,6 +1123,7 @@ def build_trade_records_from_user_trades(
             item["trade_count"] += 1
             item["payload"]["fills"].append(
                 {
+                    "orderId": trade.get("orderId"),
                     "time": trade_time,
                     "side": side,
                     "qty": quantity,
@@ -1109,9 +1133,17 @@ def build_trade_records_from_user_trades(
                 }
             )
             if signed > 0:
+                order_id = trade.get("orderId")
+                if order_id is not None and str(order_id) not in item["entry_order_ids"]:
+                    item["entry_order_ids"].append(str(order_id))
+                item["entry_commission"] += commission
                 item["quantity"] += quantity
                 item["open_notional"] += quantity * price
             else:
+                order_id = trade.get("orderId")
+                if order_id is not None and str(order_id) not in item["exit_order_ids"]:
+                    item["exit_order_ids"].append(str(order_id))
+                item["close_commission"] += commission
                 item["close_quantity"] += quantity
                 item["close_notional"] += quantity * price
                 item["close_time"] = trade_time
@@ -1163,6 +1195,17 @@ def sync_live_learning_from_binance(
         if rows:
             trades_by_symbol[symbol] = rows
     records = build_trade_records_from_user_trades(trades_by_symbol, income)
+    for record in records:
+        try:
+            record.update(match_trade_record(record))
+            if record.get("strategy_family") and record.get("strategy_version"):
+                record["release_id"] = release_id(
+                    str(record["strategy_family"]),
+                    str(record["strategy_version"]),
+                )
+            finalize_trade_lineage(record)
+        except sqlite3.OperationalError:
+            record["lineage_quality"] = "unavailable"
     upserted = upsert_trade_records(records)
     scores = rebuild_symbol_scores(config, lookback_hours=lookback_hours)
     result = {

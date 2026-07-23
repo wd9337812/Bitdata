@@ -230,6 +230,7 @@ def compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
     def compact_candidate(candidate: dict[str, Any], *, detail: bool = False) -> dict[str, Any]:
         keys = {
             "symbol", "direction", "mode", "strategy", "strategy_family", "strategy_version", "strategy_role",
+            "opportunity_id",
             "score", "passed", "reason", "decision_reason", "entry_type", "entry_type_label",
             "symbol_pool", "cost_ratio", "estimated_cost_pct", "expected_profit_pct",
             "risk_pct", "base_risk_pct", "leverage", "margin_pct", "current_score",
@@ -368,9 +369,21 @@ def telemetry_storage_status() -> dict[str, Any]:
         page_count = int(conn.execute("PRAGMA page_count").fetchone()[0])
         freelist = int(conn.execute("PRAGMA freelist_count").fetchone()[0])
         counts: dict[str, int] = {}
-        for table in ("strategy_runs", "live_trade_records", "shadow_trades", "equity_snapshots", "event_logs"):
+        for table in (
+            "strategy_runs",
+            "live_trade_records",
+            "shadow_trades",
+            "opportunity_lineage",
+            "equity_snapshots",
+            "event_logs",
+        ):
             try:
-                counts[table] = int(conn.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table}").fetchone()[0])
+                query = (
+                    f"SELECT COUNT(*) FROM {table}"
+                    if table == "opportunity_lineage"
+                    else f"SELECT COALESCE(MAX(id), 0) FROM {table}"
+                )
+                counts[table] = int(conn.execute(query).fetchone()[0])
             except sqlite3.OperationalError:
                 counts[table] = 0
     wal = path.with_name(path.name + "-wal")

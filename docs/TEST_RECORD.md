@@ -2,6 +2,18 @@
 
 This file tracks local verification for the two-stage futures system.
 
+## 2026-07-23 v0.20.1 S0 Training Lineage
+
+- Added one `opportunity_id` from V4 decision through Binance entry order, exchange protection and reconciled close.
+- Added bounded 12-bar one-minute WebSocket history for decision-time features; no new Binance REST request was introduced.
+- Live reconciliation now preserves entry/exit order ids, split commissions, funding, direction-aware entry slippage and exit attribution.
+- Exact order-id matches are separated from approximate legacy matches. The Dashboard shows training data quality in Chinese.
+- Added authenticated quality and dataset endpoints plus `scripts/export_training_dataset.py`.
+- Focused regression: `python -m pytest tests/test_training_lineage.py tests/test_shadow_trading.py tests/test_market_stream.py -q`: `18 passed`.
+- Complete backend regression: `python -m pytest -q`: `315 passed`; one existing local `requests` dependency compatibility warning remains.
+- `python -m compileall app`: passed.
+- Frontend `npm run build`: passed; production static assets were regenerated.
+
 ## 2026-07-21 v0.16.2 V4.6.2 Evidence Weighting
 
 - Reweighted the live V4 sorter from V4.4+ closed-trade evidence: directed flow, persistent volume, regime fit and medium path now lead the model; saturated alignment and cross-sectional inputs carry less weight.

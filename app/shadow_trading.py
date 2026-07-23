@@ -24,6 +24,10 @@ from app.strategy_releases import (
 )
 from app.opportunity_v4 import V4_CONTROL_FAMILY, V4_STRATEGY_FAMILY
 from app.telemetry import connect, now_iso
+from app.training_lineage import (
+    init_training_lineage_schema,
+    record_shadow_opportunity,
+)
 from app.v4_evidence import executable_single_position_shadows, filter_live_eligible_v4_shadows
 
 
@@ -214,6 +218,7 @@ def active_shadow_symbols(limit: int = 100) -> list[str]:
 
 
 def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, int]:
+    init_training_lineage_schema()
     """Maintain paper-only trades from scan data. This function never calls Binance."""
     if not config.get("shadow_trading_enabled", True):
         return {"opened": 0, "closed": 0, "active": 0, "episode_skipped": 0}
@@ -381,6 +386,8 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 continue
             try:
                 strategy_family = str(candidate.get("strategy_family") or "legacy_mixed")
+                opportunity_id = str(candidate.get("opportunity_id") or _opportunity_id(candidate, bucket_minutes))
+                candidate["opportunity_id"] = opportunity_id
                 structure = market_structure(candidate)
                 signal_type = _candidate_signal_type(candidate)
                 market_regime = str(structure.get("market_regime") or (candidate.get("market_state") or {}).get("state") or "unknown")
@@ -425,7 +432,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         strategy_version,
                         strategy_role,
                         release_id(strategy_family, strategy_version),
-                        str(candidate.get("opportunity_id") or _opportunity_id(candidate, bucket_minutes)),
+                        opportunity_id,
                         str(
                             candidate.get("parameter_fingerprint")
                             or parameter_fingerprint(config, fingerprint_role, strategy_family)
@@ -492,6 +499,11 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         ),
                     ),
                 )
+                try:
+                    record_shadow_opportunity(conn, candidate, opportunity_id)
+                except sqlite3.OperationalError:
+                    # Shadow execution remains authoritative if optional training metadata is unavailable.
+                    pass
                 active_keys.add(active_key)
                 opened += 1
             except sqlite3.IntegrityError:

@@ -209,6 +209,24 @@ def stream_kline(symbol: str, interval: str, max_age_seconds: int = 20) -> list[
     return item.get("row")
 
 
+def stream_kline_history(
+    symbol: str,
+    interval: str = "1m",
+    *,
+    limit: int = 12,
+    max_age_seconds: int = 20,
+) -> list[list[Any]]:
+    state = read_snapshot()
+    item = ((state.get("klines") or {}).get(symbol.upper()) or {}).get(interval)
+    if not _fresh(item, max_age_seconds):
+        return []
+    rows = list(item.get("history") or [])
+    if not rows and item.get("row"):
+        rows = [item["row"]]
+    rows.sort(key=lambda row: int(row[0]) if row else 0)
+    return rows[-max(1, int(limit)) :]
+
+
 def stream_triggers(max_age_seconds: int = 180, limit: int = 40) -> list[dict[str, Any]]:
     state = read_snapshot()
     events = []
@@ -631,6 +649,15 @@ async def _consume_stream(
                 elif event_type == "kline":
                     symbol, kline_interval, item = _kline_from_event(data)
                     if symbol and kline_interval:
+                        previous = state.setdefault("klines", {}).setdefault(symbol, {}).get(kline_interval) or {}
+                        history = list(previous.get("history") or [])
+                        row = item["row"]
+                        open_time = int(row[0])
+                        if history and int(history[-1][0]) == open_time:
+                            history[-1] = row
+                        else:
+                            history.append(row)
+                        item["history"] = history[-12:]
                         state.setdefault("klines", {}).setdefault(symbol, {})[kline_interval] = item
                         if trigger_enabled:
                             _append_trigger_event(
