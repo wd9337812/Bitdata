@@ -92,8 +92,8 @@ def test_v48_migrates_v461_version_canary_and_default_time_exit(tmp_path, monkey
     importlib.reload(config_store)
     loaded = config_store.load_config(include_secret=True)
 
-    assert loaded["opportunity_v4_strategy_version"] == "v4.10"
-    assert loaded["strategy_canary_release_id"] == "extreme_v4_roll@v4.10"
+    assert loaded["opportunity_v4_strategy_version"] == "v4.11"
+    assert loaded["strategy_canary_release_id"] == "extreme_v4_roll@v4.11"
     assert loaded["opportunity_v44_max_hold_bars"] == 2
     assert loaded["opportunity_v462_time_exit_migrated"] is True
 

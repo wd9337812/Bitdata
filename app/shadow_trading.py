@@ -359,7 +359,11 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 or (is_v3 and not v3.get("eligible"))
                 or (is_v33 and signal.get("signal") != direction)
                 or (is_v33 and not v33.get("eligible"))
-                or (is_v4 and not v4.get("shadow_eligible"))
+                or (
+                    is_v4
+                    and not v4.get("shadow_eligible")
+                    and not bool((v4.get("moe") or {}).get("passed"))
+                )
                 or (is_v4_control and not candidate.get("shadow_force_eligible"))
                 or (is_v31 and signal.get("signal") != direction)
                 or (is_v31 and not v31.get("eligible"))
@@ -481,6 +485,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                                 "expected_net_pct": v4.get("expected_net_pct"),
                                 "lower_expected_net_pct": v4.get("lower_expected_net_pct"),
                                 "model_features": v4.get("features"),
+                                "moe": v4.get("moe"),
                                 "features": {
                                     "spread_pct": (candidate.get("depth") or {}).get("spread_pct"),
                                     "depth_notional": (candidate.get("depth") or {}).get("depth_notional"),
@@ -721,7 +726,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
     # controls remain visible by evidence type, but cannot inflate live admission.
     if current_family == V4_STRATEGY_FAMILY:
         active_rows = [row for row in active_rows if str(row.get("evidence_type") or "decision") == "decision"]
-        if str(current_version or "").lower().startswith(("v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10")):
+        if str(current_version or "").lower().startswith(("v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11")):
             eligible_active_rows = filter_live_eligible_v4_shadows(
                 active_rows,
                 strategy_version=current_version,
@@ -773,7 +778,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             "recovery": _shadow_stats(active_closed[:recovery_window]),
             "primary_evidence_type": "decision" if current_family == V4_STRATEGY_FAMILY else "all",
             "execution_scope": "single_position_non_overlapping"
-            if str(current_version or "").lower().startswith(("v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10"))
+            if str(current_version or "").lower().startswith(("v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"))
             else "all_eligible_decisions",
             "research_parallel_excluded": research_parallel_excluded,
         },

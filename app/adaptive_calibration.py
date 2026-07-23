@@ -15,7 +15,7 @@ from app.telemetry import connect, db_path
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 _GLOBAL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-GLOBAL_ADAPTIVE_VERSIONS = ("v4.9", "v4.10")
+GLOBAL_ADAPTIVE_VERSIONS = ("v4.9", "v4.10", "v4.11")
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:
@@ -56,7 +56,9 @@ def _payload_metadata(payload_text: Any) -> tuple[str, str, float]:
 
 def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
     current_version = str(config.get("opportunity_v4_strategy_version") or "v4.9")
-    if current_version.lower().startswith("v4.10"):
+    if current_version.lower().startswith("v4.11"):
+        seed_version = ""
+    elif current_version.lower().startswith("v4.10"):
         seed_version = str(config.get("opportunity_v410_seed_version") or "v4.9")
     elif current_version.lower().startswith("v4.9"):
         seed_version = ""
@@ -67,7 +69,7 @@ def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
     versions = tuple(dict.fromkeys(value for value in (current_version, seed_version) if value))
     lookback_hours = float(
         config.get("opportunity_v49_global_window_hours", 24)
-        if current_version.lower().startswith("v4.9")
+        if current_version.lower().startswith(GLOBAL_ADAPTIVE_VERSIONS)
         else config.get("opportunity_v47_calibration_lookback_hours", 72)
     )
     cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
@@ -409,7 +411,7 @@ def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> d
     if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(GLOBAL_ADAPTIVE_VERSIONS):
         global_result = _global_v49_calibration(config)
         candidate_multiplier = 1.0
-        if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.10"):
+        if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.10", "v4.11")):
             direction_bias = str(global_result.get("global_direction_bias") or "NEUTRAL").upper()
             candidate_direction = str(candidate.get("direction") or "").upper()
             if direction_bias in {"LONG", "SHORT"} and candidate_direction in {"LONG", "SHORT"}:
@@ -420,7 +422,7 @@ def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> d
                 )
         return {
             **global_result,
-            "schema": "adaptive_v410_global" if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.10") else "adaptive_v49_global",
+            "schema": "adaptive_v411_global" if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.11") else "adaptive_v410_global" if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.10") else "adaptive_v49_global",
             "relation": "global",
             "direction": "GLOBAL",
             "market_regime": "global",
@@ -515,6 +517,8 @@ def adaptive_calibration_status(config: dict[str, Any]) -> dict[str, Any]:
     if not version.lower().startswith(GLOBAL_ADAPTIVE_VERSIONS):
         return {"enabled": False, "version": version, "scope": "inactive"}
     result = dict(_global_v49_calibration(config))
-    if version.lower().startswith("v4.10"):
+    if version.lower().startswith("v4.11"):
+        result["schema"] = "adaptive_v411_global"
+    elif version.lower().startswith("v4.10"):
         result["schema"] = "adaptive_v410_global"
     return result

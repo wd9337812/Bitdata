@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from app.opportunity_v4 import (
     V462_FEATURE_WEIGHTS,
+    V411_FEATURE_WEIGHTS,
+    _continuation_shape,
     _model_expectancy,
     _model_features,
     _regime_policy,
@@ -82,6 +84,18 @@ def test_v462_feature_weights_are_normalized_and_flow_led():
     assert sum(V462_FEATURE_WEIGHTS.values()) == 1.0
     assert V462_FEATURE_WEIGHTS["directed_flow"] == max(V462_FEATURE_WEIGHTS.values())
     assert V462_FEATURE_WEIGHTS["liquidity"] == min(V462_FEATURE_WEIGHTS.values())
+
+
+def test_v411_weights_prioritize_regime_and_anti_chase():
+    assert sum(V411_FEATURE_WEIGHTS.values()) == 1.0
+    assert V411_FEATURE_WEIGHTS["regime_fit"] > V411_FEATURE_WEIGHTS["directed_flow"]
+    assert V411_FEATURE_WEIGHTS["anti_chase"] > V411_FEATURE_WEIGHTS["volume_persistence"]
+
+
+def test_v411_continuation_shape_penalizes_terminal_spikes():
+    assert _continuation_shape(1.35, 0.75, 1.35, 4.50) == 1.0
+    assert _continuation_shape(3.5, 0.75, 1.35, 4.50) < 1.0
+    assert _continuation_shape(5.0, 0.75, 1.35, 4.50) == 0.0
 
 
 def test_v47_full_bet_uses_adaptive_calibration_and_keeps_risk_cap(monkeypatch, tmp_path):

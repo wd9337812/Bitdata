@@ -24,6 +24,7 @@ from app.opportunity_engine import (
 )
 from app.opportunity_queue import read_opportunities
 from app.opportunity_v4 import V4_STRATEGY_FAMILY, attach_v4_rankings
+from app.s0_moe import attach_moe_shadow
 from app.position_sizing import effective_position_risk
 from app.s0_full_bet import s0_full_bet_profile_active
 from app.scalp_engine import build_scalp_signal
@@ -783,7 +784,7 @@ def _coarse_rank_symbols(
     ranked = rows[: max(1, limits["coarse"])]
     rank_limit = max(1, limits["rank"])
     v44_active = bool(
-        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10"))
+        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"))
         and config.get("opportunity_v4_enabled", True)
     )
     if not v44_active or rank_limit < 3:
@@ -1905,7 +1906,7 @@ def _apply_v4_live_selection(
     base_risk = float(candidate.get("base_risk_pct") or mode.get("risk_pct") or 0.0)
     version = str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.3.2")
     version_label = version.upper()
-    full_bet = bool(version.lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10")) and v4.get("full_bet_admitted"))
+    full_bet = bool(version.lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11")) and v4.get("full_bet_admitted"))
     signal = dict(candidate.get("signal") or {})
     if v4.get("protection_profile"):
         signal["protection_profile"] = dict(v4["protection_profile"])
@@ -2749,6 +2750,8 @@ def scan_growth_candidates(
         v4_shortlist_only=bool(config.get("opportunity_v4_enabled", True)),
     )
     candidates = attach_v4_rankings(candidates, config, reuse_existing_context=True)
+    # Shadow adviser only: this does not mutate live admission or position size.
+    candidates = attach_moe_shadow(candidates, config)
     if v3_enabled and config.get("opportunity_v4_enabled", True):
         candidates = [
             _finalize_candidate(
