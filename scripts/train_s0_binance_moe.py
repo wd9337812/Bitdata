@@ -15,12 +15,19 @@ from sklearn.metrics import log_loss, mean_absolute_error, roc_auc_score
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = ROOT / "data" / "research" / "s0_public_1m" / "s0_candidates_1m.parquet"
-DEFAULT_OUTPUT = ROOT / "data" / "research" / "s0_moe_v1"
+MODEL_VERSION = "s0_binance_moe_v1_1"
+DEFAULT_OUTPUT = ROOT / "data" / "research" / MODEL_VERSION
 TRAIN_END = pd.Timestamp("2026-05-01", tz="UTC")
 VALID_END = pd.Timestamp("2026-06-16", tz="UTC")
 EMBARGO = pd.Timedelta(minutes=30)
 ROUND_TRIP_COST_PCT = 0.12
 EXPERTS = ("momentum", "prebreakout", "pullback")
+SETUP_ALIASES = {
+    "momentum": "momentum",
+    "breakout": "momentum",
+    "prebreakout": "prebreakout",
+    "pullback": "pullback",
+}
 REGIMES = ("quiet", "rotation", "broad_up", "broad_down", "panic")
 CATEGORICAL = ("direction", "market_regime")
 NUMERIC = (
@@ -370,7 +377,7 @@ def main() -> None:
     selected_validation = schedule(validation, floors)
     selected_test = schedule(test, floors)
     report = {
-        "experiment": "s0_binance_moe_v1",
+        "experiment": MODEL_VERSION,
         "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
         "scope": "S0 admission shadow challenger; Binance data only",
         "label": "10 minute path, 0.85 ATR stop, 1.05R take-profit, 0.12% round-trip cost",
@@ -392,11 +399,11 @@ def main() -> None:
         "thresholds": threshold_report,
         "validation": {
             "v4_proxy": metrics(schedule(validation, {}, baseline=True), "v4_proxy"),
-            "moe": metrics(selected_validation, "s0_binance_moe_v1"),
+            "moe": metrics(selected_validation, MODEL_VERSION),
         },
         "untouched_test": {
             "v4_proxy": metrics(schedule(test, {}, baseline=True), "v4_proxy"),
-            "moe": metrics(selected_test, "s0_binance_moe_v1"),
+            "moe": metrics(selected_test, MODEL_VERSION),
             "by_expert": {
             name: metrics(selected_test[selected_test.setup_type.eq(name)], name)
             for name in EXPERTS
@@ -412,7 +419,8 @@ def main() -> None:
     )
     report["decision"] = "shadow_candidate" if eligible else "research_only_not_eligible"
     bundle = {
-        "version": "s0_binance_moe_v1",
+        "version": MODEL_VERSION,
+        "setup_aliases": SETUP_ALIASES,
         "experts": {
             name: {
                 "classifier": expert.classifier,
@@ -433,8 +441,8 @@ def main() -> None:
             "cost_sensitivity": report["untouched_test"]["cost_sensitivity"],
         },
     }
-    joblib.dump(bundle, args.output / "s0_binance_moe_v1.joblib", compress=3)
-    (args.output / "s0_binance_moe_v1_report.json").write_text(
+    joblib.dump(bundle, args.output / f"{MODEL_VERSION}.joblib", compress=3)
+    (args.output / f"{MODEL_VERSION}_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

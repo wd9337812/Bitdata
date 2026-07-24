@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import json
 import math
+import time
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from app.market_structure import market_structure, normalize_setup_type
+from app.telemetry import connect, db_path
 from app.training_lineage import capture_minute_features
 
 
-DEFAULT_MODEL = Path(__file__).resolve().parent / "model_artifacts" / "s0_binance_moe_v1.joblib"
+DEFAULT_MODEL = Path(__file__).resolve().parent / "model_artifacts" / "s0_binance_moe_v1_1.joblib"
 
 
 def _float(value: Any, default: float = math.nan) -> float:
@@ -28,11 +32,153 @@ def _load_bundle(path: str) -> dict[str, Any]:
 
 def clear_moe_cache() -> None:
     _load_bundle.cache_clear()
+    _online_evidence_cached.cache_clear()
 
 
 def _model_path(config: dict[str, Any]) -> Path:
     configured = str(config.get("s0_moe_model_path") or "").strip()
     return Path(configured) if configured else DEFAULT_MODEL
+
+
+def _parse_time(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def _evidence_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    closed = [row for row in rows if str(row.get("status") or "").upper() == "CLOSED"]
+    gains = sum(max(0.0, _float(row.get("net_pnl"), 0.0)) for row in closed)
+    losses = -sum(min(0.0, _float(row.get("net_pnl"), 0.0)) for row in closed)
+    wins = sum(_float(row.get("net_pnl"), 0.0) > 0 for row in closed)
+    return {
+        "total": len(rows),
+        "open": len(rows) - len(closed),
+        "closed": len(closed),
+        "opportunities": len(
+            {str(row.get("opportunity_id") or "") for row in rows if row.get("opportunity_id")}
+        ),
+        "symbols": len({str(row.get("symbol") or "") for row in rows if row.get("symbol")}),
+        "regimes": len(
+            {str(row.get("market_regime") or "") for row in rows if row.get("market_regime")}
+        ),
+        "wins": wins,
+        "win_rate": round(wins / len(closed) * 100.0, 4) if closed else None,
+        "net_pnl": round(sum(_float(row.get("net_pnl"), 0.0) for row in closed), 8),
+        "estimated_cost": round(
+            sum(_float(row.get("estimated_cost"), 0.0) for row in closed),
+            8,
+        ),
+        "profit_factor": (
+            round(gains / losses, 4)
+            if losses > 0
+            else (999.0 if gains > 0 else None)
+        ),
+    }
+
+
+def _aggregate_online_evidence(
+    rows: list[dict[str, Any]],
+    *,
+    cutoff: datetime | None = None,
+) -> dict[str, Any]:
+    evaluated: list[dict[str, Any]] = []
+    active_gate: list[dict[str, Any]] = []
+    selected: list[dict[str, Any]] = []
+    by_expert: dict[str, list[dict[str, Any]]] = {}
+    last_evaluated_at: datetime | None = None
+    for row in rows:
+        opened_at = _parse_time(row.get("opened_at"))
+        if cutoff and (not opened_at or opened_at < cutoff):
+            continue
+        payload = row.get("payload")
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+        moe = (payload or {}).get("moe") or {}
+        if not moe.get("enabled"):
+            continue
+        item = {**row, "_moe": moe}
+        evaluated.append(item)
+        if opened_at and (last_evaluated_at is None or opened_at > last_evaluated_at):
+            last_evaluated_at = opened_at
+        if moe.get("active_gate"):
+            active_gate.append(item)
+        if moe.get("passed"):
+            selected.append(item)
+            expert = str(moe.get("expert") or "unknown")
+            by_expert.setdefault(expert, []).append(item)
+    return {
+        "evaluated": _evidence_metrics(evaluated),
+        "active_gate": _evidence_metrics(active_gate),
+        "selected": _evidence_metrics(selected),
+        "by_expert": {
+            name: _evidence_metrics(items)
+            for name, items in sorted(by_expert.items())
+        },
+        "last_evaluated_at": last_evaluated_at.isoformat() if last_evaluated_at else None,
+    }
+
+
+@lru_cache(maxsize=16)
+def _online_evidence_cached(
+    database: str,
+    strategy_version: str,
+    model_version: str,
+    window_hours: float,
+    cache_bucket: int,
+) -> dict[str, Any]:
+    del database, cache_bucket
+    try:
+        with connect() as conn:
+            rows = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT id, opened_at, closed_at, symbol, direction, status, net_pnl,
+                           estimated_cost, opportunity_id, market_regime, payload
+                    FROM shadow_trades
+                    WHERE strategy_family = 'extreme_v4_roll' AND strategy_version = ?
+                      AND payload LIKE ?
+                    ORDER BY id DESC LIMIT 50000
+                    """,
+                    (strategy_version, f'%"version":"{model_version}"%'),
+                ).fetchall()
+            ]
+    except Exception as exc:
+        return {"available": False, "error": type(exc).__name__}
+    now = datetime.now(timezone.utc)
+    return {
+        "available": True,
+        "strategy_version": strategy_version,
+        "model_version": model_version,
+        "current_version": _aggregate_online_evidence(rows),
+        "rolling_window": {
+            "hours": window_hours,
+            **_aggregate_online_evidence(
+                rows,
+                cutoff=now - timedelta(hours=window_hours),
+            ),
+        },
+    }
+
+
+def online_moe_evidence(config: dict[str, Any], model_version: str) -> dict[str, Any]:
+    strategy_version = str(config.get("opportunity_v4_strategy_version") or "unknown")
+    window_hours = float(config.get("s0_moe_online_window_hours", 24.0))
+    return _online_evidence_cached(
+        str(db_path().resolve()),
+        strategy_version,
+        model_version,
+        window_hours,
+        int(time.time() // 30),
+    )
 
 
 def _directional(value: float, direction: str) -> float:
@@ -165,7 +311,13 @@ def evaluate_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dic
 
         bundle = _load_bundle(str(path))
         structure = market_structure(candidate)
-        expert_name = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
+        setup_name = normalize_setup_type(
+            structure.get("setup_type") or candidate.get("entry_type")
+        )
+        expert_name = str(
+            (bundle.get("setup_aliases") or {}).get(setup_name)
+            or setup_name
+        )
         regime = str(structure.get("market_regime") or "unknown").lower()
         expert = (bundle.get("experts") or {}).get(expert_name)
         floor = (bundle.get("gate_floors") or {}).get(f"{expert_name}|{regime}")
@@ -174,6 +326,7 @@ def evaluate_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dic
                 "enabled": True,
                 "version": bundle.get("version"),
                 "mode": "shadow_only",
+                "setup_type": setup_name,
                 "expert": expert_name,
                 "market_regime": regime,
                 "active_gate": False,
@@ -194,6 +347,7 @@ def evaluate_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dic
             "enabled": True,
             "version": bundle.get("version"),
             "mode": "shadow_only",
+            "setup_type": setup_name,
             "expert": expert_name,
             "market_regime": regime,
             "active_gate": True,
@@ -248,12 +402,30 @@ def moe_runtime_status(config: dict[str, Any]) -> dict[str, Any]:
         return base
     try:
         bundle = _load_bundle(str(path))
+        model_version = str(bundle.get("version") or "unknown")
+        online = online_moe_evidence(config, model_version)
+        selected = ((online.get("current_version") or {}).get("selected") or {})
+        min_closed = int(config.get("s0_moe_retrain_min_selected_closes", 200))
+        min_regimes = int(config.get("s0_moe_retrain_min_regimes", 2))
         base.update(
             {
-                "version": bundle.get("version"),
+                "version": model_version,
                 "decision": bundle.get("decision"),
                 "active_gates": len(bundle.get("gate_floors") or {}),
                 "training_summary": bundle.get("training_summary") or {},
+                "online_shadow": online,
+                "retraining": {
+                    "mode": "controlled_snapshot",
+                    "automatic_live_replacement": False,
+                    "selected_closed": int(selected.get("closed") or 0),
+                    "required_selected_closes": min_closed,
+                    "selected_regimes": int(selected.get("regimes") or 0),
+                    "required_regimes": min_regimes,
+                    "ready": (
+                        int(selected.get("closed") or 0) >= min_closed
+                        and int(selected.get("regimes") or 0) >= min_regimes
+                    ),
+                },
             }
         )
     except Exception as exc:

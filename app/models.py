@@ -605,6 +605,9 @@ class TradingConfig(BaseModel):
     s0_moe_shadow_enabled: bool = True
     s0_moe_model_path: str = ""
     s0_moe_shadow_candidate_limit: int = Field(default=10, ge=1, le=50)
+    s0_moe_online_window_hours: float = Field(default=24.0, ge=1, le=720)
+    s0_moe_retrain_min_selected_closes: int = Field(default=200, ge=20, le=100000)
+    s0_moe_retrain_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v410_seed_version: str = "v4.9"
     opportunity_v410_global_regime_enabled: bool = True
     opportunity_v410_global_smart_flow_enabled: bool = True

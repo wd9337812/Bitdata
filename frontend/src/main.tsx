@@ -233,6 +233,10 @@ function App() {
   );
   const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v4_roll"}@${performanceGuard.active_strategy_version || "v4.11"}`;
   const moe = status?.s0_moe || {};
+  const moeOnline = moe.online_shadow?.current_version || {};
+  const moeSelected = moeOnline.selected || {};
+  const moeEvaluated = moeOnline.evaluated || {};
+  const moeRetraining = moe.retraining || {};
   const globalAdaptive = status?.global_adaptive || status?.v49_global_adaptive || {};
   const globalAdaptiveStats = globalAdaptive.stats_24h || {};
   const globalAdaptiveState = !globalAdaptive.enabled
@@ -539,13 +543,28 @@ function App() {
               <MetricCard
                 title="S0 MoE 模型"
                 value={moe.model_exists ? "影子对照运行" : "模型未加载"}
-                sub={moe.model_exists ? `${moe.version || "s0_binance_moe_v1"} · ${fmt(moe.active_gates, 0)} 个已验证场景 · 不影响实盘准入` : "不会影响当前实盘策略"}
+                sub={moe.model_exists ? `${moe.version || "s0_binance_moe_v1_1"} · ${fmt(moe.active_gates, 0)} 个已验证场景 · 不影响实盘准入` : "不会影响当前实盘策略"}
                 tone={moe.model_exists ? "positive" : "negative"}
               />
               <MetricCard
-                title="MoE 样本外结果"
+                title="MoE 线上门控影子"
+                value={Number(moeSelected.closed || 0) > 0
+                  ? `${fmt(moeSelected.closed, 0)} 笔 · PF ${fmt(moeSelected.profit_factor, 2)}`
+                  : "暂无通过门控样本"}
+                sub={`已评估 ${fmt(moeEvaluated.total, 0)} 笔 · 只统计当前策略与当前模型版本`}
+                tone={Number(moeSelected.net_pnl || 0) > 0 ? "positive" : undefined}
+              />
+              <MetricCard
+                title="MoE 离线未触碰测试"
                 value={`PF ${fmt(moe.training_summary?.untouched_test?.profit_factor, 2)}`}
-                sub={`${fmt(moe.training_summary?.untouched_test?.trades, 0)} 笔 · 仅作为影子候选，尚未获得实盘权限`}
+                sub={`${fmt(moe.training_summary?.untouched_test?.trades, 0)} 笔 · 固定测试集，不会随线上交易变化`}
+              />
+              <MetricCard
+                title="MoE 候选重训练"
+                value={`${fmt(moeRetraining.selected_closed, 0)} / ${fmt(moeRetraining.required_selected_closes, 0)} 笔`}
+                sub={moeRetraining.ready
+                  ? "已具备生成候选快照的样本量，仍需本地回放验证"
+                  : "线上只积累证据，不会自动改模型或接管实盘"}
               />
             </div>
             <TargetProgressPanel target={target} />
@@ -1586,6 +1605,9 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {toggle("opportunity_v44_full_bet_enabled", "启用 S0 单仓全进全出", "V4.11 使用约 90% 新鲜可用保证金，只持有一个币种和一个方向")}
             {toggle("opportunity_v49_global_adaptive_enabled", "启用 V4.11 全局24小时自适应", "根据当前版本全部实盘和影子结果，每2小时最多调整一个全局门槛；不按单币种惩罚")}
             {toggle("s0_moe_shadow_enabled", "启用 MoE 影子顾问", "仅为最终候选做模型对照，不改变实盘准入、仓位、止盈或止损")}
+            {number("s0_moe_online_window_hours", "MoE 线上统计窗口（小时）", "默认 24 小时；同时保留当前策略版本的全量统计")}
+            {number("s0_moe_retrain_min_selected_closes", "MoE 候选重训练最少闭合样本", "默认 200 笔通过模型门控且已结束的独立影子机会")}
+            {number("s0_moe_retrain_min_regimes", "MoE 候选重训练最少市场状态", "默认至少覆盖 2 种市场状态，避免只学到单边行情")}
             {number("opportunity_v44_margin_pct", "计划使用保证金%", "默认 90%；保留约 10% 处理费用和价格波动")}
             {number("opportunity_v44_min_risk_pct", "最低计划风险%", "默认 8%；方向验证和当前排名共同决定实际值")}
             {number("opportunity_v44_max_risk_pct", "最高计划风险%", "默认 15%；仅最强机会接近上限，连续两次亏损后自动降回 8%")}
