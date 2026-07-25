@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from app.market_structure import market_structure, normalize_setup_type
+from app.strategy_capabilities import effective_strategy_version, strategy_supports
 from app.telemetry import connect, db_path
 
 
@@ -56,20 +57,21 @@ def _payload_metadata(payload_text: Any) -> tuple[str, str, float]:
 
 def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
     current_version = str(config.get("opportunity_v4_strategy_version") or "v4.9")
-    if current_version.lower().startswith("v4.11"):
+    effective_version = effective_strategy_version(current_version)
+    if effective_version.startswith("v4.11"):
         seed_version = ""
-    elif current_version.lower().startswith("v4.10"):
+    elif effective_version.startswith("v4.10"):
         seed_version = str(config.get("opportunity_v410_seed_version") or "v4.9")
-    elif current_version.lower().startswith("v4.9"):
+    elif effective_version.startswith("v4.9"):
         seed_version = ""
-    elif current_version.lower().startswith("v4.8"):
+    elif effective_version.startswith("v4.8"):
         seed_version = str(config.get("opportunity_v48_seed_version") or "v4.7")
     else:
         seed_version = str(config.get("opportunity_v47_seed_version") or "v4.6.2")
     versions = tuple(dict.fromkeys(value for value in (current_version, seed_version) if value))
     lookback_hours = float(
         config.get("opportunity_v49_global_window_hours", 24)
-        if current_version.lower().startswith(GLOBAL_ADAPTIVE_VERSIONS)
+        if strategy_supports(current_version, "global_adaptive")
         else config.get("opportunity_v47_calibration_lookback_hours", 72)
     )
     cutoff_dt = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
@@ -408,10 +410,12 @@ def _global_v49_calibration(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
-    if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(GLOBAL_ADAPTIVE_VERSIONS):
+    version = str(config.get("opportunity_v4_strategy_version") or "")
+    effective_version = effective_strategy_version(version)
+    if strategy_supports(version, "global_adaptive"):
         global_result = _global_v49_calibration(config)
         candidate_multiplier = 1.0
-        if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.10", "v4.11")):
+        if strategy_supports(version, "global_market"):
             direction_bias = str(global_result.get("global_direction_bias") or "NEUTRAL").upper()
             candidate_direction = str(candidate.get("direction") or "").upper()
             if direction_bias in {"LONG", "SHORT"} and candidate_direction in {"LONG", "SHORT"}:
@@ -422,7 +426,7 @@ def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> d
                 )
         return {
             **global_result,
-            "schema": "adaptive_v411_global" if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.11") else "adaptive_v410_global" if str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.10") else "adaptive_v49_global",
+            "schema": "adaptive_v411_global" if effective_version.startswith("v4.11") else "adaptive_v410_global" if effective_version.startswith("v4.10") else "adaptive_v49_global",
             "relation": "global",
             "direction": "GLOBAL",
             "market_regime": "global",
@@ -514,11 +518,12 @@ def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> d
 def adaptive_calibration_status(config: dict[str, Any]) -> dict[str, Any]:
     """Return the current global V4.9 decision for Dashboard/API consumers."""
     version = str(config.get("opportunity_v4_strategy_version") or "")
-    if not version.lower().startswith(GLOBAL_ADAPTIVE_VERSIONS):
+    if not strategy_supports(version, "global_adaptive"):
         return {"enabled": False, "version": version, "scope": "inactive"}
     result = dict(_global_v49_calibration(config))
-    if version.lower().startswith("v4.11"):
+    effective_version = effective_strategy_version(version)
+    if effective_version.startswith("v4.11"):
         result["schema"] = "adaptive_v411_global"
-    elif version.lower().startswith("v4.10"):
+    elif effective_version.startswith("v4.10"):
         result["schema"] = "adaptive_v410_global"
     return result

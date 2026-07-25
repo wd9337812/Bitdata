@@ -7,6 +7,7 @@ from typing import Any
 
 from app.local_circuit import cohort_key
 from app.state_store import load_state, save_state
+from app.strategy_capabilities import strategy_supports
 from app.telemetry import record_event
 
 
@@ -92,7 +93,7 @@ def _target_release(config: dict[str, Any], active_release_id: str) -> bool:
 
 def _is_v44_release(release_id: str) -> bool:
     _, _, version = str(release_id or "").lower().partition("@")
-    return version.startswith("v4.4")
+    return strategy_supports(version, "full_bet")
 
 
 def _shadow_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:

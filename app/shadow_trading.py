@@ -28,6 +28,7 @@ from app.training_lineage import (
     init_training_lineage_schema,
     record_shadow_opportunity,
 )
+from app.strategy_capabilities import strategy_supports
 from app.v4_evidence import executable_single_position_shadows, filter_live_eligible_v4_shadows
 
 
@@ -726,7 +727,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
     # controls remain visible by evidence type, but cannot inflate live admission.
     if current_family == V4_STRATEGY_FAMILY:
         active_rows = [row for row in active_rows if str(row.get("evidence_type") or "decision") == "decision"]
-        if str(current_version or "").lower().startswith(("v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11")):
+        if strategy_supports(current_version, "continuous_permit"):
             eligible_active_rows = filter_live_eligible_v4_shadows(
                 active_rows,
                 strategy_version=current_version,
@@ -778,7 +779,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             "recovery": _shadow_stats(active_closed[:recovery_window]),
             "primary_evidence_type": "decision" if current_family == V4_STRATEGY_FAMILY else "all",
             "execution_scope": "single_position_non_overlapping"
-            if str(current_version or "").lower().startswith(("v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"))
+            if strategy_supports(current_version, "continuous_permit")
             else "all_eligible_decisions",
             "research_parallel_excluded": research_parallel_excluded,
         },

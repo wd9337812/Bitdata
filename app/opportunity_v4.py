@@ -11,12 +11,13 @@ from typing import Any
 from app.adaptive_calibration import adaptive_calibration
 from app.local_circuit import candidate_local_circuit_status, local_circuit_state
 from app.market_structure import MARKET_STRUCTURE_SCHEMA, market_structure, normalize_setup_type
+from app.strategy_capabilities import strategy_supports
 from app.telemetry import connect, db_path
 
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.11"
+V4_FEATURE_SCHEMA = "v4.7.2"
 
 V462_FEATURE_WEIGHTS = {
     "cross_sectional_strength": 0.08,
@@ -47,6 +48,13 @@ V462_SETUP_ADJUSTMENTS = {
     "breakout": 0.01,
     "pullback": -0.03,
     "prebreakout": -0.03,
+}
+
+V472_SETUP_ADJUSTMENTS = {
+    "momentum": -0.08,
+    "breakout": 0.00,
+    "pullback": 0.06,
+    "prebreakout": -0.08,
 }
 
 _CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
@@ -291,7 +299,10 @@ def _model_features(candidate: dict[str, Any], config: dict[str, Any] | None = N
     direction_fit = _clamp(float(structure.get("direction_multiplier") or 0.8) / 1.15, 0.0, 1.0)
     volume_raw = float(signal.get("volume_acceleration") or 1.0)
     flow_raw = float(signal.get("directed_trade_flow") or 0.5)
-    v411 = str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v4.11")
+    v411 = strategy_supports(
+        config.get("opportunity_v4_strategy_version"),
+        "healthy_continuation",
+    )
     volume = (
         _continuation_shape(volume_raw, 0.75, 1.35, 4.50)
         if v411
@@ -420,7 +431,10 @@ def _v48_reentry_policy(
     """Require a structural reset before repeatedly entering a losing cohort."""
     if not config.get("opportunity_v48_reentry_enabled", True):
         return {"state": "clear", "blocked": False, "risk_multiplier": 1.0, "structural_reset": False}
-    streak = int(local_circuit.get("live_loss_streak") or 0)
+    episode = dict(local_circuit.get("episode") or {})
+    cohort_streak = int(local_circuit.get("live_loss_streak") or 0)
+    episode_streak = int(episode.get("loss_streak") or 0)
+    streak = max(cohort_streak, episode_streak)
     signal = candidate.get("signal") or {}
     phase = _entry_phase(candidate)
     volume = max(0.0, float(signal.get("volume_acceleration") or 1.0))
@@ -432,7 +446,19 @@ def _v48_reentry_policy(
         and extension <= float(config.get("opportunity_v48_reentry_reset_extension_atr", 0.35))
     )
     hard_losses = int(config.get("opportunity_v48_reentry_hard_losses", 2))
-    blocked = bool(streak >= hard_losses and not structural_reset)
+    duplicate_event = bool(episode.get("within_dedupe_window"))
+    event_limit_reached = bool(
+        int(episode.get("recent_event_count") or 0)
+        >= int(episode.get("recent_event_limit") or 3)
+    )
+    blocked = bool(
+        not structural_reset
+        and (
+            streak >= hard_losses
+            or duplicate_event
+            or event_limit_reached
+        )
+    )
     caution = bool(streak > 0 and not structural_reset and not blocked)
     return {
         "state": "reset" if structural_reset else "blocked" if blocked else "caution" if caution else "clear",
@@ -446,6 +472,13 @@ def _v48_reentry_policy(
         ),
         "structural_reset": structural_reset,
         "live_loss_streak": streak,
+        "cohort_loss_streak": cohort_streak,
+        "episode_loss_streak": episode_streak,
+        "duplicate_event": duplicate_event,
+        "event_limit_reached": event_limit_reached,
+        "recent_event_count": int(episode.get("recent_event_count") or 0),
+        "recent_event_limit": int(episode.get("recent_event_limit") or 3),
+        "dedupe_minutes": int(episode.get("dedupe_minutes") or 45),
         "entry_phase": phase,
         "medium_path": round(float(features.get("medium_path") or 0.0), 6),
         "volume_acceleration": round(volume, 6),
@@ -455,13 +488,18 @@ def _v48_reentry_policy(
 
 def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], config: dict[str, Any]) -> dict[str, float]:
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
-    weights = V411_FEATURE_WEIGHTS if version.startswith("v4.11") else V462_FEATURE_WEIGHTS
+    weights = V411_FEATURE_WEIGHTS if strategy_supports(version, "healthy_continuation") else V462_FEATURE_WEIGHTS
     base_quality = sum(features[name] * weight for name, weight in weights.items())
     structure = market_structure(candidate)
     setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
-    setup_adjustment = V462_SETUP_ADJUSTMENTS.get(setup_type, 0.0)
+    setup_adjustments = (
+        V472_SETUP_ADJUSTMENTS
+        if version.startswith("v4.7.2")
+        else V462_SETUP_ADJUSTMENTS
+    )
+    setup_adjustment = setup_adjustments.get(setup_type, 0.0)
     smart_points = float(candidate.get("smart_flow_score_delta") or 0.0)
-    if version.startswith(("v4.8", "v4.9", "v4.10", "v4.11")):
+    if strategy_supports(version, "exhaustion_reentry"):
         smart = candidate.get("smart_flow") or {}
         confirmed = bool(
             smart.get("available")
@@ -583,13 +621,12 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
             "trend_aligned": trend_aligned,
             "reason": "恐慌行情只记录影子，不在失序盘口追价",
         }
-    v44_active = bool(
-        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"))
-        and config.get("opportunity_v44_full_bet_enabled", True)
-    )
+    version = str(config.get("opportunity_v4_strategy_version") or "").lower()
+    v44_active = bool(strategy_supports(version, "full_bet") and config.get("opportunity_v44_full_bet_enabled", True))
+    v472_router = version.startswith("v4.7.2")
     v44_structure = bool(
         (setup_type == "pullback" and phase == "RETEST")
-        or setup_type in {"momentum", "prebreakout"}
+        or (not v472_router and setup_type in {"momentum", "prebreakout"})
     )
     if v44_active and trend_aligned and v44_structure and regime in {"quiet", "broad_up", "broad_down", "rotation"}:
         return {
@@ -695,15 +732,23 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
 
 def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2").lower()
-    if version.startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11")) and config.get("opportunity_v44_full_bet_enabled", True):
+    if strategy_supports(version, "full_bet") and config.get("opportunity_v44_full_bet_enabled", True):
         stop_atr = float(config.get("opportunity_v44_stop_atr", 0.85))
         take_profit_r = float(config.get("opportunity_v44_take_profit_r", 1.05))
+        setup_type = normalize_setup_type(
+            market_structure(candidate).get("setup_type") or candidate.get("entry_type")
+        )
+        max_hold_bars = (
+            int(config.get("opportunity_v472_pullback_max_hold_bars", 4))
+            if version.startswith("v4.7.2") and setup_type == "pullback"
+            else int(config.get("opportunity_v44_max_hold_bars", 2))
+        )
         return {
             "entry_phase": _entry_phase(candidate),
             "profile": "s0_full_bet_v44",
             "stop_atr": stop_atr,
             "take_profit_atr": stop_atr * take_profit_r,
-            "max_hold_bars": int(config.get("opportunity_v44_max_hold_bars", 2)),
+            "max_hold_bars": max_hold_bars,
             "fast_invalid_atr": stop_atr * 0.45,
             "break_even_trigger_atr": stop_atr
             * float(config.get("opportunity_v44_break_even_trigger_r", 0.45)),
@@ -931,8 +976,8 @@ def attach_v4_rankings(
     min_symbols = int(config.get("opportunity_v41_validation_min_symbols", 3))
     prior_trades = float(config.get("opportunity_v41_empirical_prior_trades", 40))
     version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
-    v44_active = bool(version.lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11")) and config.get("opportunity_v44_full_bet_enabled", True))
-    v48_active = bool(version.lower().startswith(("v4.8", "v4.9", "v4.10", "v4.11")))
+    v44_active = bool(strategy_supports(version, "full_bet") and config.get("opportunity_v44_full_bet_enabled", True))
+    v48_active = strategy_supports(version, "exhaustion_reentry")
     v44_rank = float(config.get("opportunity_v44_min_rank_percentile", 0.80))
     v44_quality = float(config.get("opportunity_v44_min_quality_score", 52.0)) / 100
     v44_expected = float(config.get("opportunity_v44_min_expected_net_pct", 0.02))
@@ -1028,7 +1073,7 @@ def attach_v4_rankings(
         execution = candidate.get("execution_filter") or {}
         executable = not execution.get("enabled") or bool(execution.get("executable"))
         policy = _regime_policy(candidate, config)
-        calibration = adaptive_calibration(candidate, config) if version.lower().startswith(("v4.7", "v4.8", "v4.9", "v4.10", "v4.11")) else {
+        calibration = adaptive_calibration(candidate, config) if strategy_supports(version, "adaptive_calibration") else {
             "enabled": False,
             "relation": "legacy",
             "risk_multiplier": 1.0,
@@ -1048,9 +1093,18 @@ def attach_v4_rankings(
         )
         structure = market_structure(candidate)
         setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
+        candidate_min_cost_ratio = min_cost_ratio
+        if version.lower().startswith("v4.7.2"):
+            setup_cost_floor = {
+                "pullback": float(config.get("opportunity_v472_pullback_min_cost_ratio", 1.80)),
+                "breakout": float(config.get("opportunity_v472_breakout_min_cost_ratio", 2.30)),
+                "momentum": float(config.get("opportunity_v472_momentum_min_cost_ratio", 2.30)),
+                "prebreakout": float(config.get("opportunity_v472_prebreakout_min_cost_ratio", 2.30)),
+            }.get(setup_type, min_cost_ratio)
+            candidate_min_cost_ratio = max(min_cost_ratio, setup_cost_floor)
         medium_aligned = bool(structure.get("medium_trend_aligned"))
         alignment_ok = medium_aligned or bool(policy["trend_aligned"]) or not require_alignment
-        cost_ok = model["cost_ratio"] >= min_cost_ratio
+        cost_ok = model["cost_ratio"] >= candidate_min_cost_ratio
         blended_model_ok = expected >= min_expected and lower > min_lower
         shadow_eligible = bool(setup_type != "unknown" and model["reward_pct"] > model["cost_pct"])
         evidence_risk_multiplier = 1.0 if v44_active else _direction_evidence_multiplier(evidence, config)
@@ -1135,7 +1189,7 @@ def attach_v4_rankings(
             )
         )
         direction = str(candidate.get("direction") or "").upper()
-        if version.lower().startswith(("v4.7", "v4.8", "v4.9", "v4.10", "v4.11")):
+        if strategy_supports(version, "adaptive_calibration"):
             direction_quality_ok = bool(
                 calibration.get("relation") != "countertrend"
                 or (
@@ -1182,16 +1236,20 @@ def attach_v4_rankings(
             and model["quality"] >= exploration_quality
             and exploration_signal_ok
             and exploration_model_ok
-            and model["cost_ratio"] >= exploration_cost_ratio
+            and model["cost_ratio"] >= max(exploration_cost_ratio, candidate_min_cost_ratio)
             and executable
             and exploration_liquidity["passed"]
             and not negative_evidence
         )
-        v44_scope = bool(policy["live_scope"] or policy["canary_scope"] or policy["exploration_scope"])
+        v44_scope = bool(
+            policy["live_scope"]
+            or policy["canary_scope"]
+            or (policy["exploration_scope"] and not version.lower().startswith("v4.7.2"))
+        )
         effective_v44_rank = v44_rank
         effective_v44_expected = v44_expected
         effective_v44_confirmations = v44_confirmations_required
-        if version.lower().startswith(("v4.9", "v4.10", "v4.11")):
+        if strategy_supports(version, "global_adaptive"):
             effective_v44_rank = _clamp(
                 v44_rank + float(calibration.get("rank_threshold_delta") or 0.0),
                 float(config.get("opportunity_v49_global_min_rank_percentile", 0.65)),
@@ -1207,12 +1265,20 @@ def attach_v4_rankings(
                 float(config.get("opportunity_v49_global_min_confirmations", 3)),
                 float(config.get("opportunity_v49_global_max_confirmations", 5)),
             ))
+        if version.lower().startswith("v4.7.2") and setup_type == "breakout":
+            effective_v44_confirmations = min(
+                5,
+                max(effective_v44_confirmations, v44_confirmations_required + 1),
+            )
         effective_absolute_quality = (
             v44_quality
             + float(evidence_policy.get("threshold_delta") or 0.0)
             + float(calibration.get("quality_threshold_delta") or 0.0)
         )
-        effective_v44_cost_ratio = v44_cost_ratio + float(calibration.get("cost_ratio_delta") or 0.0)
+        effective_v44_cost_ratio = max(
+            candidate_min_cost_ratio,
+            v44_cost_ratio + float(calibration.get("cost_ratio_delta") or 0.0),
+        )
         v44_admitted = bool(
             v44_active
             and live_enabled
@@ -1312,7 +1378,7 @@ def attach_v4_rankings(
         if v44_active and not direction_quality_ok:
             blockers.append(
                 "逆市场方向需要更强的资金流、市场匹配和中周期路径确认"
-                if version.lower().startswith(("v4.7", "v4.8", "v4.9", "v4.10", "v4.11"))
+                if strategy_supports(version, "adaptive_calibration")
                 else "做空需要更强的方向资金流、市场匹配和中周期路径确认"
             )
         if not v44_active and not exploring and not alignment_ok:
@@ -1383,7 +1449,11 @@ def attach_v4_rankings(
                     and full_bet_liquidity["passed"]
                 ),
             },
-            "feature_weights": dict(V411_FEATURE_WEIGHTS if version.lower().startswith("v4.11") else V462_FEATURE_WEIGHTS),
+            "feature_weights": dict(
+                V411_FEATURE_WEIGHTS
+                if strategy_supports(version, "healthy_continuation")
+                else V462_FEATURE_WEIGHTS
+            ),
             "rank_percentile": round(rank, 6),
             "rank_bucket": "top" if rank >= 0.75 else "middle" if rank >= 0.35 else "tail",
             "model_expected_net_pct": round(model["expected_net_pct"], 6),

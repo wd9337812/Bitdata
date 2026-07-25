@@ -618,13 +618,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v4.11",
+    "opportunity_v4_strategy_version": "v4.7.2",
     "s0_moe_shadow_enabled": True,
     "s0_moe_model_path": "",
-    "s0_moe_shadow_candidate_limit": 10,
+    "s0_moe_shadow_candidate_limit": 25,
     "s0_moe_online_window_hours": 24.0,
     "s0_moe_retrain_min_selected_closes": 200,
     "s0_moe_retrain_min_regimes": 2,
+    "opportunity_v472_pullback_min_cost_ratio": 1.8,
+    "opportunity_v472_breakout_min_cost_ratio": 2.3,
+    "opportunity_v472_momentum_min_cost_ratio": 2.3,
+    "opportunity_v472_prebreakout_min_cost_ratio": 2.3,
+    "opportunity_v472_pullback_max_hold_bars": 4,
+    "opportunity_v472_episode_dedupe_minutes": 45,
+    "opportunity_v472_symbol_event_window_hours": 6.0,
+    "opportunity_v472_symbol_max_events_per_window": 3,
     "opportunity_v410_seed_version": "v4.9",
     "opportunity_v410_global_regime_enabled": True,
     "opportunity_v410_global_smart_flow_enabled": True,
@@ -834,7 +842,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "strategy_canary_enabled": True,
     "strategy_canary_auto_issue": True,
     "strategy_canary_startup_cap_enabled": True,
-    "strategy_canary_release_id": "extreme_v4_roll@v4.11",
+    "strategy_canary_release_id": "extreme_v4_roll@v4.7.2",
     "strategy_canary_permit_hours": 24.0,
     "strategy_canary_level_1_multiplier": 1.0,
     "strategy_canary_level_1_max_opportunities": 6,
@@ -1138,10 +1146,11 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         config["execution_max_spread_pct"] = loaded["opportunity_v3_max_spread_pct"]
     if "execution_min_depth_notional_usdt" not in loaded and "opportunity_v3_min_depth_notional_usdt" in loaded:
         config["execution_min_depth_notional_usdt"] = loaded["opportunity_v3_min_depth_notional_usdt"]
-    # V4.11 uses global current-version calibration; older V4 evidence stays historical.
+    # V4.7.2 starts an isolated evidence generation while inheriting the proven
+    # execution safeguards from V4.11 through the capability manifest.
     loaded_v4_version = str(loaded.get("opportunity_v4_strategy_version") or "").lower()
-    if loaded_v4_version in {"v4.4", "v4.5", "v4.6", "v4.6.1", "v4.6.2", "v4.7", "v4.8", "v4.9", "v4.10"}:
-        config["opportunity_v4_strategy_version"] = "v4.11"
+    if loaded_v4_version in {"v4.4", "v4.5", "v4.6", "v4.6.1", "v4.6.2", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"}:
+        config["opportunity_v4_strategy_version"] = "v4.7.2"
         config["opportunity_v410_seed_version"] = "v4.10"
     if not bool(loaded.get("opportunity_v462_time_exit_migrated", False)):
         if int(loaded.get("opportunity_v44_max_hold_bars", 6)) == 6:
@@ -1157,8 +1166,9 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         "extreme_v4_roll@v4.8",
         "extreme_v4_roll@v4.9",
         "extreme_v4_roll@v4.10",
+        "extreme_v4_roll@v4.11",
     }:
-        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.11"
+        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.7.2"
     if not include_secret:
         config["api_secret"] = "********" if config.get("api_secret") else ""
         config["api_key"] = mask(config.get("api_key", ""))

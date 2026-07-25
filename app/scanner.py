@@ -31,6 +31,7 @@ from app.scalp_engine import build_scalp_signal
 from app.shadow_trading import active_shadow_symbols
 from app.smart_flow import enrich_smart_flow_candidates
 from app.strategy import StrategyParams, atr, ema
+from app.strategy_capabilities import strategy_supports
 
 
 MODE_PRESETS: dict[str, dict[str, Any]] = {
@@ -784,7 +785,7 @@ def _coarse_rank_symbols(
     ranked = rows[: max(1, limits["coarse"])]
     rank_limit = max(1, limits["rank"])
     v44_active = bool(
-        str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"))
+        strategy_supports(config.get("opportunity_v4_strategy_version"), "full_bet")
         and config.get("opportunity_v4_enabled", True)
     )
     if not v44_active or rank_limit < 3:
@@ -1906,7 +1907,7 @@ def _apply_v4_live_selection(
     base_risk = float(candidate.get("base_risk_pct") or mode.get("risk_pct") or 0.0)
     version = str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.3.2")
     version_label = version.upper()
-    full_bet = bool(version.lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11")) and v4.get("full_bet_admitted"))
+    full_bet = bool(strategy_supports(version, "full_bet") and v4.get("full_bet_admitted"))
     signal = dict(candidate.get("signal") or {})
     if v4.get("protection_profile"):
         signal["protection_profile"] = dict(v4["protection_profile"])

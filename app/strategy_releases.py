@@ -112,6 +112,15 @@ _CHALLENGER_FINGERPRINT_KEYS = _ACTIVE_FINGERPRINT_KEYS + (
     "strategy_canary_reissue_min_profit_factor",
     "strategy_canary_reissue_multiplier",
     "strategy_canary_reissue_max_opportunities",
+    "opportunity_v472_pullback_min_cost_ratio",
+    "opportunity_v472_breakout_min_cost_ratio",
+    "opportunity_v472_momentum_min_cost_ratio",
+    "opportunity_v472_prebreakout_min_cost_ratio",
+    "opportunity_v472_pullback_max_hold_bars",
+    "opportunity_v472_episode_dedupe_minutes",
+    "opportunity_v472_symbol_event_window_hours",
+    "opportunity_v472_symbol_max_events_per_window",
+    "s0_moe_model_path",
 )
 
 

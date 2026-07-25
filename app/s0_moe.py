@@ -371,7 +371,7 @@ def evaluate_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dic
 def attach_moe_shadow(candidates: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[str, Any]]:
     if not config.get("s0_moe_shadow_enabled", True):
         return candidates
-    limit = max(1, int(config.get("s0_moe_shadow_candidate_limit", 10)))
+    limit = max(1, int(config.get("s0_moe_shadow_candidate_limit", 25)))
     eligible = [
         candidate
         for candidate in candidates
@@ -395,7 +395,7 @@ def moe_runtime_status(config: dict[str, Any]) -> dict[str, Any]:
         "affects_live_admission": False,
         "model_path": str(path),
         "model_exists": path.exists(),
-        "candidate_limit": int(config.get("s0_moe_shadow_candidate_limit", 10)),
+        "candidate_limit": int(config.get("s0_moe_shadow_candidate_limit", 25)),
         "rest_requests": 0,
     }
     if not base["enabled"] or not path.exists():

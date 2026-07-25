@@ -9,6 +9,7 @@ from app.local_circuit import reconcile_v4_local_circuit
 from app.recovery_controller import recovery_permit_status
 from app.s0_continuous_permit import s0_continuous_permit_active, s0_continuous_permit_status
 from app.strategy_canary import strategy_canary_status
+from app.strategy_capabilities import strategy_supports
 from app.strategy_releases import (
     ACTIVE_ROLE,
     V4_FAMILY,
@@ -90,7 +91,7 @@ def update_release_equity_guard(
     version = active_release_version(config).lower()
     threshold = float(
         config.get("opportunity_v44_release_pause_drawdown_pct", 35.0)
-        if version.startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"))
+        if strategy_supports(version, "full_bet")
         else config.get("opportunity_v432_release_fallback_drawdown_pct", 8.0)
     )
     fallback_active = bool(False if reset else previous.get("fallback_active")) or drawdown >= threshold
@@ -201,9 +202,12 @@ def global_performance_guard(
                 scoped_shadow = filter_live_eligible_v4_shadows(
                     scoped_shadow_raw,
                     strategy_version=current_version,
-                    allow_unclassified_legacy=not current_version.startswith(("v4.3", "v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11")),
+                    allow_unclassified_legacy=(
+                        not current_version.lower().startswith("v4")
+                        or current_version.lower().startswith(("v4.0", "v4.1", "v4.2"))
+                    ),
                 )
-                if current_version.startswith(("v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11")):
+                if strategy_supports(current_version, "continuous_permit"):
                     scoped_shadow = executable_single_position_shadows(scoped_shadow)
                 scoped_shadow_total = len(scoped_shadow)
                 if release_only and (current_family == V4_FAMILY or scoped_shadow):

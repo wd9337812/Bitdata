@@ -16,6 +16,7 @@ from app.position_sizing import effective_position_risk
 from app.scanner import _apply_v4_live_selection
 from app.shadow_trading import ensure_shadow_tables
 from app.telemetry import connect
+from app.strategy_capabilities import strategy_supports
 
 
 def _candidate(symbol: str, strength: float, volume: float) -> dict:
@@ -96,6 +97,39 @@ def test_v411_continuation_shape_penalizes_terminal_spikes():
     assert _continuation_shape(1.35, 0.75, 1.35, 4.50) == 1.0
     assert _continuation_shape(3.5, 0.75, 1.35, 4.50) < 1.0
     assert _continuation_shape(5.0, 0.75, 1.35, 4.50) == 0.0
+
+
+def test_v472_inherits_execution_safeguards_but_uses_new_router():
+    assert strategy_supports("v4.7.2", "full_bet") is True
+    assert strategy_supports("v4.7.2", "continuous_permit") is True
+    assert strategy_supports("v4.7.2", "global_market") is True
+    assert strategy_supports("v4.7.2", "healthy_continuation") is True
+
+    pullback = _candidate("PULLUSDT", 0.95, 2.0)
+    pullback["entry_type"] = "v3_pullback"
+    momentum = _candidate("MOMUSDT", 0.95, 2.0)
+    momentum["entry_type"] = "v3_momentum"
+    config = {
+        "opportunity_v4_strategy_version": "v4.7.2",
+        "opportunity_v44_full_bet_enabled": True,
+    }
+
+    assert _regime_policy(pullback, config)["scope"] == "v44_trend_aligned_full_bet"
+    assert _regime_policy(momentum, config)["scope"] != "v44_trend_aligned_full_bet"
+
+
+def test_v472_setup_adjustments_prefer_pullback():
+    pullback = _candidate("PULLUSDT", 0.95, 2.0)
+    pullback["entry_type"] = "v3_pullback"
+    momentum = _candidate("MOMUSDT", 0.95, 2.0)
+    momentum["entry_type"] = "v3_momentum"
+    config = {"opportunity_v4_strategy_version": "v4.7.2"}
+
+    pullback_model = _model_expectancy(pullback, _model_features(pullback, config), config)
+    momentum_model = _model_expectancy(momentum, _model_features(momentum, config), config)
+
+    assert pullback_model["setup_adjustment"] == 0.06
+    assert momentum_model["setup_adjustment"] == -0.08
 
 
 def test_v47_full_bet_uses_adaptive_calibration_and_keeps_risk_cap(monkeypatch, tmp_path):
@@ -189,6 +223,31 @@ def test_v48_reentry_requires_new_structure_after_two_losses():
     assert blocked["blocked"] is True
     assert reset["blocked"] is False
     assert reset["structural_reset"] is True
+
+
+def test_v472_reentry_blocks_duplicate_episode_without_two_losses():
+    candidate = _candidate("DUPUSDT", 0.95, 1.0)
+    candidate["signal"]["entry_phase"] = "TRIGGERED"
+    local = {
+        "live_loss_streak": 0,
+        "episode": {
+            "loss_streak": 0,
+            "within_dedupe_window": True,
+            "recent_event_count": 1,
+            "recent_event_limit": 3,
+            "dedupe_minutes": 45,
+        },
+    }
+
+    result = _v48_reentry_policy(
+        candidate,
+        _model_features(candidate, {"opportunity_v4_strategy_version": "v4.7.2"}),
+        local,
+        {"opportunity_v48_reentry_enabled": True},
+    )
+
+    assert result["blocked"] is True
+    assert result["duplicate_event"] is True
 
 
 def test_v462_rewards_momentum_and_penalizes_pullback_before_smart_flow():

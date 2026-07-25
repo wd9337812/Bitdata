@@ -27,6 +27,7 @@ from app.strategy import StrategyParams
 from app.strategy_releases import active_family, active_release_version
 from app.target import target_progress, target_state_updates
 from app.training_lineage import ensure_opportunity_id
+from app.strategy_capabilities import strategy_supports
 
 
 def position_direction(position: dict[str, Any]) -> str:
@@ -221,7 +222,7 @@ def build_position_rotation_plan(
     min_delta = rotation_required_delta(config, mode, current_pnl_pct, current_type)
     cost_metrics = rotation_cost_metrics(candidate, config)
     opportunity = candidate.get("opportunity_v4") or {}
-    v44_rotation = str(opportunity.get("strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"))
+    v44_rotation = strategy_supports(opportunity.get("strategy_version"), "full_bet")
     if v44_rotation:
         min_cost_ratio = float(config.get("opportunity_v44_min_cost_ratio", 1.50))
         min_net_cost_ratio = max(1.0, float(config.get("opportunity_v44_rotation_min_cost_ratio", 1.25)))

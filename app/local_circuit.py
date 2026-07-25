@@ -68,6 +68,19 @@ def cohort_key(candidate: dict[str, Any]) -> str:
     )
 
 
+def episode_key(candidate: dict[str, Any]) -> str:
+    parts = _cohort_parts(candidate)
+    symbol = str(candidate.get("symbol") or "").upper()
+    return ":".join(
+        (
+            symbol,
+            parts["direction"],
+            parts["setup_type"],
+            parts["market_regime"],
+        )
+    )
+
+
 def evidence_cohort_key(row: dict[str, Any]) -> str:
     return ":".join(
         (
@@ -85,6 +98,7 @@ def _base_state(release_id: str) -> dict[str, Any]:
         "open_positions": {},
         "processed_closes": [],
         "cohorts": {},
+        "symbol_episodes": {},
         "updated_at": None,
     }
 
@@ -125,6 +139,7 @@ def record_v4_live_open(
         "symbol": symbol,
         "direction": direction,
         "cohort_key": key,
+        "episode_key": episode_key(candidate),
         "parts": _cohort_parts(candidate),
         "opened_at": now.isoformat(),
     }
@@ -145,6 +160,7 @@ def reconcile_v4_local_circuit(
     state = local_circuit_state(release_id)
     positions = dict(state.get("open_positions") or {})
     cohorts = dict(state.get("cohorts") or {})
+    episodes = dict(state.get("symbol_episodes") or {})
     processed = list(state.get("processed_closes") or [])
     processed_set = set(processed)
     changed = state.get("release_id") != release_id
@@ -160,6 +176,7 @@ def reconcile_v4_local_circuit(
         position_key = f"{symbol}:{direction}"
         probe = positions.pop(position_key, None)
         key = str((probe or {}).get("cohort_key") or row.get("cohort_key") or "")
+        symbol_episode_key = str((probe or {}).get("episode_key") or "")
         processed.append(token)
         processed_set.add(token)
         changed = True
@@ -195,6 +212,32 @@ def reconcile_v4_local_circuit(
                     {"release_id": release_id, "cohort_key": key, "live_loss_streak": live_loss_streak},
                 )
         cohorts[key] = cohort
+        if symbol_episode_key:
+            episode = dict(episodes.get(symbol_episode_key) or {})
+            net_pnl = float(row.get("net_pnl") or 0)
+            close_times = [
+                int(value)
+                for value in list(episode.get("close_times") or [])
+                if int(value or 0) > 0
+            ]
+            close_times.append(close_time)
+            episode.update(
+                {
+                    "episode_key": symbol_episode_key,
+                    "last_close_time": close_time,
+                    "last_close_at": datetime.fromtimestamp(
+                        close_time / 1000, timezone.utc
+                    ).isoformat(),
+                    "last_net_pnl": round(net_pnl, 8),
+                    "loss_streak": (
+                        int(episode.get("loss_streak") or 0) + 1
+                        if net_pnl < 0
+                        else 0
+                    ),
+                    "close_times": close_times[-12:],
+                }
+            )
+            episodes[symbol_episode_key] = episode
 
     if not changed:
         return state
@@ -204,6 +247,7 @@ def reconcile_v4_local_circuit(
         "open_positions": positions,
         "processed_closes": processed[-200:],
         "cohorts": cohorts,
+        "symbol_episodes": episodes,
         "updated_at": now.isoformat(),
     }
     save_state({LOCAL_CIRCUIT_STATE_KEY: updated})
@@ -294,6 +338,33 @@ def candidate_local_circuit_status(
     local_rows = [row for row in evidence_rows if evidence_cohort_key(row) == key]
     shadow = _shadow_circuit(local_rows, config)
     stored = dict((state.get("cohorts") or {}).get(key) or {})
+    episode = dict((state.get("symbol_episodes") or {}).get(episode_key(candidate)) or {})
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    dedupe_minutes = int(config.get("opportunity_v472_episode_dedupe_minutes", 45))
+    last_close_time = int(episode.get("last_close_time") or 0)
+    recent_cutoff = now_ms - int(
+        float(config.get("opportunity_v472_symbol_event_window_hours", 6.0))
+        * 60
+        * 60
+        * 1000
+    )
+    recent_event_count = sum(
+        int(value or 0) >= recent_cutoff
+        for value in list(episode.get("close_times") or [])
+    )
+    episode.update(
+        {
+            "within_dedupe_window": bool(
+                last_close_time
+                and now_ms - last_close_time <= dedupe_minutes * 60 * 1000
+            ),
+            "recent_event_count": recent_event_count,
+            "recent_event_limit": int(
+                config.get("opportunity_v472_symbol_max_events_per_window", 3)
+            ),
+            "dedupe_minutes": dedupe_minutes,
+        }
+    )
     live_blocked_at = _parse_time(stored.get("blocked_at"))
     live_recovery_rows = [
         row
@@ -332,6 +403,7 @@ def candidate_local_circuit_status(
         "blocked": blocked if config.get("opportunity_v431_local_circuit_enabled", True) else False,
         "reason": reason,
         "live_loss_streak": int(stored.get("live_loss_streak") or 0),
+        "episode": episode,
         "live_blocked_at": stored.get("blocked_at") if live_blocked else None,
         "live_recovery": live_recovery,
         "shadow": shadow,

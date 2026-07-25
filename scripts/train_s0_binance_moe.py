@@ -15,16 +15,16 @@ from sklearn.metrics import log_loss, mean_absolute_error, roc_auc_score
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = ROOT / "data" / "research" / "s0_public_1m" / "s0_candidates_1m.parquet"
-MODEL_VERSION = "s0_binance_moe_v1_1"
+MODEL_VERSION = "s0_binance_moe_v1_2"
 DEFAULT_OUTPUT = ROOT / "data" / "research" / MODEL_VERSION
 TRAIN_END = pd.Timestamp("2026-05-01", tz="UTC")
 VALID_END = pd.Timestamp("2026-06-16", tz="UTC")
 EMBARGO = pd.Timedelta(minutes=30)
 ROUND_TRIP_COST_PCT = 0.12
-EXPERTS = ("momentum", "prebreakout", "pullback")
+EXPERTS = ("momentum", "breakout", "prebreakout", "pullback")
 SETUP_ALIASES = {
     "momentum": "momentum",
-    "breakout": "momentum",
+    "breakout": "breakout",
     "prebreakout": "prebreakout",
     "pullback": "pullback",
 }
@@ -88,6 +88,15 @@ class Expert:
 
 def prepare(frame: pd.DataFrame) -> pd.DataFrame:
     result = frame[frame.minute_feature_valid].copy()
+    # The public candidate set predates the dedicated breakout label. Split
+    # structurally extended momentum events into a reproducible breakout expert
+    # instead of silently sharing the momentum model at runtime.
+    breakout_mask = (
+        result.setup_type.eq("momentum")
+        & result.extension_atr.ge(0.15)
+        & result.impulse_atr.ge(1.0)
+    )
+    result.loc[breakout_mask, "setup_type"] = "breakout"
     result["time"] = pd.to_datetime(result.open_time, unit="ms", utc=True)
     result["net_pct"] = result.net_pct_1m.astype(float)
     result["win"] = result.win_1m.astype(int)

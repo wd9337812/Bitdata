@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.state_store import load_state, save_state
+from app.strategy_capabilities import strategy_supports
 
 
 STATE_KEY = "s0_continuous_permit"
@@ -15,7 +16,7 @@ def s0_continuous_permit_active(config: dict[str, Any]) -> bool:
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
     return bool(
         config.get("s0_continuous_permit_enabled", True)
-        and version.startswith(("v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"))
+        and strategy_supports(version, "continuous_permit")
         and stage == "S0"
     )
 
@@ -118,7 +119,7 @@ def s0_continuous_permit_status(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
-    version = str(config.get("opportunity_v4_strategy_version") or "v4.11")
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.7.2")
     release_id = f"extreme_v4_roll@{version}"
     persisted = load_state()
     stored = persisted.get(STATE_KEY)

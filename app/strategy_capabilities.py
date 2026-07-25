@@ -1,0 +1,32 @@
+from __future__ import annotations
+
+from typing import Any
+
+
+STRATEGY_GENERATION_ALIASES = {
+    # V4.7.2 is a forward release built on the V4.11 execution and safety stack.
+    "v4.7.2": "v4.11",
+}
+
+
+def effective_strategy_version(value: Any) -> str:
+    version = str(value or "").strip().lower()
+    for prefix, generation in STRATEGY_GENERATION_ALIASES.items():
+        if version.startswith(prefix):
+            return generation
+    return version
+
+
+def strategy_supports(value: Any, capability: str) -> bool:
+    version = effective_strategy_version(value)
+    generations = {
+        "full_bet": ("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"),
+        "continuous_permit": ("v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"),
+        "adaptive_calibration": ("v4.7", "v4.8", "v4.9", "v4.10", "v4.11"),
+        "exhaustion_reentry": ("v4.8", "v4.9", "v4.10", "v4.11"),
+        "global_adaptive": ("v4.9", "v4.10", "v4.11"),
+        "global_market": ("v4.10", "v4.11"),
+        "healthy_continuation": ("v4.11",),
+        "v472_router": ("v4.11",),
+    }
+    return version.startswith(generations.get(capability, ()))

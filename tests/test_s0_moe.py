@@ -32,16 +32,16 @@ def test_moe_shadow_attachment_never_changes_live_admission(monkeypatch):
     assert result[0]["opportunity_v4"]["moe"]["passed"] is False
 
 
-def test_breakout_uses_momentum_expert_alias(monkeypatch, tmp_path):
+def test_breakout_uses_dedicated_v12_expert(monkeypatch, tmp_path):
     model = tmp_path / "moe.joblib"
     model.write_bytes(b"placeholder")
     monkeypatch.setattr(
         s0_moe,
         "_load_bundle",
         lambda path: {
-            "version": "s0_binance_moe_v1_1",
-            "setup_aliases": {"breakout": "momentum"},
-            "experts": {"momentum": {"classifier": object()}},
+            "version": "s0_binance_moe_v1_2",
+            "setup_aliases": {"breakout": "breakout"},
+            "experts": {"breakout": {"classifier": object()}},
             "gate_floors": {},
         },
     )
@@ -57,7 +57,7 @@ def test_breakout_uses_momentum_expert_alias(monkeypatch, tmp_path):
     )
 
     assert result["setup_type"] == "breakout"
-    assert result["expert"] == "momentum"
+    assert result["expert"] == "breakout"
     assert result["active_gate"] is False
 
 

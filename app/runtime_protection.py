@@ -12,6 +12,7 @@ from app.risk import live_trading_allowed
 from app.state_store import save_state
 from app.strategy import atr
 from app.telemetry import record_event, record_event_throttled
+from app.strategy_capabilities import strategy_supports
 
 
 def _now() -> datetime:
@@ -827,7 +828,7 @@ def _manage_runtime_protection(
         if action["action"] not in {"close_fast_invalid", "close_time_stop", "close_orderbook_invalid"}:
             continue
         v44_runtime_exit = bool(
-            str(tracked_item.get("strategy_version") or "").lower().startswith(("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"))
+            strategy_supports(tracked_item.get("strategy_version"), "full_bet")
             and config.get("opportunity_v44_runtime_exit_enabled", True)
         )
         if not (
