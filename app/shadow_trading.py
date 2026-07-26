@@ -25,6 +25,7 @@ from app.strategy_releases import (
 from app.opportunity_v4 import V4_CONTROL_FAMILY, V4_STRATEGY_FAMILY
 from app.telemetry import connect, now_iso
 from app.training_lineage import (
+    ensure_event_id,
     init_training_lineage_schema,
     record_shadow_opportunity,
 )
@@ -83,11 +84,17 @@ def ensure_shadow_tables(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN estimated_fee REAL DEFAULT 0")
     if "estimated_slippage" not in columns:
         conn.execute("ALTER TABLE shadow_trades ADD COLUMN estimated_slippage REAL DEFAULT 0")
+    if "event_id" not in columns:
+        conn.execute("ALTER TABLE shadow_trades ADD COLUMN event_id TEXT")
     ensure_release_schema(conn)
     ensure_shadow_release_columns(conn)
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_shadow_v4_episode ON shadow_trades("
         "strategy_family, strategy_version, evidence_type, symbol, direction, signal_type, opened_at)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_shadow_event ON shadow_trades("
+        "event_id, strategy_version, status, opened_at)"
     )
 
 
@@ -289,8 +296,28 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
             low = min(float(item.get("low_price") or item["entry"]), price, stream_low)
             stop_hit = low <= float(item["stop"]) if direction == "LONG" else high >= float(item["stop"])
             take_hit = high >= float(item["take_profit"]) if direction == "LONG" else low <= float(item["take_profit"])
+            try:
+                payload = json.loads(item.get("payload") or "{}")
+            except (TypeError, json.JSONDecodeError):
+                payload = {}
+            protection = payload.get("protection_profile") if isinstance(payload.get("protection_profile"), dict) else {}
+            opened_at = datetime.fromisoformat(str(item["opened_at"]).replace("Z", "+00:00"))
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=timezone.utc)
+            age_seconds = max(0.0, (now - opened_at).total_seconds())
+            entry_price = float(item["entry"])
+            move_pct = (price - entry_price) / entry_price * 100
+            if direction == "SHORT":
+                move_pct = -move_pct
+            stagnation_seconds = int(protection.get("stagnation_seconds") or 0)
+            stagnation_min_profit_pct = float(protection.get("stagnation_min_profit_pct") or 0.0)
+            stagnation_hit = bool(
+                stagnation_seconds > 0
+                and age_seconds >= stagnation_seconds
+                and move_pct < stagnation_min_profit_pct
+            )
             expired = now >= datetime.fromisoformat(str(item["expires_at"]))
-            if not (stop_hit or take_hit or expired):
+            if not (stop_hit or take_hit or stagnation_hit or expired):
                 conn.execute(
                     "UPDATE shadow_trades SET last_price = ?, high_price = ?, low_price = ? WHERE id = ?",
                     (price, high, low, item["id"]),
@@ -303,7 +330,15 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 move = -move
             gross = float(item["notional"]) * move
             cost = float(item["estimated_cost"])
-            outcome = "STOP" if stop_hit else "TAKE_PROFIT" if take_hit else "TIME_EXIT"
+            outcome = (
+                "STOP"
+                if stop_hit
+                else "TAKE_PROFIT"
+                if take_hit
+                else "STAGNATION_EXIT"
+                if stagnation_hit
+                else "TIME_EXIT"
+            )
             conn.execute(
                 """
                 UPDATE shadow_trades
@@ -391,7 +426,11 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 continue
             try:
                 strategy_family = str(candidate.get("strategy_family") or "legacy_mixed")
-                opportunity_id = str(candidate.get("opportunity_id") or _opportunity_id(candidate, bucket_minutes))
+                event_id = ensure_event_id(
+                    candidate,
+                    int(config.get("opportunity_v43_episode_dedupe_minutes", 45)),
+                )
+                opportunity_id = str(candidate.get("opportunity_id") or event_id)
                 candidate["opportunity_id"] = opportunity_id
                 structure = market_structure(candidate)
                 signal_type = _candidate_signal_type(candidate)
@@ -399,9 +438,11 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 candidate_hold_minutes = hold_minutes
                 if strategy_family in {V3_FAMILY, V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY, "extreme_v31_challenger"}:
                     protection = signal.get("protection_profile") or {}
-                    candidate_hold_minutes = min(
-                        hold_minutes,
-                        max(5, int(protection.get("max_hold_bars") or 12) * 5),
+                    max_hold_seconds = int(protection.get("max_hold_seconds") or 0)
+                    candidate_hold_minutes = (
+                        min(hold_minutes, max(1.0, max_hold_seconds / 60))
+                        if max_hold_seconds > 0
+                        else min(hold_minutes, max(5, int(protection.get("max_hold_bars") or 12) * 5))
                     )
                 fingerprint_role = strategy_role
                 conn.execute(
@@ -411,8 +452,8 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         blocked_reason, entry, stop, take_profit, last_price, high_price, low_price, notional,
                         estimated_cost, estimated_fee, estimated_slippage, expires_at, strategy_family, strategy_version, strategy_role,
                         release_id, opportunity_id, parameter_fingerprint, feature_schema_version,
-                        evidence_type, market_regime, opportunity_score, payload
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        evidence_type, market_regime, opportunity_score, event_id, payload
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         key,
@@ -446,6 +487,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                         evidence_type,
                         market_regime,
                         float((v4 if is_v4 else v33 if is_v33 else v31 if is_v31 else v3).get("score") or candidate.get("score") or 0),
+                        event_id,
                         json.dumps(
                             {
                                 "score": candidate.get("score"),
@@ -468,7 +510,11 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                                     }
                                 ),
                                 "cost_ratio": candidate.get("cost_ratio"),
-                                "passed": candidate.get("passed"),
+                                "passed": bool(v4.get("admitted")) if is_v4 else candidate.get("passed"),
+                                "shadow_copy_passed": candidate.get("passed"),
+                                "v4_admitted": bool(v4.get("admitted")) if is_v4 else None,
+                                "event_id": event_id,
+                                "protection_profile": signal.get("protection_profile") or {},
                                 "strategy_version": candidate.get("strategy_version"),
                                 "strategy_role": strategy_role,
                                 "entry_type": signal_type,

@@ -15,7 +15,7 @@ from sklearn.metrics import log_loss, mean_absolute_error, roc_auc_score
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = ROOT / "data" / "research" / "s0_public_1m" / "s0_candidates_1m.parquet"
-MODEL_VERSION = "s0_binance_moe_v1_2"
+MODEL_VERSION = "s0_binance_moe_v1_3"
 DEFAULT_OUTPUT = ROOT / "data" / "research" / MODEL_VERSION
 TRAIN_END = pd.Timestamp("2026-05-01", tz="UTC")
 VALID_END = pd.Timestamp("2026-06-16", tz="UTC")
@@ -98,8 +98,10 @@ def prepare(frame: pd.DataFrame) -> pd.DataFrame:
     )
     result.loc[breakout_mask, "setup_type"] = "breakout"
     result["time"] = pd.to_datetime(result.open_time, unit="ms", utc=True)
-    result["net_pct"] = result.net_pct_1m.astype(float)
-    result["win"] = result.win_1m.astype(int)
+    # V1.3 learns the five-minute protected path. The previous one-minute
+    # label over-rewarded noise that did not survive real fees and execution.
+    result["net_pct"] = result.net_pct_5m.astype(float)
+    result["win"] = result.win_5m.astype(int)
     sign = np.where(result.direction.eq("LONG"), 1.0, -1.0)
     for bars in (1, 3, 6, 12, 24):
         result[f"ret_{bars}_dir"] = result[f"ret_{bars}"] * sign
@@ -287,7 +289,7 @@ def choose_gate_floor(
             metrics(schedule(frame[(frame.time >= start) & (frame.time < end)], floors), f"fold_{index}")
             for index, (start, end) in enumerate(windows, start=1)
         ]
-        if any(item.get("trades", 0) < 12 for item in slices):
+        if any(item.get("trades", 0) < 16 for item in slices):
             continue
         combined = metrics(schedule(frame, floors), f"{setup}_{regime}_validation")
         worst_mean = min(float(item.get("mean_net_pct", -999.0)) for item in slices)
@@ -298,11 +300,13 @@ def choose_gate_floor(
         return None, {"active": False, "reason": "insufficient_validation_samples"}
     selected = max(choices, key=lambda item: item[:3])
     combined = selected[4]
+    worst_pf = min(float(item.get("profit_factor", 0.0)) for item in selected[5])
     active = bool(
         regime != "rotation"
-        and selected[0] >= 2
-        and int(combined.get("trades", 0)) >= 40
-        and float(combined.get("profit_factor", 0.0)) >= 1.15
+        and selected[0] == len(windows)
+        and worst_pf >= 1.0
+        and int(combined.get("trades", 0)) >= 60
+        and float(combined.get("profit_factor", 0.0)) >= 1.20
         and float(combined.get("net_pct_points", 0.0)) > 0
     )
     return (selected[3] if active else None), {
@@ -314,6 +318,7 @@ def choose_gate_floor(
         ),
         "quantile_search": "0.85..0.995",
         "positive_validation_folds": selected[0],
+        "worst_validation_profit_factor": round(worst_pf, 6),
         "objective": round(selected[1], 8),
         "combined": selected[4],
         "folds": selected[5],
@@ -389,7 +394,7 @@ def main() -> None:
         "experiment": MODEL_VERSION,
         "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
         "scope": "S0 admission shadow challenger; Binance data only",
-        "label": "10 minute path, 0.85 ATR stop, 1.05R take-profit, 0.12% round-trip cost",
+        "label": "5 minute protected path, 0.85 ATR stop, 1.05R take-profit, 0.12% round-trip cost",
         "data": {
             "source": str(args.source),
             "total": len(frame),

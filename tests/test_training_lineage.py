@@ -100,6 +100,7 @@ def test_exact_order_lineage_captures_features_and_real_costs(monkeypatch, tmp_p
     opportunity_id = record_decision_opportunity(decision)
     assert opportunity_id
     assert decision["candidate"]["opportunity_id"] == opportunity_id
+    assert decision["candidate"]["event_id"] == decision["event_id"]
 
     record_execution_result(
         decision,
@@ -135,6 +136,7 @@ def test_exact_order_lineage_captures_features_and_real_costs(monkeypatch, tmp_p
     }
     record.update(match_trade_record(record))
     assert record["opportunity_id"] == opportunity_id
+    assert record["event_id"] == decision["event_id"]
     assert record["lineage_quality"] == "exact_order_id"
     finalize_trade_lineage(record)
     upsert_trade_records([record])
@@ -143,6 +145,7 @@ def test_exact_order_lineage_captures_features_and_real_costs(monkeypatch, tmp_p
     assert quality["lineage"]["feature_rows"] == 1
     assert quality["live"]["exact_matches"] == 1
     assert quality["live"]["slippage_rows"] == 1
+    assert quality["live"]["events"] == 1
 
 
 def test_user_trade_reconciliation_preserves_order_ids_and_split_commission():

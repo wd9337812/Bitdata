@@ -6,6 +6,7 @@ from app.opportunity_v4 import (
     _continuation_shape,
     _model_expectancy,
     _model_features,
+    _protection_profile,
     _regime_policy,
     _v48_reentry_policy,
     attach_v4_rankings,
@@ -104,6 +105,9 @@ def test_v472_inherits_execution_safeguards_but_uses_new_router():
     assert strategy_supports("v4.7.2", "continuous_permit") is True
     assert strategy_supports("v4.7.2", "global_market") is True
     assert strategy_supports("v4.7.2", "healthy_continuation") is True
+    assert strategy_supports("v4.7.3", "full_bet") is True
+    assert strategy_supports("v4.7.3", "v472_router") is True
+    assert strategy_supports("v4.11", "v472_router") is False
 
     pullback = _candidate("PULLUSDT", 0.95, 2.0)
     pullback["entry_type"] = "v3_pullback"
@@ -130,6 +134,28 @@ def test_v472_setup_adjustments_prefer_pullback():
 
     assert pullback_model["setup_adjustment"] == 0.06
     assert momentum_model["setup_adjustment"] == -0.08
+
+
+def test_v473_uses_fast_pullback_protection_profile():
+    candidate = _candidate("FASTUSDT", 0.95, 2.0)
+    candidate["entry_type"] = "v3_pullback"
+    profile = _protection_profile(
+        candidate,
+        {
+            "opportunity_v4_strategy_version": "v4.7.3",
+            "opportunity_v44_full_bet_enabled": True,
+            "opportunity_v473_stagnation_seconds": 180,
+            "opportunity_v473_stagnation_min_profit_pct": 0.12,
+            "opportunity_v473_max_hold_seconds": 480,
+            "opportunity_v473_fast_invalid_seconds": 120,
+        },
+    )
+
+    assert profile["profile"] == "s0_full_bet_v473"
+    assert profile["stagnation_seconds"] == 180
+    assert profile["stagnation_min_profit_pct"] == 0.12
+    assert profile["max_hold_seconds"] == 480
+    assert profile["fast_invalid_seconds"] == 120
 
 
 def test_v47_full_bet_uses_adaptive_calibration_and_keeps_risk_cap(monkeypatch, tmp_path):

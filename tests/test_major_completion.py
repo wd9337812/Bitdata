@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.learning_report import build_daily_learning_report, save_daily_learning_report
 from app.position_sizing import effective_order_viability, effective_position_risk, signal_strength_tier, unified_position_sizing
@@ -187,6 +187,28 @@ def test_runtime_protection_detects_fast_invalid_without_trade_execution():
 
     assert action["direction"] == "LONG"
     assert action["action"] in {"observe", "close_fast_invalid"}
+
+
+def test_runtime_protection_closes_v473_stagnation_after_cost():
+    state = {
+        "runtime_protection_positions": {
+            "TESTUSDT:LONG": {
+                "opened_at": (datetime.now(timezone.utc) - timedelta(seconds=240)).isoformat(),
+                "max_hold_seconds": 480,
+                "stagnation_seconds": 180,
+                "stagnation_min_profit_pct": 0.12,
+            }
+        }
+    }
+    action = build_runtime_protection_action(
+        {"symbol": "TESTUSDT", "positionAmt": "1", "entryPrice": "100", "markPrice": "100.05"},
+        config={"protection_fast_invalid_seconds": 90},
+        state=state,
+        client=None,
+    )
+
+    assert action["action"] == "close_stagnation"
+    assert action["reason"] == "stagnation_after_cost"
 
 
 def test_stage_simulation_returns_path_metrics():

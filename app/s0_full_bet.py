@@ -118,7 +118,15 @@ def build_s0_full_bet_sizing(
     return {
         "enabled": True,
         "applied": True,
-        "profile": "s0_full_bet_v472" if version.startswith("v4.7.2") else ("s0_full_bet_v48" if strategy_supports(version, "exhaustion_reentry") else "s0_full_bet_v44"),
+        "profile": (
+            "s0_full_bet_v473"
+            if version.startswith("v4.7.3")
+            else "s0_full_bet_v472"
+            if strategy_supports(version, "v472_router")
+            else "s0_full_bet_v48"
+            if strategy_supports(version, "exhaustion_reentry")
+            else "s0_full_bet_v44"
+        ),
         "margin_budget_pct": round(margin_pct, 6),
         "sizing_available_balance": round(available, 8),
         "sizing_available_balance_source": (account_projection or {}).get("available_balance_source"),

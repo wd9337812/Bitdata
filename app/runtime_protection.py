@@ -689,8 +689,16 @@ def build_runtime_protection_action(
             record_event("warning", "runtime_protection", f"ATR check failed for {symbol}: {exc}")
     atr_pct = atr_value / mark * 100 if mark > 0 and atr_value > 0 else 0.0
     fast_invalid_pct = atr_pct * float(config.get("protection_fast_invalid_atr", 0.35))
-    fast_invalid_seconds = int(config.get("protection_fast_invalid_seconds", 90))
+    fast_invalid_seconds = int(
+        tracked_item.get("fast_invalid_seconds")
+        or config.get("protection_fast_invalid_seconds", 90)
+    )
     max_hold_seconds = int((tracked.get(key) or {}).get("max_hold_seconds") or 0)
+    stagnation_seconds = int(tracked_item.get("stagnation_seconds") or 0)
+    stagnation_min_profit_pct = float(
+        tracked_item.get("stagnation_min_profit_pct")
+        or config.get("protection_min_profit_after_cost_pct", 0.08)
+    )
     max_hold_bars = int((tracked.get(key) or {}).get("max_hold_bars") or config.get("runtime_protection_max_hold_bars", 12))
     if max_hold_seconds <= 0:
         max_hold_seconds = max_hold_bars * 300
@@ -712,7 +720,14 @@ def build_runtime_protection_action(
     if fast_invalid_seconds > 0 and age_seconds <= fast_invalid_seconds and fast_invalid_pct > 0 and adverse_pct >= fast_invalid_pct:
         action = "close_fast_invalid"
         reason = "fast_invalid"
-    elif max_hold_seconds > 0 and age_seconds >= max_hold_seconds and pnl_pct < float(config.get("protection_min_profit_after_cost_pct", 0.08)):
+    elif stagnation_seconds > 0 and age_seconds >= stagnation_seconds and pnl_pct < stagnation_min_profit_pct:
+        action = "close_stagnation"
+        reason = "stagnation_after_cost"
+    elif (
+        max_hold_seconds > 0
+        and age_seconds >= max_hold_seconds
+        and pnl_pct < max(stagnation_min_profit_pct, trailing_trigger_pct)
+    ):
         action = "close_time_stop"
         reason = "time_stop"
     elif trailing_trigger_pct > 0 and pnl_pct >= trailing_trigger_pct:
@@ -731,6 +746,9 @@ def build_runtime_protection_action(
         "age_seconds": round(age_seconds, 3),
         "atr_pct": round(atr_pct, 6),
         "fast_invalid_pct": round(fast_invalid_pct, 6),
+        "stagnation_seconds": stagnation_seconds,
+        "stagnation_min_profit_pct": round(stagnation_min_profit_pct, 6),
+        "max_hold_seconds": max_hold_seconds,
         "trailing_distance_pct": round(trailing_distance_pct, 6),
         "orderbook_exit": orderbook_exit,
         "action": action,
@@ -825,7 +843,12 @@ def _manage_runtime_protection(
                     throttle_seconds=60,
                 )
         actions.append(action)
-        if action["action"] not in {"close_fast_invalid", "close_time_stop", "close_orderbook_invalid"}:
+        if action["action"] not in {
+            "close_fast_invalid",
+            "close_stagnation",
+            "close_time_stop",
+            "close_orderbook_invalid",
+        }:
             continue
         v44_runtime_exit = bool(
             strategy_supports(tracked_item.get("strategy_version"), "full_bet")

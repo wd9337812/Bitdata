@@ -119,7 +119,7 @@ def s0_continuous_permit_status(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
-    version = str(config.get("opportunity_v4_strategy_version") or "v4.7.2")
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.7.3")
     release_id = f"extreme_v4_roll@{version}"
     persisted = load_state()
     stored = persisted.get(STATE_KEY)

@@ -39,7 +39,12 @@ from app.trading_engine import (
 from app.state_store import load_state, save_state
 from app.runtime_snapshot import market_rows_from_scan, update_runtime_snapshot
 from app.telemetry import compact_decision, maintain_telemetry, record_equity_snapshot, record_event, record_event_throttled, record_strategy_run
-from app.training_lineage import record_decision_opportunity, record_execution_result
+from app.training_lineage import (
+    ensure_event_id,
+    ensure_opportunity_id,
+    record_decision_opportunity,
+    record_execution_result,
+)
 from app.user_stream import start_user_stream_thread
 
 
@@ -239,6 +244,9 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
         "entry_type": decision.get("entry_type"),
         "max_hold_bars": protection_plan.get("max_hold_bars"),
         "max_hold_seconds": protection_profile.get("max_hold_seconds"),
+        "stagnation_seconds": protection_profile.get("stagnation_seconds"),
+        "stagnation_min_profit_pct": protection_profile.get("stagnation_min_profit_pct"),
+        "fast_invalid_seconds": protection_profile.get("fast_invalid_seconds"),
         "strategy_family": strategy_family,
         "strategy_version": str(opportunity_v4.get("strategy_version") or candidate.get("strategy_version") or ""),
         "protection_version": "v5_dynamic" if strategy_family in {"extreme_v3_roll", "extreme_v4_roll"} else protection_profile.get("protection_version"),
@@ -628,6 +636,11 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             v4 = item.get("opportunity_v4") or {}
             if not v4.get("shadow_eligible"):
                 continue
+            ensure_opportunity_id(item)
+            ensure_event_id(
+                item,
+                int(config.get("opportunity_v43_episode_dedupe_minutes", 45)),
+            )
             is_decision = bool(v4.get("decision_candidate")) and decision_count < decision_limit
             if not is_decision and exploration_count >= exploration_limit:
                 continue

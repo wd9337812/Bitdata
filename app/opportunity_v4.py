@@ -17,7 +17,7 @@ from app.telemetry import connect, db_path
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.7.2"
+V4_FEATURE_SCHEMA = "v4.7.3"
 
 V462_FEATURE_WEIGHTS = {
     "cross_sectional_strength": 0.08,
@@ -494,7 +494,7 @@ def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], con
     setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
     setup_adjustments = (
         V472_SETUP_ADJUSTMENTS
-        if version.startswith("v4.7.2")
+        if strategy_supports(version, "v472_router")
         else V462_SETUP_ADJUSTMENTS
     )
     setup_adjustment = setup_adjustments.get(setup_type, 0.0)
@@ -623,7 +623,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
         }
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
     v44_active = bool(strategy_supports(version, "full_bet") and config.get("opportunity_v44_full_bet_enabled", True))
-    v472_router = version.startswith("v4.7.2")
+    v472_router = strategy_supports(version, "v472_router")
     v44_structure = bool(
         (setup_type == "pullback" and phase == "RETEST")
         or (not v472_router and setup_type in {"momentum", "prebreakout"})
@@ -738,14 +738,15 @@ def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> di
         setup_type = normalize_setup_type(
             market_structure(candidate).get("setup_type") or candidate.get("entry_type")
         )
+        v473_active = version.startswith("v4.7.3")
         max_hold_bars = (
             int(config.get("opportunity_v472_pullback_max_hold_bars", 4))
-            if version.startswith("v4.7.2") and setup_type == "pullback"
+            if strategy_supports(version, "v472_router") and setup_type == "pullback"
             else int(config.get("opportunity_v44_max_hold_bars", 2))
         )
-        return {
+        profile = {
             "entry_phase": _entry_phase(candidate),
-            "profile": "s0_full_bet_v44",
+            "profile": "s0_full_bet_v473" if v473_active else "s0_full_bet_v44",
             "stop_atr": stop_atr,
             "take_profit_atr": stop_atr * take_profit_r,
             "max_hold_bars": max_hold_bars,
@@ -755,6 +756,20 @@ def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> di
             "trailing_trigger_atr": stop_atr * 0.85,
             "trailing_distance_atr": stop_atr * 0.50,
         }
+        if v473_active:
+            profile.update(
+                {
+                    "max_hold_seconds": int(config.get("opportunity_v473_max_hold_seconds", 480)),
+                    "stagnation_seconds": int(config.get("opportunity_v473_stagnation_seconds", 180)),
+                    "stagnation_min_profit_pct": float(
+                        config.get("opportunity_v473_stagnation_min_profit_pct", 0.12)
+                    ),
+                    "fast_invalid_seconds": int(
+                        config.get("opportunity_v473_fast_invalid_seconds", 120)
+                    ),
+                }
+            )
+        return profile
     phase = _entry_phase(candidate)
     prefix = "retest" if phase == "RETEST" else "armed" if phase == "ARMED" else "triggered"
     return {
@@ -898,7 +913,10 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
     cost_floor = float(config.get("opportunity_v44_min_cost_ratio", 1.50))
     cost_component = _clamp((cost_ratio - cost_floor) / max(8.0 - cost_floor, 0.000001), 0.0, 1.0)
     lower = float(opportunity.get("lower_expected_net_pct") or 0.0)
-    lower_floor = float(config.get("opportunity_v44_min_lower_expectancy_pct", -0.05))
+    if version_label.startswith("V4.7.3"):
+        lower_floor = float(config.get("opportunity_v473_min_lower_expectancy_pct", 0.09))
+    else:
+        lower_floor = float(config.get("opportunity_v44_min_lower_expectancy_pct", -0.05))
     lower_component = _clamp((lower - lower_floor) / max(0.15 - lower_floor, 0.000001), 0.0, 1.0)
     liquidity_component = 1.0 if (opportunity.get("liquidity_gate") or {}).get("passed") else 0.0
     confidence = _clamp(
@@ -989,6 +1007,16 @@ def attach_v4_rankings(
         v44_expected = float(config.get("opportunity_v48_min_expected_net_pct", 0.03))
         v44_lower = float(config.get("opportunity_v48_min_lower_expectancy_pct", -0.03))
         v44_cost_ratio = float(config.get("opportunity_v48_min_cost_ratio", 1.70))
+    v473_active = version.lower().startswith("v4.7.3")
+    if v473_active:
+        v44_expected = max(
+            v44_expected,
+            float(config.get("opportunity_v473_min_expected_net_pct", 0.20)),
+        )
+        v44_lower = max(
+            v44_lower,
+            float(config.get("opportunity_v473_min_lower_expectancy_pct", 0.09)),
+        )
     decision_limit = int(config.get("opportunity_v4_decision_shadow_limit", 3))
     bootstrap_rank = float(config.get("opportunity_v4_bootstrap_min_rank_percentile", 0.85))
     bootstrap_quality = float(config.get("opportunity_v4_bootstrap_min_quality_score", 58.0)) / 100
@@ -1094,7 +1122,7 @@ def attach_v4_rankings(
         structure = market_structure(candidate)
         setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
         candidate_min_cost_ratio = min_cost_ratio
-        if version.lower().startswith("v4.7.2"):
+        if strategy_supports(version, "v472_router"):
             setup_cost_floor = {
                 "pullback": float(config.get("opportunity_v472_pullback_min_cost_ratio", 1.80)),
                 "breakout": float(config.get("opportunity_v472_breakout_min_cost_ratio", 2.30)),
@@ -1244,7 +1272,7 @@ def attach_v4_rankings(
         v44_scope = bool(
             policy["live_scope"]
             or policy["canary_scope"]
-            or (policy["exploration_scope"] and not version.lower().startswith("v4.7.2"))
+            or (policy["exploration_scope"] and not strategy_supports(version, "v472_router"))
         )
         effective_v44_rank = v44_rank
         effective_v44_expected = v44_expected
@@ -1265,7 +1293,12 @@ def attach_v4_rankings(
                 float(config.get("opportunity_v49_global_min_confirmations", 3)),
                 float(config.get("opportunity_v49_global_max_confirmations", 5)),
             ))
-        if version.lower().startswith("v4.7.2") and setup_type == "breakout":
+        if v473_active:
+            effective_v44_expected = max(
+                effective_v44_expected,
+                float(config.get("opportunity_v473_min_expected_net_pct", 0.20)),
+            )
+        if strategy_supports(version, "v472_router") and setup_type == "breakout":
             effective_v44_confirmations = min(
                 5,
                 max(effective_v44_confirmations, v44_confirmations_required + 1),

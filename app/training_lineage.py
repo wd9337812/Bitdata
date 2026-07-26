@@ -36,6 +36,7 @@ def init_training_lineage_schema() -> None:
             """
             CREATE TABLE IF NOT EXISTS opportunity_lineage (
                 opportunity_id TEXT PRIMARY KEY,
+                event_id TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 symbol TEXT NOT NULL,
@@ -94,6 +95,11 @@ def init_training_lineage_schema() -> None:
             "CREATE INDEX IF NOT EXISTS idx_opportunity_lineage_version "
             "ON opportunity_lineage(strategy_family, strategy_version, decision_status, signal_time_ms DESC)"
         )
+        _add_column(conn, "opportunity_lineage", "event_id TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_opportunity_lineage_event "
+            "ON opportunity_lineage(event_id, strategy_version, signal_time_ms DESC)"
+        )
         conn.commit()
 
 
@@ -101,6 +107,7 @@ def ensure_live_lineage_columns(conn: Any) -> None:
     if not _table_exists(conn, "live_trade_records"):
         return
     _add_column(conn, "live_trade_records", "opportunity_id TEXT")
+    _add_column(conn, "live_trade_records", "event_id TEXT")
     _add_column(conn, "live_trade_records", "entry_order_ids TEXT")
     _add_column(conn, "live_trade_records", "exit_order_ids TEXT")
     _add_column(conn, "live_trade_records", "entry_slippage_bps REAL")
@@ -109,6 +116,10 @@ def ensure_live_lineage_columns(conn: Any) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_live_trade_opportunity "
         "ON live_trade_records(opportunity_id, close_time DESC)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_live_trade_event "
+        "ON live_trade_records(event_id, strategy_version, close_time DESC)"
     )
 
 
@@ -121,6 +132,39 @@ def ensure_opportunity_id(candidate: dict[str, Any]) -> str:
     created_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     value = f"{symbol}:{direction}:{created_ms}:{uuid.uuid4().hex[:10]}"
     candidate["opportunity_id"] = value
+    return value
+
+
+def ensure_event_id(candidate: dict[str, Any], bucket_minutes: int = 45) -> str:
+    current = str(candidate.get("event_id") or "").strip()
+    if current:
+        return current
+    signal = candidate.get("signal") or {}
+    structure = candidate.get("market_structure") or {}
+    v4 = candidate.get("opportunity_v4") or {}
+    timestamp_ms = int(
+        signal.get("signal_time_ms")
+        or candidate.get("signal_time_ms")
+        or datetime.now(timezone.utc).timestamp() * 1000
+    )
+    bucket_ms = max(60_000, int(bucket_minutes) * 60_000)
+    bucket = timestamp_ms // bucket_ms
+    symbol = str(candidate.get("symbol") or "UNKNOWN").upper()
+    direction = str(candidate.get("direction") or signal.get("signal") or "WAIT").upper()
+    setup = str(
+        structure.get("setup_type")
+        or v4.get("setup_type")
+        or candidate.get("entry_type")
+        or "unknown"
+    ).lower()
+    regime = str(
+        structure.get("market_regime")
+        or v4.get("market_regime")
+        or (candidate.get("market_state") or {}).get("state")
+        or "unknown"
+    ).lower()
+    value = f"{symbol}:{direction}:{setup}:{regime}:{bucket}"
+    candidate["event_id"] = value
     return value
 
 
@@ -246,7 +290,9 @@ def record_decision_opportunity(decision: dict[str, Any]) -> str | None:
     if not candidate or not candidate.get("symbol"):
         return None
     opportunity_id = ensure_opportunity_id(candidate)
+    event_id = ensure_event_id(candidate)
     decision["opportunity_id"] = opportunity_id
+    decision["event_id"] = event_id
     signal = decision.get("signal") or candidate.get("signal") or {}
     v4 = candidate.get("opportunity_v4") or {}
     structure = candidate.get("market_structure") or {}
@@ -259,15 +305,16 @@ def record_decision_opportunity(decision: dict[str, Any]) -> str | None:
         conn.execute(
             """
             INSERT INTO opportunity_lineage (
-                opportunity_id, created_at, updated_at, symbol, direction, signal_type,
+                opportunity_id, event_id, created_at, updated_at, symbol, direction, signal_type,
                 setup_type, market_regime, strategy_family, strategy_version, strategy_role,
                 admission_lane, decision_action, decision_status, signal_time_ms,
                 decision_price, stop_price, take_profit_price, requested_quantity,
                 requested_notional, leverage, risk_pct, feature_schema_version,
                 minute_features, decision_payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(opportunity_id) DO UPDATE SET
                 updated_at = excluded.updated_at,
+                event_id = excluded.event_id,
                 strategy_family = excluded.strategy_family,
                 strategy_version = excluded.strategy_version,
                 strategy_role = excluded.strategy_role,
@@ -279,6 +326,7 @@ def record_decision_opportunity(decision: dict[str, Any]) -> str | None:
             """,
             (
                 opportunity_id,
+                event_id,
                 now_iso(),
                 now_iso(),
                 str(candidate.get("symbol") or "").upper(),
@@ -315,21 +363,24 @@ def record_shadow_opportunity(conn: Any, candidate: dict[str, Any], opportunity_
     structure = candidate.get("market_structure") or {}
     features = capture_minute_features(candidate)
     signal_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    event_id = ensure_event_id(candidate)
     conn.execute(
         """
         INSERT INTO opportunity_lineage (
-            opportunity_id, created_at, updated_at, symbol, direction, signal_type,
+            opportunity_id, event_id, created_at, updated_at, symbol, direction, signal_type,
             setup_type, market_regime, strategy_family, strategy_version, strategy_role,
             admission_lane, decision_action, decision_status, signal_time_ms,
             decision_price, stop_price, take_profit_price, risk_pct,
             feature_schema_version, minute_features, decision_payload
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SHADOW', ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SHADOW', ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(opportunity_id) DO UPDATE SET
             updated_at = excluded.updated_at,
+            event_id = excluded.event_id,
             minute_features = COALESCE(opportunity_lineage.minute_features, excluded.minute_features)
         """,
         (
             opportunity_id,
+            event_id,
             now_iso(),
             now_iso(),
             str(candidate.get("symbol") or "").upper(),
@@ -431,6 +482,7 @@ def match_trade_record(record: dict[str, Any]) -> dict[str, Any]:
             quality = "approximate_time" if row else "unmatched"
     return {
         "opportunity_id": row["opportunity_id"] if row else None,
+        "event_id": row["event_id"] if row else None,
         "lineage_quality": quality,
         "strategy_family": row["strategy_family"] if row else None,
         "strategy_version": row["strategy_version"] if row else None,
@@ -516,6 +568,8 @@ def training_data_quality() -> dict[str, Any]:
     init_training_lineage_schema()
     with connect() as conn:
         ensure_live_lineage_columns(conn)
+        if _table_exists(conn, "shadow_trades"):
+            _add_column(conn, "shadow_trades", "event_id TEXT")
         lineage = dict(
             conn.execute(
                 """
@@ -535,24 +589,45 @@ def training_data_quality() -> dict[str, Any]:
                        SUM(CASE WHEN opportunity_id IS NOT NULL AND opportunity_id != '' THEN 1 ELSE 0 END) linked,
                        SUM(CASE WHEN lineage_quality = 'exact_order_id' THEN 1 ELSE 0 END) exact_matches,
                        SUM(CASE WHEN opportunity_id IS NULL OR opportunity_id = '' THEN 1 ELSE 0 END) unmatched,
-                       SUM(CASE WHEN entry_slippage_bps IS NOT NULL THEN 1 ELSE 0 END) slippage_rows
+                       SUM(CASE WHEN entry_slippage_bps IS NOT NULL THEN 1 ELSE 0 END) slippage_rows,
+                       COUNT(DISTINCT CASE WHEN event_id IS NOT NULL AND event_id != '' THEN event_id END) events
                 FROM live_trade_records
                 """
             ).fetchone())
             if _table_exists(conn, "live_trade_records")
-            else {"total": 0, "linked": 0, "exact_matches": 0, "unmatched": 0, "slippage_rows": 0}
+            else {"total": 0, "linked": 0, "exact_matches": 0, "unmatched": 0, "slippage_rows": 0, "events": 0}
         )
         shadow = (
             dict(conn.execute(
                 """
                 SELECT COUNT(*) total,
                        SUM(CASE WHEN opportunity_id IS NOT NULL AND opportunity_id != '' THEN 1 ELSE 0 END) linked,
-                       SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) closed
+                       SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) closed,
+                       COUNT(DISTINCT CASE WHEN event_id IS NOT NULL AND event_id != '' THEN event_id END) events
                 FROM shadow_trades
                 """
             ).fetchone())
             if _table_exists(conn, "shadow_trades")
-            else {"total": 0, "linked": 0, "closed": 0}
+            else {"total": 0, "linked": 0, "closed": 0, "events": 0}
+        )
+        paired_events = (
+            int(
+                conn.execute(
+                    """
+                    SELECT COUNT(DISTINCT live.event_id)
+                    FROM live_trade_records live
+                    WHERE live.event_id IS NOT NULL AND live.event_id != ''
+                      AND EXISTS (
+                          SELECT 1 FROM shadow_trades shadow
+                          WHERE shadow.event_id = live.event_id
+                            AND shadow.strategy_version = live.strategy_version
+                      )
+                    """
+                ).fetchone()[0]
+                or 0
+            )
+            if _table_exists(conn, "live_trade_records") and _table_exists(conn, "shadow_trades")
+            else 0
         )
     exact = int(live.get("exact_matches") or 0)
     total_live = int(live.get("total") or 0)
@@ -563,6 +638,7 @@ def training_data_quality() -> dict[str, Any]:
         "lineage": {key: int(value or 0) for key, value in lineage.items()},
         "live": {key: int(value or 0) for key, value in live.items()},
         "shadow": {key: int(value or 0) for key, value in shadow.items()},
+        "paired_events": paired_events,
         "high_weight_training_ready": ready,
         "exact_live_link_rate_pct": round(exact / total_live * 100, 2) if total_live else 0.0,
         "message": (
