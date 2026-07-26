@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta, timezone
+
 from app.shadow_trading import shadow_summary, update_shadow_trades
 from app.telemetry import connect
 
@@ -37,6 +39,52 @@ def test_shadow_trade_is_deduplicated_and_settled_without_exchange(monkeypatch, 
     assert summary["stats"]["total"] == 1
     assert summary["stats"]["wins"] == 1
     assert summary["trades"][0]["outcome"] == "TAKE_PROFIT"
+
+
+def test_v473_shadow_uses_candidate_protection_for_stagnation_exit(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    candidate = {
+        **_candidate(100),
+        "strategy_family": "extreme_v4_roll",
+        "strategy_version": "v4.7.3",
+        "strategy_role": "active",
+        "evidence_type": "decision",
+        "opportunity_v4": {
+            "shadow_eligible": True,
+            "admitted": True,
+            "score": 90,
+            "protection_profile": {
+                "max_hold_seconds": 480,
+                "stagnation_seconds": 180,
+                "stagnation_min_profit_pct": 0.12,
+            },
+        },
+    }
+    config = {
+        "shadow_trading_enabled": True,
+        "opportunity_v4_strategy_version": "v4.7.3",
+        "shadow_dedupe_minutes": 10,
+        "shadow_max_hold_minutes": 120,
+        "shadow_reference_notional_usdt": 20,
+        "shadow_round_trip_cost_pct": 0.12,
+    }
+
+    opened = update_shadow_trades([candidate], config)
+    with connect() as conn:
+        conn.execute(
+            "UPDATE shadow_trades SET opened_at = ?",
+            ((datetime.now(timezone.utc) - timedelta(seconds=240)).isoformat(),),
+        )
+        conn.commit()
+    settled = update_shadow_trades(
+        [{**candidate, "signal": {**candidate["signal"], "last_price": 100.05}}],
+        config,
+    )
+    summary = shadow_summary(config=config)
+
+    assert opened["opened"] == 1
+    assert settled["closed"] == 1
+    assert summary["trades"][0]["outcome"] == "STAGNATION_EXIT"
 
 
 def test_v32_and_v33_paired_shadow_trades_can_coexist(monkeypatch, tmp_path):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app import runner
-from app.runner import enforce_hard_stop, is_min_notional_rejection
+from app.runner import enforce_hard_stop, is_min_notional_rejection, track_runtime_position
 from app.state_store import load_state
 from app.trading_engine import is_reduce_only_rejection
 
@@ -83,3 +83,35 @@ def test_open_signal_blocks_when_available_balance_changed(monkeypatch):
     )
 
     assert result["reason"] == "stale_available_balance"
+
+
+def test_track_runtime_position_uses_v473_candidate_protection(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(runner, "load_state", lambda: {"runtime_protection_positions": {}})
+    monkeypatch.setattr(runner, "save_state", lambda update: saved.update(update) or update)
+
+    track_runtime_position(
+        {
+            "symbol": "SOLUSDT",
+            "direction": "LONG",
+            "signal": {},
+            "candidate": {
+                "strategy_family": "extreme_v4_roll",
+                "opportunity_v4": {
+                    "strategy_version": "v4.7.3",
+                    "protection_profile": {
+                        "max_hold_seconds": 480,
+                        "stagnation_seconds": 180,
+                        "stagnation_min_profit_pct": 0.12,
+                        "fast_invalid_seconds": 120,
+                    },
+                },
+            },
+        }
+    )
+
+    tracked = saved["runtime_protection_positions"]["SOLUSDT:LONG"]
+    assert tracked["max_hold_seconds"] == 480
+    assert tracked["stagnation_seconds"] == 180
+    assert tracked["stagnation_min_profit_pct"] == 0.12
+    assert tracked["fast_invalid_seconds"] == 120

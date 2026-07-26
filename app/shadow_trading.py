@@ -436,8 +436,13 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 signal_type = _candidate_signal_type(candidate)
                 market_regime = str(structure.get("market_regime") or (candidate.get("market_state") or {}).get("state") or "unknown")
                 candidate_hold_minutes = hold_minutes
+                protection: dict[str, Any] = {}
                 if strategy_family in {V3_FAMILY, V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY, "extreme_v31_challenger"}:
-                    protection = signal.get("protection_profile") or {}
+                    protection = (
+                        v4.get("protection_profile")
+                        if strategy_family == V4_STRATEGY_FAMILY
+                        else signal.get("protection_profile")
+                    ) or {}
                     max_hold_seconds = int(protection.get("max_hold_seconds") or 0)
                     candidate_hold_minutes = (
                         min(hold_minutes, max(1.0, max_hold_seconds / 60))
@@ -514,7 +519,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                                 "shadow_copy_passed": candidate.get("passed"),
                                 "v4_admitted": bool(v4.get("admitted")) if is_v4 else None,
                                 "event_id": event_id,
-                                "protection_profile": signal.get("protection_profile") or {},
+                                "protection_profile": protection,
                                 "strategy_version": candidate.get("strategy_version"),
                                 "strategy_role": strategy_role,
                                 "entry_type": signal_type,

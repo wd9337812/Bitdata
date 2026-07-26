@@ -1626,7 +1626,6 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {number("opportunity_v44_release_pause_drawdown_pct", "版本回撤暂停线%", "默认 35%；5U 权益硬停止仍始终有效")}
             {toggle("s0_continuous_permit_enabled", "启用 S0 连续准入", "当前版本普通亏损只降低仓位；仅当日回撤、5U 硬停止或运行安全故障暂停新仓")}
             {number("s0_continuous_daily_pause_pct", "当日回撤暂停线%", "默认 30%；相对 UTC 当日初始权益计算，盈利后自然修复回撤")}
-            {number("strategy_canary_level_1_max_opportunities", "一级试运行最多机会", "默认 6 次；每次只能有一笔同时具备止盈和止损的实盘仓位")}
             {number("execution_max_spread_pct", "V4 盘口最大点差%", "流动性硬门，超过后不实盘")}
             {number("execution_min_depth_notional_usdt", "V4 最低盘口深度 U", "流动性硬门，低于后不实盘")}
             {toggle("runtime_stop_management_enabled", "自动保本与移动止盈", "对新开的 V4 仓位生效")}

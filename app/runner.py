@@ -217,11 +217,15 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
     direction = str(decision.get("direction") or (decision.get("signal") or {}).get("signal") or "LONG").upper()
     if not symbol or direction not in {"LONG", "SHORT"}:
         return
-    protection_plan = decision.get("protection_plan") or (decision.get("signal") or {}).get("protection_plan") or {}
-    protection_profile = (decision.get("signal") or {}).get("protection_profile") or {}
     candidate = decision.get("candidate") or {}
-    strategy_family = str(candidate.get("strategy_family") or decision.get("strategy_family") or "")
     opportunity_v4 = candidate.get("opportunity_v4") or {}
+    protection_plan = decision.get("protection_plan") or (decision.get("signal") or {}).get("protection_plan") or {}
+    protection_profile = (
+        (decision.get("signal") or {}).get("protection_profile")
+        or opportunity_v4.get("protection_profile")
+        or {}
+    )
+    strategy_family = str(candidate.get("strategy_family") or decision.get("strategy_family") or "")
     performance_guard = candidate.get("global_performance_guard") or {}
     strategy_canary = performance_guard.get("strategy_canary_permit") or {}
     effective_risk = decision.get("effective_risk") or {}
