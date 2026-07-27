@@ -9,7 +9,7 @@ from app.exchange_filters import ExchangeFilters
 from app.market_stream import stream_depth, stream_ticker
 from app.protection_audit import audit_position_protection, enrich_positions_with_prices
 from app.risk import live_trading_allowed
-from app.state_store import save_state
+from app.state_store import load_state, save_state
 from app.strategy import atr
 from app.telemetry import record_event, record_event_throttled
 from app.strategy_capabilities import strategy_supports
@@ -61,6 +61,21 @@ def _position_key(symbol: str, direction: str) -> str:
 def _tracked_positions(state: dict[str, Any]) -> dict[str, Any]:
     tracked = state.get("runtime_protection_positions") or {}
     return tracked if isinstance(tracked, dict) else {}
+
+
+def _merge_active_tracking_with_latest(
+    tracked: dict[str, Any],
+    active_keys: set[str],
+) -> dict[str, Any]:
+    """Preserve richer position metadata written concurrently by the entry path."""
+    latest = _tracked_positions(load_state())
+    return {
+        key: {
+            **dict(latest.get(key) or {}),
+            **dict(tracked.get(key) or {}),
+        }
+        for key in active_keys
+    }
 
 
 def _orderbook_exit_signal(symbol: str, direction: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -915,9 +930,7 @@ def _manage_runtime_protection(
         action["close_order"] = close_order
         action["cleanup_error"] = cleanup_error
         record_event("warning", "runtime_protection", "runtime protection closed position", action)
-    for key in list(tracked.keys()):
-        if key not in active_keys:
-            tracked.pop(key, None)
+    tracked = _merge_active_tracking_with_latest(tracked, active_keys)
     updates["runtime_protection_positions"] = tracked
     save_state(updates)
     return {"enabled": True, "actions": actions}

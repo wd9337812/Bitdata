@@ -123,6 +123,64 @@ def test_runtime_protection_prefers_websocket_price_and_entry_atr(monkeypatch):
     assert client.kline_calls == 0
 
 
+def test_runtime_supervisor_preserves_tracking_written_during_open(monkeypatch):
+    class RuntimeClient:
+        pass
+
+    latest_tracking = {
+        "TESTUSDT:LONG": {
+            "opened_at": "2026-07-27T06:00:00+00:00",
+            "entry_order_id": 123,
+            "entry_atr": 2.0,
+            "max_hold_seconds": 480,
+            "stagnation_seconds": 180,
+            "fast_invalid_seconds": 120,
+            "strategy_version": "v4.7.4",
+            "protection_profile_source": "v4_candidate_merged",
+        }
+    }
+    saved: list[dict] = []
+    monkeypatch.setattr(
+        runtime_protection,
+        "stream_ticker",
+        lambda symbol, max_age_seconds=10: {"lastPrice": "100.05"},
+    )
+    monkeypatch.setattr(
+        runtime_protection,
+        "load_state",
+        lambda: {"runtime_protection_positions": latest_tracking},
+    )
+    monkeypatch.setattr(runtime_protection, "save_state", lambda update: saved.append(update) or update)
+
+    manage_runtime_protection(
+        RuntimeClient(),
+        {
+            "dynamic_protection_runtime_enabled": True,
+            "dry_run": True,
+            "protection_fast_invalid_atr": 0.35,
+        },
+        {"runtime_protection_positions": {}},
+        {
+            "positions": [
+                {
+                    "symbol": "TESTUSDT",
+                    "positionAmt": "1",
+                    "entryPrice": "100",
+                }
+            ]
+        },
+    )
+
+    tracked = saved[-1]["runtime_protection_positions"]["TESTUSDT:LONG"]
+    assert tracked["entry_order_id"] == 123
+    assert tracked["entry_atr"] == 2.0
+    assert tracked["max_hold_seconds"] == 480
+    assert tracked["stagnation_seconds"] == 180
+    assert tracked["fast_invalid_seconds"] == 120
+    assert tracked["strategy_version"] == "v4.7.4"
+    assert tracked["protection_profile_source"] == "v4_candidate_merged"
+
+
 def test_dynamic_stop_is_confirmed_before_old_stop_is_cancelled():
     client = Client()
     tracked = {"trailing_distance_atr": 0.5}
