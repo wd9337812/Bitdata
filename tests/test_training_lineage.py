@@ -235,3 +235,33 @@ def test_user_trade_reconciliation_preserves_order_ids_and_split_commission():
     assert records[0]["exit_order_ids"] == ["22"]
     assert records[0]["entry_commission"] == 0.04
     assert records[0]["close_commission"] == 0.05
+
+
+def test_match_backfills_execution_id_from_exact_entry_order(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    init_live_learning_schema()
+    decision = _decision()
+    opportunity_id = record_decision_opportunity(decision)
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE opportunity_lineage
+            SET decision_status = 'EXECUTED', entry_order_id = '321', execution_id = NULL
+            WHERE opportunity_id = ?
+            """,
+            (opportunity_id,),
+        )
+        conn.commit()
+
+    matched = match_trade_record(
+        {
+            "symbol": "BTCUSDT",
+            "direction": "LONG",
+            "open_time": 1_000,
+            "entry_order_ids": ["321"],
+        }
+    )
+
+    assert matched["opportunity_id"] == opportunity_id
+    assert matched["execution_id"] == "binance:321"
+    assert matched["lineage_quality"] == "exact_order_id"

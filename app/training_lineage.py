@@ -501,11 +501,16 @@ def match_trade_record(record: dict[str, Any]) -> dict[str, Any]:
                 ),
             ).fetchone()
             quality = "approximate_time" if row else "unmatched"
+    execution_id = None
+    if row:
+        execution_id = row["execution_id"]
+        if not execution_id and row["entry_order_id"]:
+            execution_id = f"binance:{row['entry_order_id']}"
     return {
         "opportunity_id": row["opportunity_id"] if row else None,
         "event_id": row["event_id"] if row else None,
         "event_group_id": (row["event_group_id"] or row["event_id"]) if row else None,
-        "execution_id": row["execution_id"] if row else None,
+        "execution_id": execution_id,
         "lineage_quality": quality,
         "strategy_family": row["strategy_family"] if row else None,
         "strategy_version": row["strategy_version"] if row else None,
