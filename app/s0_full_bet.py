@@ -119,7 +119,9 @@ def build_s0_full_bet_sizing(
         "enabled": True,
         "applied": True,
         "profile": (
-            "s0_full_bet_v473"
+            "s0_full_bet_v474"
+            if version.startswith("v4.7.4")
+            else "s0_full_bet_v473"
             if version.startswith("v4.7.3")
             else "s0_full_bet_v472"
             if strategy_supports(version, "v472_router")

@@ -17,7 +17,7 @@ from app.telemetry import connect, db_path
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
-V4_FEATURE_SCHEMA = "v4.7.3"
+V4_FEATURE_SCHEMA = "v4.7.4"
 
 V462_FEATURE_WEIGHTS = {
     "cross_sectional_strength": 0.08,
@@ -738,7 +738,7 @@ def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> di
         setup_type = normalize_setup_type(
             market_structure(candidate).get("setup_type") or candidate.get("entry_type")
         )
-        v473_active = version.startswith("v4.7.3")
+        v473_active = version.startswith(("v4.7.3", "v4.7.4"))
         max_hold_bars = (
             int(config.get("opportunity_v472_pullback_max_hold_bars", 4))
             if strategy_supports(version, "v472_router") and setup_type == "pullback"
@@ -746,7 +746,13 @@ def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> di
         )
         profile = {
             "entry_phase": _entry_phase(candidate),
-            "profile": "s0_full_bet_v473" if v473_active else "s0_full_bet_v44",
+            "profile": (
+                "s0_full_bet_v474"
+                if version.startswith("v4.7.4")
+                else "s0_full_bet_v473"
+                if v473_active
+                else "s0_full_bet_v44"
+            ),
             "stop_atr": stop_atr,
             "take_profit_atr": stop_atr * take_profit_r,
             "max_hold_bars": max_hold_bars,
@@ -913,7 +919,7 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
     cost_floor = float(config.get("opportunity_v44_min_cost_ratio", 1.50))
     cost_component = _clamp((cost_ratio - cost_floor) / max(8.0 - cost_floor, 0.000001), 0.0, 1.0)
     lower = float(opportunity.get("lower_expected_net_pct") or 0.0)
-    if version_label.startswith("V4.7.3"):
+    if version_label.startswith(("V4.7.3", "V4.7.4")):
         lower_floor = float(config.get("opportunity_v473_min_lower_expectancy_pct", 0.09))
     else:
         lower_floor = float(config.get("opportunity_v44_min_lower_expectancy_pct", -0.05))
@@ -1007,7 +1013,7 @@ def attach_v4_rankings(
         v44_expected = float(config.get("opportunity_v48_min_expected_net_pct", 0.03))
         v44_lower = float(config.get("opportunity_v48_min_lower_expectancy_pct", -0.03))
         v44_cost_ratio = float(config.get("opportunity_v48_min_cost_ratio", 1.70))
-    v473_active = version.lower().startswith("v4.7.3")
+    v473_active = version.lower().startswith(("v4.7.3", "v4.7.4"))
     if v473_active:
         v44_expected = max(
             v44_expected,

@@ -24,6 +24,7 @@ from app.recovery_controller import consume_recovery_permit, revoke_recovery_per
 from app.strategy_canary import consume_strategy_canary, revoke_strategy_canary
 from app.risk import direction_cooldown_key, live_trading_allowed
 from app.runtime_protection import manage_runtime_protection
+from app.s0_daily_profit_lock import s0_daily_profit_lock_status
 from app.shadow_trading import update_shadow_trades
 from app.stage_modes import apply_stage_route
 from app.trading_engine import (
@@ -212,6 +213,28 @@ def set_rotation_cooldown(state: dict, symbol: str, minutes: float) -> None:
     save_state({"rotation_cooldowns": cooldowns})
 
 
+def resolve_runtime_protection_profile(decision: dict) -> dict:
+    """Build the one protection profile used by execution and runtime tracking."""
+    signal = dict(decision.get("signal") or {})
+    candidate = decision.get("candidate") or {}
+    opportunity_v4 = candidate.get("opportunity_v4") or {}
+    signal_profile = dict(signal.get("protection_profile") or {})
+    candidate_profile = dict(opportunity_v4.get("protection_profile") or {})
+    effective = {**signal_profile, **candidate_profile}
+    if effective:
+        signal["protection_profile"] = effective
+        decision["signal"] = signal
+        if isinstance(candidate.get("signal"), dict):
+            candidate["signal"] = {**candidate["signal"], "protection_profile": effective}
+        decision["effective_protection_profile"] = effective
+        decision["protection_profile_source"] = (
+            "v4_candidate_merged"
+            if candidate_profile
+            else "signal"
+        )
+    return effective
+
+
 def track_runtime_position(decision: dict, result: dict | None = None) -> None:
     symbol = str(decision.get("symbol") or "").upper()
     direction = str(decision.get("direction") or (decision.get("signal") or {}).get("signal") or "LONG").upper()
@@ -220,11 +243,7 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
     candidate = decision.get("candidate") or {}
     opportunity_v4 = candidate.get("opportunity_v4") or {}
     protection_plan = decision.get("protection_plan") or (decision.get("signal") or {}).get("protection_plan") or {}
-    protection_profile = (
-        (decision.get("signal") or {}).get("protection_profile")
-        or opportunity_v4.get("protection_profile")
-        or {}
-    )
+    protection_profile = resolve_runtime_protection_profile(decision)
     strategy_family = str(candidate.get("strategy_family") or decision.get("strategy_family") or "")
     performance_guard = candidate.get("global_performance_guard") or {}
     strategy_canary = performance_guard.get("strategy_canary_permit") or {}
@@ -246,6 +265,9 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
         "stop_order_id": ((result or {}).get("stop_order") or {}).get("algoId"),
         "take_profit_order_id": ((result or {}).get("take_profit_order") or {}).get("algoId"),
         "entry_type": decision.get("entry_type"),
+        "entry_atr": float((decision.get("signal") or {}).get("atr") or 0.0),
+        "protection_profile_source": decision.get("protection_profile_source"),
+        "protection_profile": protection_profile,
         "max_hold_bars": protection_plan.get("max_hold_bars"),
         "max_hold_seconds": protection_profile.get("max_hold_seconds"),
         "stagnation_seconds": protection_profile.get("stagnation_seconds"),
@@ -495,6 +517,14 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         return {"status": "hard_stopped", "hard_stop": hard_stop, "loop_seconds": loop_seconds_for(config, config.get("growth_mode"))}
     state = sync_stage(config, state, account)
     config = apply_stage_route(config, state.get("stage_route"))
+    profit_lock = s0_daily_profit_lock_status(config, state, account)
+    state = {
+        **state,
+        "daily_realized_pnl": profit_lock.get("realized_net_pnl", 0.0),
+        "s0_daily_profit_lock_active": profit_lock.get("active", False),
+        "s0_daily_profit_lock_pending": profit_lock.get("pending_flat", False),
+        "s0_daily_profit_lock_status": profit_lock,
+    }
     release_equity_guard = update_release_equity_guard(config, account.get("equity"))
     config["_strategy_release_equity_guard"] = release_equity_guard
     config["_release_fallback_active"] = bool(release_equity_guard.get("fallback_active"))
@@ -524,7 +554,8 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
                 audit_status,
                 throttle_seconds=int(config.get("protection_audit_log_throttle_seconds", 60)),
             )
-        protection_status = manage_runtime_protection(client, config, state, account)
+        with _EXECUTION_LOCK, _PROTECTION_LOCK:
+            protection_status = manage_runtime_protection(client, config, state, account)
         if protection_status.get("actions"):
             noisy_actions = [
                 action for action in protection_status.get("actions", [])
@@ -572,6 +603,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         symbols_override=symbols_override,
         fast_lane=fast_lane,
     )
+    resolve_runtime_protection_profile(decision)
     scan = decision.get("scan") or {}
     shadow_candidates = [item for item in scan.get("candidates", []) if not item.get("passed")]
     paired_active_candidates: list[dict[str, Any]] = []
@@ -902,6 +934,7 @@ def main() -> None:
 
 def _account_supervisor_loop() -> None:
     last_audit_monotonic = 0.0
+    last_runtime_protection_monotonic = 0.0
     last_position_fingerprint = ""
     last_account_revision = 0
     while True:
@@ -949,13 +982,14 @@ def _account_supervisor_loop() -> None:
                 )
             )
             now_monotonic = time.monotonic()
+            position_changed = fingerprint != last_position_fingerprint
             audit_interval = int(
                 config.get(
                     "account_supervisor_position_audit_seconds" if positions else "account_supervisor_idle_audit_seconds",
                     10 if positions else 30,
                 )
             )
-            audit_due = fingerprint != last_position_fingerprint or now_monotonic - last_audit_monotonic >= audit_interval
+            audit_due = position_changed or now_monotonic - last_audit_monotonic >= audit_interval
             runtime_updates = {
                 "account": _runtime_account(account),
                 "account_projection": {
@@ -990,12 +1024,30 @@ def _account_supervisor_loop() -> None:
                         audit,
                         throttle_seconds=int(config.get("protection_audit_log_throttle_seconds", 60)),
                     )
+            runtime_protection_interval = max(
+                2,
+                int(config.get("runtime_protection_supervisor_seconds", 5)),
+            )
+            runtime_protection_due = bool(positions) and (
+                position_changed
+                or now_monotonic - last_runtime_protection_monotonic >= runtime_protection_interval
+            )
+            if runtime_protection_due:
+                with _EXECUTION_LOCK, _PROTECTION_LOCK:
+                    runtime_updates["runtime_protection"] = manage_runtime_protection(
+                        client,
+                        config,
+                        load_state(),
+                        account,
+                    )
+                last_runtime_protection_monotonic = now_monotonic
             runtime_updates["account_supervisor"] = {
                 "enabled": True,
                 "healthy": not projection.get("stale"),
                 "last_check_at": datetime.now(timezone.utc).isoformat(),
                 "elapsed_seconds": round(time.monotonic() - started, 3),
                 "next_audit_seconds": audit_interval,
+                "runtime_protection_interval_seconds": runtime_protection_interval,
                 "last_error": "",
             }
             update_runtime_snapshot(**runtime_updates)

@@ -343,6 +343,9 @@ class TradingConfig(BaseModel):
     stage_s0_max_leverage: float = Field(default=10.0, ge=1, le=50)
     stage_s0_max_open_positions: int = Field(default=1, ge=1, le=20)
     stage_s0_daily_loss_limit_pct: float = Field(default=30.0, ge=0.1, le=100)
+    stage_s0_daily_loss_stop_enabled: bool = False
+    stage_s0_daily_profit_lock_enabled: bool = True
+    stage_s0_daily_profit_target_pct: float = Field(default=40.0, ge=1, le=500)
     stage_s1_risk_pct: float = Field(default=7.0, ge=0.01, le=100)
     stage_s1_margin_pct: float = Field(default=85.0, ge=1, le=100)
     stage_s1_max_leverage: float = Field(default=5.0, ge=1, le=50)
@@ -601,9 +604,11 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v4.7.3"
+    opportunity_v4_strategy_version: str = "v4.7.4"
     s0_moe_shadow_enabled: bool = True
+    s0_moe_runtime_model_enabled: bool = False
     s0_moe_model_path: str = ""
+    s0_moe_candidate_status_path: str = ""
     s0_moe_shadow_candidate_limit: int = Field(default=25, ge=1, le=50)
     s0_moe_online_window_hours: float = Field(default=24.0, ge=1, le=720)
     s0_moe_retrain_min_selected_closes: int = Field(default=200, ge=20, le=100000)
@@ -831,7 +836,7 @@ class TradingConfig(BaseModel):
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
     strategy_canary_startup_cap_enabled: bool = True
-    strategy_canary_release_id: str = "extreme_v4_roll@v4.7.3"
+    strategy_canary_release_id: str = "extreme_v4_roll@v4.7.4"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
     strategy_canary_level_1_multiplier: float = Field(default=1.0, ge=0, le=1)
     strategy_canary_level_1_max_opportunities: int = Field(default=6, ge=1, le=100)
@@ -861,6 +866,8 @@ class TradingConfig(BaseModel):
     s0_continuous_daily_tier_2_pct: float = Field(default=20.0, ge=0, le=100)
     s0_continuous_daily_tier_2_multiplier: float = Field(default=0.50, ge=0, le=1)
     s0_continuous_daily_pause_pct: float = Field(default=30.0, ge=0.1, le=100)
+    runtime_protection_supervisor_seconds: int = Field(default=5, ge=2, le=60)
+    runtime_protection_stream_price_max_age_seconds: int = Field(default=10, ge=1, le=120)
     s0_continuous_profit_recovery_cost_multiple: float = Field(default=2.0, ge=0, le=100)
     s0_continuous_strong_profit_cost_multiple: float = Field(default=6.0, ge=0, le=100)
     s0_continuous_full_recovery_wins: int = Field(default=2, ge=1, le=20)

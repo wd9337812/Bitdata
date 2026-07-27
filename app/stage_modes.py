@@ -130,6 +130,21 @@ def _profile_values(profile: dict[str, Any], config: dict[str, Any], equity: flo
     result["daily_loss_limit_pct"] = float(
         config.get(profile["daily_loss_key"], profile["daily_loss_default"])
     )
+    result["daily_loss_stop_enabled"] = (
+        bool(config.get("stage_s0_daily_loss_stop_enabled", False))
+        if result.get("stage") == "S0"
+        else True
+    )
+    result["daily_profit_lock_enabled"] = (
+        bool(config.get("stage_s0_daily_profit_lock_enabled", True))
+        if result.get("stage") == "S0"
+        else False
+    )
+    result["daily_profit_target_pct"] = (
+        float(config.get("stage_s0_daily_profit_target_pct", 40.0))
+        if result.get("stage") == "S0"
+        else None
+    )
     result["max_open_positions"] = int(
         config.get(f"stage_{str(profile['stage']).lower()}_max_open_positions", profile["max_open_positions"])
     )

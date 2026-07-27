@@ -360,6 +360,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "stage_s0_max_leverage": 10.0,
     "stage_s0_max_open_positions": 1,
     "stage_s0_daily_loss_limit_pct": 30.0,
+    "stage_s0_daily_loss_stop_enabled": False,
+    "stage_s0_daily_profit_lock_enabled": True,
+    "stage_s0_daily_profit_target_pct": 40.0,
     "stage_s1_risk_pct": 7.0,
     "stage_s1_margin_pct": 85.0,
     "stage_s1_max_leverage": 5.0,
@@ -618,9 +621,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v4.7.3",
+    "opportunity_v4_strategy_version": "v4.7.4",
     "s0_moe_shadow_enabled": True,
+    "s0_moe_runtime_model_enabled": False,
     "s0_moe_model_path": "",
+    "s0_moe_candidate_status_path": "",
     "s0_moe_shadow_candidate_limit": 25,
     "s0_moe_online_window_hours": 24.0,
     "s0_moe_retrain_min_selected_closes": 200,
@@ -848,7 +853,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "strategy_canary_enabled": True,
     "strategy_canary_auto_issue": True,
     "strategy_canary_startup_cap_enabled": True,
-    "strategy_canary_release_id": "extreme_v4_roll@v4.7.3",
+    "strategy_canary_release_id": "extreme_v4_roll@v4.7.4",
     "strategy_canary_permit_hours": 24.0,
     "strategy_canary_level_1_multiplier": 1.0,
     "strategy_canary_level_1_max_opportunities": 6,
@@ -878,6 +883,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "s0_continuous_daily_tier_2_pct": 20.0,
     "s0_continuous_daily_tier_2_multiplier": 0.50,
     "s0_continuous_daily_pause_pct": 30.0,
+    "runtime_protection_supervisor_seconds": 5,
+    "runtime_protection_stream_price_max_age_seconds": 10,
     "s0_continuous_profit_recovery_cost_multiple": 2.0,
     "s0_continuous_strong_profit_cost_multiple": 6.0,
     "s0_continuous_full_recovery_wins": 2,
@@ -1152,11 +1159,11 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         config["execution_max_spread_pct"] = loaded["opportunity_v3_max_spread_pct"]
     if "execution_min_depth_notional_usdt" not in loaded and "opportunity_v3_min_depth_notional_usdt" in loaded:
         config["execution_min_depth_notional_usdt"] = loaded["opportunity_v3_min_depth_notional_usdt"]
-    # V4.7.3 starts an isolated evidence generation while inheriting the proven
+    # V4.7.4 starts an isolated evidence generation while inheriting the proven
     # execution safeguards from V4.11 through the capability manifest.
     loaded_v4_version = str(loaded.get("opportunity_v4_strategy_version") or "").lower()
-    if loaded_v4_version in {"v4.4", "v4.5", "v4.6", "v4.6.1", "v4.6.2", "v4.7", "v4.7.2", "v4.8", "v4.9", "v4.10", "v4.11"}:
-        config["opportunity_v4_strategy_version"] = "v4.7.3"
+    if loaded_v4_version in {"v4.4", "v4.5", "v4.6", "v4.6.1", "v4.6.2", "v4.7", "v4.7.2", "v4.7.3", "v4.8", "v4.9", "v4.10", "v4.11"}:
+        config["opportunity_v4_strategy_version"] = "v4.7.4"
         config["opportunity_v410_seed_version"] = "v4.10"
     if not bool(loaded.get("opportunity_v462_time_exit_migrated", False)):
         if int(loaded.get("opportunity_v44_max_hold_bars", 6)) == 6:
@@ -1170,12 +1177,13 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         "extreme_v4_roll@v4.6.2",
         "extreme_v4_roll@v4.7",
         "extreme_v4_roll@v4.7.2",
+        "extreme_v4_roll@v4.7.3",
         "extreme_v4_roll@v4.8",
         "extreme_v4_roll@v4.9",
         "extreme_v4_roll@v4.10",
         "extreme_v4_roll@v4.11",
     }:
-        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.7.3"
+        config["strategy_canary_release_id"] = "extreme_v4_roll@v4.7.4"
     if not include_secret:
         config["api_secret"] = "********" if config.get("api_secret") else ""
         config["api_key"] = mask(config.get("api_key", ""))

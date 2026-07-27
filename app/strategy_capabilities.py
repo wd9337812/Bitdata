@@ -8,6 +8,8 @@ STRATEGY_GENERATION_ALIASES = {
     "v4.7.2": "v4.11",
     # V4.7.3 keeps that safety stack and adds stricter expectancy plus fast exits.
     "v4.7.3": "v4.11",
+    # V4.7.4 makes the candidate protection profile authoritative at runtime.
+    "v4.7.4": "v4.11",
 }
 
 
@@ -22,7 +24,7 @@ def effective_strategy_version(value: Any) -> str:
 def strategy_supports(value: Any, capability: str) -> bool:
     raw_version = str(value or "").strip().lower()
     if capability == "v472_router":
-        return raw_version.startswith(("v4.7.2", "v4.7.3"))
+        return raw_version.startswith(("v4.7.2", "v4.7.3", "v4.7.4"))
     version = effective_strategy_version(value)
     generations = {
         "full_bet": ("v4.4", "v4.5", "v4.6", "v4.7", "v4.8", "v4.9", "v4.10", "v4.11"),

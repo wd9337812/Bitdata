@@ -15,8 +15,11 @@ from sklearn.metrics import log_loss, mean_absolute_error, roc_auc_score
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = ROOT / "data" / "research" / "s0_public_1m" / "s0_candidates_1m.parquet"
-MODEL_VERSION = "s0_binance_moe_v1_3"
+MODEL_VERSION = "s0_binance_moe_v1_4"
 DEFAULT_OUTPUT = ROOT / "data" / "research" / MODEL_VERSION
+DEFAULT_CANDIDATE_STATUS = (
+    ROOT / "app" / "model_artifacts" / "s0_binance_moe_candidate_status.json"
+)
 TRAIN_END = pd.Timestamp("2026-05-01", tz="UTC")
 VALID_END = pd.Timestamp("2026-06-16", tz="UTC")
 EMBARGO = pd.Timedelta(minutes=30)
@@ -302,11 +305,10 @@ def choose_gate_floor(
     combined = selected[4]
     worst_pf = min(float(item.get("profit_factor", 0.0)) for item in selected[5])
     active = bool(
-        regime != "rotation"
-        and selected[0] == len(windows)
-        and worst_pf >= 1.0
+        selected[0] == len(windows)
+        and worst_pf >= 1.05
         and int(combined.get("trades", 0)) >= 60
-        and float(combined.get("profit_factor", 0.0)) >= 1.20
+        and float(combined.get("profit_factor", 0.0)) >= 1.35
         and float(combined.get("net_pct_points", 0.0)) > 0
     )
     return (selected[3] if active else None), {
@@ -314,7 +316,7 @@ def choose_gate_floor(
         "reason": (
             "validated_positive_gate"
             if active
-            else "rotation_noise_or_validation_expectancy_below_release_floor"
+            else "validation_expectancy_below_release_floor"
         ),
         "quantile_search": "0.85..0.995",
         "positive_validation_folds": selected[0],
@@ -342,6 +344,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train the Binance-only S0 mixture of experts.")
     parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument(
+        "--candidate-status-output",
+        type=Path,
+        default=DEFAULT_CANDIDATE_STATUS,
+    )
     parser.add_argument("--max-train-per-expert", type=int, default=300_000)
     return parser.parse_args()
 
@@ -349,6 +356,10 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
+    try:
+        source_label = args.source.resolve().relative_to(ROOT.resolve()).as_posix()
+    except ValueError:
+        source_label = args.source.name
     frame = prepare(pd.read_parquet(args.source))
     train_all = frame[frame.time < TRAIN_END - EMBARGO]
     validation = frame[(frame.time >= TRAIN_END) & (frame.time < VALID_END - EMBARGO)]
@@ -394,9 +405,9 @@ def main() -> None:
         "experiment": MODEL_VERSION,
         "generated_at": pd.Timestamp.now(tz="UTC").isoformat(),
         "scope": "S0 admission shadow challenger; Binance data only",
-        "label": "5 minute protected path, 0.85 ATR stop, 1.05R take-profit, 0.12% round-trip cost",
+        "label": "5 minute protected-path proxy, 0.85 ATR stop, 1.05R take-profit, 0.12% round-trip cost",
         "data": {
-            "source": str(args.source),
+            "source": source_label,
             "total": len(frame),
             "train_available": len(train_all),
             "validation": len(validation),
@@ -407,7 +418,7 @@ def main() -> None:
         },
         "gate": (
             "setup_type routes to an expert; setup and market regime select an independently "
-            "validated threshold; rotation/no-edge cells explicitly choose no trade"
+            "validated threshold; cells without stable cross-window expectancy choose no trade"
         ),
         "fit": fit_report,
         "thresholds": threshold_report,
@@ -425,12 +436,24 @@ def main() -> None:
             "cost_sensitivity": cost_sensitivity(selected_test),
         },
     }
-    eligible = (
-        report["untouched_test"]["moe"]["trades"] >= 80
-        and report["untouched_test"]["moe"]["profit_factor"] > 1.0
-        and report["untouched_test"]["moe"]["net_pct_points"] > 0
-        and report["validation"]["moe"]["profit_factor"] > 1.0
-    )
+    validation_metrics = report["validation"]["moe"]
+    test_metrics = report["untouched_test"]["moe"]
+    stressed_cost = report["untouched_test"]["cost_sensitivity"]["0.16"]
+    selected_regimes = int(selected_test.market_regime.nunique()) if not selected_test.empty else 0
+    release_checks = {
+        "validation_pf": float(validation_metrics.get("profit_factor", 0.0)) >= 1.25,
+        "validation_net": float(validation_metrics.get("net_pct_points", 0.0)) > 0,
+        "untouched_trades": int(test_metrics.get("trades", 0)) >= 300,
+        "untouched_pf": float(test_metrics.get("profit_factor", 0.0)) >= 1.15,
+        "untouched_net": float(test_metrics.get("net_pct_points", 0.0)) > 0,
+        "stressed_cost_pf": float(stressed_cost.get("profit_factor", 0.0)) >= 1.05,
+        "stressed_cost_net": float(stressed_cost.get("net_pct_points", 0.0)) > 0,
+        "market_regimes": selected_regimes >= 2,
+        "symbols": int(test_metrics.get("symbols", 0)) >= 10,
+    }
+    report["release_checks"] = release_checks
+    report["selected_test_regimes"] = selected_regimes
+    eligible = all(release_checks.values())
     report["decision"] = "shadow_candidate" if eligible else "research_only_not_eligible"
     bundle = {
         "version": MODEL_VERSION,
@@ -458,6 +481,42 @@ def main() -> None:
     joblib.dump(bundle, args.output / f"{MODEL_VERSION}.joblib", compress=3)
     (args.output / f"{MODEL_VERSION}_report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    args.candidate_status_output.parent.mkdir(parents=True, exist_ok=True)
+    failed_checks = [name for name, passed in release_checks.items() if not passed]
+    check_labels = {
+        "validation_pf": "验证集 PF",
+        "validation_net": "验证集净收益",
+        "untouched_trades": "未触碰测试样本量",
+        "untouched_pf": "未触碰测试 PF",
+        "untouched_net": "未触碰测试净收益",
+        "stressed_cost_pf": "高成本压力 PF",
+        "stressed_cost_net": "高成本压力净收益",
+        "market_regimes": "市场状态覆盖",
+        "symbols": "币种覆盖",
+    }
+    candidate_status = {
+        "version": MODEL_VERSION,
+        "generated_at": report["generated_at"],
+        "decision": report["decision"],
+        "reason": (
+            "离线未触碰测试与成本压力测试达标，可进入独立影子验证"
+            if eligible
+            else f"未达到上线门槛：{'、'.join(check_labels[name] for name in failed_checks)}"
+        ),
+        "active_gates": len(floors),
+        "data": report["data"],
+        "validation": validation_metrics,
+        "untouched_test": test_metrics,
+        "cost_sensitivity": report["untouched_test"]["cost_sensitivity"],
+        "release_checks": release_checks,
+        "selected_test_regimes": selected_regimes,
+        "affects_live_admission": False,
+        "label_alignment": "5分钟保护路径代理；必须再经过 V4.7.4 独立线上影子验证",
+    }
+    args.candidate_status_output.write_text(
+        json.dumps(candidate_status, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     print(json.dumps(report, ensure_ascii=False, indent=2))

@@ -96,9 +96,15 @@ def init_training_lineage_schema() -> None:
             "ON opportunity_lineage(strategy_family, strategy_version, decision_status, signal_time_ms DESC)"
         )
         _add_column(conn, "opportunity_lineage", "event_id TEXT")
+        _add_column(conn, "opportunity_lineage", "event_group_id TEXT")
+        _add_column(conn, "opportunity_lineage", "execution_id TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_opportunity_lineage_event "
             "ON opportunity_lineage(event_id, strategy_version, signal_time_ms DESC)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_opportunity_lineage_execution "
+            "ON opportunity_lineage(execution_id) WHERE execution_id IS NOT NULL AND execution_id != ''"
         )
         conn.commit()
 
@@ -108,6 +114,8 @@ def ensure_live_lineage_columns(conn: Any) -> None:
         return
     _add_column(conn, "live_trade_records", "opportunity_id TEXT")
     _add_column(conn, "live_trade_records", "event_id TEXT")
+    _add_column(conn, "live_trade_records", "event_group_id TEXT")
+    _add_column(conn, "live_trade_records", "execution_id TEXT")
     _add_column(conn, "live_trade_records", "entry_order_ids TEXT")
     _add_column(conn, "live_trade_records", "exit_order_ids TEXT")
     _add_column(conn, "live_trade_records", "entry_slippage_bps REAL")
@@ -293,6 +301,7 @@ def record_decision_opportunity(decision: dict[str, Any]) -> str | None:
     event_id = ensure_event_id(candidate)
     decision["opportunity_id"] = opportunity_id
     decision["event_id"] = event_id
+    decision["event_group_id"] = event_id
     signal = decision.get("signal") or candidate.get("signal") or {}
     v4 = candidate.get("opportunity_v4") or {}
     structure = candidate.get("market_structure") or {}
@@ -305,16 +314,17 @@ def record_decision_opportunity(decision: dict[str, Any]) -> str | None:
         conn.execute(
             """
             INSERT INTO opportunity_lineage (
-                opportunity_id, event_id, created_at, updated_at, symbol, direction, signal_type,
+                opportunity_id, event_id, event_group_id, created_at, updated_at, symbol, direction, signal_type,
                 setup_type, market_regime, strategy_family, strategy_version, strategy_role,
                 admission_lane, decision_action, decision_status, signal_time_ms,
                 decision_price, stop_price, take_profit_price, requested_quantity,
                 requested_notional, leverage, risk_pct, feature_schema_version,
                 minute_features, decision_payload
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(opportunity_id) DO UPDATE SET
                 updated_at = excluded.updated_at,
                 event_id = excluded.event_id,
+                event_group_id = excluded.event_group_id,
                 strategy_family = excluded.strategy_family,
                 strategy_version = excluded.strategy_version,
                 strategy_role = excluded.strategy_role,
@@ -326,6 +336,7 @@ def record_decision_opportunity(decision: dict[str, Any]) -> str | None:
             """,
             (
                 opportunity_id,
+                event_id,
                 event_id,
                 now_iso(),
                 now_iso(),
@@ -426,6 +437,15 @@ def record_execution_result(decision: dict[str, Any], result: dict[str, Any]) ->
         return
     entry = result.get("entry_order") or {}
     status = "EXECUTED" if result.get("mode") in {"live", "rotation_live"} else str(result.get("mode") or "BLOCKED").upper()
+    execution_id = None
+    if status == "EXECUTED":
+        entry_order_id = _order_id(entry)
+        execution_id = (
+            f"binance:{entry_order_id}"
+            if entry_order_id
+            else f"execution:{uuid.uuid4().hex}"
+        )
+        decision["execution_id"] = execution_id
     with connect() as conn:
         init_training_lineage_schema()
         conn.execute(
@@ -433,7 +453,7 @@ def record_execution_result(decision: dict[str, Any], result: dict[str, Any]) ->
             UPDATE opportunity_lineage
             SET updated_at = ?, decision_status = ?, entry_order_id = ?,
                 entry_client_order_id = ?, stop_order_id = ?, take_profit_order_id = ?,
-                execution_payload = ?
+                execution_id = COALESCE(?, execution_id), execution_payload = ?
             WHERE opportunity_id = ?
             """,
             (
@@ -443,6 +463,7 @@ def record_execution_result(decision: dict[str, Any], result: dict[str, Any]) ->
                 str(entry.get("clientOrderId") or "") or None,
                 _order_id(result.get("stop_order")),
                 _order_id(result.get("take_profit_order")),
+                execution_id,
                 json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str),
                 opportunity_id,
             ),
@@ -483,6 +504,8 @@ def match_trade_record(record: dict[str, Any]) -> dict[str, Any]:
     return {
         "opportunity_id": row["opportunity_id"] if row else None,
         "event_id": row["event_id"] if row else None,
+        "event_group_id": (row["event_group_id"] or row["event_id"]) if row else None,
+        "execution_id": row["execution_id"] if row else None,
         "lineage_quality": quality,
         "strategy_family": row["strategy_family"] if row else None,
         "strategy_version": row["strategy_version"] if row else None,

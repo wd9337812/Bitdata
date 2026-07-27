@@ -24,7 +24,10 @@ def test_moe_shadow_attachment_never_changes_live_admission(monkeypatch):
         },
     )
 
-    result = s0_moe.attach_moe_shadow([candidate], {"s0_moe_shadow_enabled": True})
+    result = s0_moe.attach_moe_shadow(
+        [candidate],
+        {"s0_moe_shadow_enabled": True, "s0_moe_runtime_model_enabled": True},
+    )
 
     assert result[0]["passed"] is True
     assert result[0]["risk_pct"] == 12.0
@@ -53,12 +56,30 @@ def test_breakout_uses_dedicated_v12_expert(monkeypatch, tmp_path):
 
     result = s0_moe.evaluate_candidate(
         {"direction": "LONG"},
-        {"s0_moe_shadow_enabled": True, "s0_moe_model_path": str(model)},
+        {
+            "s0_moe_shadow_enabled": True,
+            "s0_moe_runtime_model_enabled": True,
+            "s0_moe_model_path": str(model),
+        },
     )
 
     assert result["setup_type"] == "breakout"
     assert result["expert"] == "breakout"
     assert result["active_gate"] is False
+
+
+def test_retired_moe_model_does_not_attach_stale_advice():
+    candidate = {
+        "direction": "LONG",
+        "opportunity_v4": {"enabled": True, "rank_percentile": 0.99},
+    }
+
+    result = s0_moe.attach_moe_shadow(
+        [candidate],
+        {"s0_moe_shadow_enabled": True, "s0_moe_runtime_model_enabled": False},
+    )
+
+    assert "moe" not in result[0]["opportunity_v4"]
 
 
 def test_online_metrics_only_treat_passed_rows_as_selected():

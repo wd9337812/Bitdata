@@ -32,6 +32,8 @@ def test_daily_session_resets_once_per_utc_day():
     assert updates["daily_session_date"] == "2026-07-15"
     assert updates["daily_start_equity"] == 19.5
     assert updates["daily_realized_pnl"] == 0.0
+    assert updates["s0_daily_profit_lock_active"] is False
+    assert updates["s0_daily_profit_lock_status"] == {}
     assert unchanged == {}
 
 

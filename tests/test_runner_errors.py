@@ -115,3 +115,43 @@ def test_track_runtime_position_uses_v473_candidate_protection(monkeypatch):
     assert tracked["stagnation_seconds"] == 180
     assert tracked["stagnation_min_profit_pct"] == 0.12
     assert tracked["fast_invalid_seconds"] == 120
+
+
+def test_track_runtime_position_merges_partial_signal_with_v4_candidate_profile(monkeypatch):
+    saved = {}
+    monkeypatch.setattr(runner, "load_state", lambda: {"runtime_protection_positions": {}})
+    monkeypatch.setattr(runner, "save_state", lambda update: saved.update(update) or update)
+
+    decision = {
+        "symbol": "SOLUSDT",
+        "direction": "LONG",
+        "signal": {
+            "atr": 2.5,
+            "protection_profile": {
+                "max_hold_seconds": 1200,
+                "break_even_atr": 0.45,
+            },
+        },
+        "candidate": {
+            "strategy_family": "extreme_v4_roll",
+            "opportunity_v4": {
+                "strategy_version": "v4.7.4",
+                "protection_profile": {
+                    "max_hold_seconds": 480,
+                    "stagnation_seconds": 180,
+                    "stagnation_min_profit_pct": 0.12,
+                    "fast_invalid_seconds": 120,
+                },
+            },
+        },
+    }
+
+    track_runtime_position(decision)
+
+    tracked = saved["runtime_protection_positions"]["SOLUSDT:LONG"]
+    assert tracked["max_hold_seconds"] == 480
+    assert tracked["stagnation_seconds"] == 180
+    assert tracked["break_even_atr"] == 0.45
+    assert tracked["entry_atr"] == 2.5
+    assert tracked["protection_profile_source"] == "v4_candidate_merged"
+    assert decision["signal"]["protection_profile"]["max_hold_seconds"] == 480

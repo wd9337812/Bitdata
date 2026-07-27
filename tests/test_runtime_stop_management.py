@@ -61,6 +61,68 @@ class Client:
         return {"algoId": algo_id}
 
 
+def test_runtime_protection_prefers_websocket_price_and_entry_atr(monkeypatch):
+    class RuntimeClient:
+        def __init__(self):
+            self.position_risk_calls = 0
+            self.kline_calls = 0
+
+        def position_risk(self):
+            self.position_risk_calls += 1
+            return []
+
+        def klines(self, *args):
+            self.kline_calls += 1
+            return []
+
+    now = datetime.now(timezone.utc)
+    state = {
+        "runtime_protection_positions": {
+            "TESTUSDT:LONG": {
+                "opened_at": (now - timedelta(seconds=200)).isoformat(),
+                "entry_atr": 2.0,
+                "stagnation_seconds": 180,
+                "stagnation_min_profit_pct": 0.12,
+                "max_hold_seconds": 480,
+                "strategy_version": "v4.7.4",
+            }
+        }
+    }
+    client = RuntimeClient()
+    monkeypatch.setattr(
+        runtime_protection,
+        "stream_ticker",
+        lambda symbol, max_age_seconds=10: {"lastPrice": "100.05"},
+    )
+    monkeypatch.setattr(runtime_protection, "save_state", lambda update: update)
+
+    result = manage_runtime_protection(
+        client,
+        {
+            "dynamic_protection_runtime_enabled": True,
+            "dry_run": True,
+            "protection_fast_invalid_atr": 0.35,
+        },
+        state,
+        {
+            "positions": [
+                {
+                    "symbol": "TESTUSDT",
+                    "positionAmt": "1",
+                    "entryPrice": "100",
+                }
+            ]
+        },
+    )
+
+    action = result["actions"][0]
+    assert action["action"] == "close_stagnation"
+    assert action["price_source"] == "websocket"
+    assert action["atr_source"] == "entry_snapshot"
+    assert client.position_risk_calls == 0
+    assert client.kline_calls == 0
+
+
 def test_dynamic_stop_is_confirmed_before_old_stop_is_cancelled():
     client = Client()
     tracked = {"trailing_distance_atr": 0.5}

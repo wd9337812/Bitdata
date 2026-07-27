@@ -107,6 +107,8 @@ def test_v472_inherits_execution_safeguards_but_uses_new_router():
     assert strategy_supports("v4.7.2", "healthy_continuation") is True
     assert strategy_supports("v4.7.3", "full_bet") is True
     assert strategy_supports("v4.7.3", "v472_router") is True
+    assert strategy_supports("v4.7.4", "full_bet") is True
+    assert strategy_supports("v4.7.4", "v472_router") is True
     assert strategy_supports("v4.11", "v472_router") is False
 
     pullback = _candidate("PULLUSDT", 0.95, 2.0)

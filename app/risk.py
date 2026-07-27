@@ -141,6 +141,8 @@ def assess_new_position(
     hard_stop = float(config.get("hard_stop_equity", config.get("tournament_stop_equity", 5.0)))
     if hard_stop > 0 and equity <= hard_stop:
         return RiskDecision(False, "hard_stop_equity")
+    if state.get("s0_daily_profit_lock_active"):
+        return RiskDecision(False, "daily_profit_target")
 
     continuous_s0 = s0_continuous_permit_active(config)
     if not continuous_s0:
@@ -183,7 +185,10 @@ def assess_new_position(
         if continuous_s0
         else overrides.get("daily_loss_limit_pct", config.get("daily_loss_limit_pct", 3.0))
     )
-    if daily_start > 0:
+    daily_loss_enabled = not continuous_s0 or bool(
+        config.get("stage_s0_daily_loss_stop_enabled", False)
+    )
+    if daily_loss_enabled and daily_start > 0:
         daily_dd_pct = max(0.0, (daily_start - equity) / daily_start * 100)
         if daily_dd_pct >= daily_loss_limit_pct:
             return RiskDecision(False, "daily_loss_limit")

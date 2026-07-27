@@ -119,7 +119,7 @@ def s0_continuous_permit_status(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
-    version = str(config.get("opportunity_v4_strategy_version") or "v4.7.3")
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.7.4")
     release_id = f"extreme_v4_roll@{version}"
     persisted = load_state()
     stored = persisted.get(STATE_KEY)
@@ -137,21 +137,23 @@ def s0_continuous_permit_status(
     tier_1 = float(config.get("s0_continuous_daily_tier_1_pct", 10.0))
     tier_2 = float(config.get("s0_continuous_daily_tier_2_pct", 20.0))
     pause_at = float(config.get("s0_continuous_daily_pause_pct", 30.0))
+    daily_loss_stop_enabled = bool(config.get("stage_s0_daily_loss_stop_enabled", False))
 
     result_multiplier = _level_multiplier(int(state.get("level") or 0), config)
     if not state.get("processed_trade_ids"):
         result_multiplier = min(result_multiplier, float(config.get("s0_continuous_initial_multiplier", 0.75)))
     daily_cap = 1.0
-    if daily_drawdown_pct >= tier_2:
-        daily_cap = float(config.get("s0_continuous_daily_tier_2_multiplier", 0.50))
-    elif daily_drawdown_pct >= tier_1:
-        daily_cap = float(config.get("s0_continuous_daily_tier_1_multiplier", 0.75))
+    if daily_loss_stop_enabled:
+        if daily_drawdown_pct >= tier_2:
+            daily_cap = float(config.get("s0_continuous_daily_tier_2_multiplier", 0.50))
+        elif daily_drawdown_pct >= tier_1:
+            daily_cap = float(config.get("s0_continuous_daily_tier_1_multiplier", 0.75))
 
     if hard_stop > 0 and current_equity <= hard_stop:
         allowed = False
         status = "hard_stop"
         reason = f"账户权益 {current_equity:.4f}U 已触发 {hard_stop:.2f}U 硬停止线"
-    elif daily_start > 0 and daily_drawdown_pct >= pause_at:
+    elif daily_loss_stop_enabled and daily_start > 0 and daily_drawdown_pct >= pause_at:
         allowed = False
         status = "daily_paused"
         reason = f"当日从 {daily_start:.4f}U 回撤 {daily_drawdown_pct:.2f}%，达到 {pause_at:.2f}% 暂停线"
@@ -184,6 +186,7 @@ def s0_continuous_permit_status(
         "current_equity": round(current_equity, 8),
         "daily_drawdown_pct": round(daily_drawdown_pct, 6),
         "daily_cap_multiplier": round(daily_cap, 6),
+        "daily_loss_stop_enabled": daily_loss_stop_enabled,
         "thresholds": {
             "daily_tier_1_pct": tier_1,
             "daily_tier_2_pct": tier_2,

@@ -14,6 +14,11 @@ from app.training_lineage import capture_minute_features
 
 
 DEFAULT_MODEL = Path(__file__).resolve().parent / "model_artifacts" / "s0_binance_moe_v1_1.joblib"
+DEFAULT_CANDIDATE_STATUS = (
+    Path(__file__).resolve().parent
+    / "model_artifacts"
+    / "s0_binance_moe_candidate_status.json"
+)
 
 
 def _float(value: Any, default: float = math.nan) -> float:
@@ -38,6 +43,26 @@ def clear_moe_cache() -> None:
 def _model_path(config: dict[str, Any]) -> Path:
     configured = str(config.get("s0_moe_model_path") or "").strip()
     return Path(configured) if configured else DEFAULT_MODEL
+
+
+def _candidate_status(config: dict[str, Any]) -> dict[str, Any]:
+    configured = str(config.get("s0_moe_candidate_status_path") or "").strip()
+    path = Path(configured) if configured else DEFAULT_CANDIDATE_STATUS
+    if not path.exists():
+        return {
+            "version": "s0_binance_moe_v1_4",
+            "decision": "not_trained",
+            "reason": "尚未生成 MoE v1.4 离线候选报告",
+        }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {
+            "version": "s0_binance_moe_v1_4",
+            "decision": "status_unreadable",
+            "reason": "MoE v1.4 候选报告无法读取",
+        }
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -303,6 +328,13 @@ def _feature_row(candidate: dict[str, Any]) -> dict[str, Any]:
 def evaluate_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     if not config.get("s0_moe_shadow_enabled", True):
         return {"enabled": False, "mode": "shadow_only", "reason": "disabled"}
+    if not config.get("s0_moe_runtime_model_enabled", False):
+        return {
+            "enabled": False,
+            "mode": "shadow_only",
+            "reason": "runtime_model_retired",
+            "affects_live_admission": False,
+        }
     path = _model_path(config)
     if not path.exists():
         return {"enabled": False, "mode": "shadow_only", "reason": "model_missing"}
@@ -369,7 +401,9 @@ def evaluate_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dic
 
 
 def attach_moe_shadow(candidates: list[dict[str, Any]], config: dict[str, Any]) -> list[dict[str, Any]]:
-    if not config.get("s0_moe_shadow_enabled", True):
+    if not config.get("s0_moe_shadow_enabled", True) or not config.get(
+        "s0_moe_runtime_model_enabled", False
+    ):
         return candidates
     limit = max(1, int(config.get("s0_moe_shadow_candidate_limit", 25)))
     eligible = [
@@ -389,12 +423,16 @@ def attach_moe_shadow(candidates: list[dict[str, Any]], config: dict[str, Any]) 
 
 def moe_runtime_status(config: dict[str, Any]) -> dict[str, Any]:
     path = _model_path(config)
+    runtime_model_enabled = bool(config.get("s0_moe_runtime_model_enabled", False))
     base = {
         "enabled": bool(config.get("s0_moe_shadow_enabled", True)),
+        "runtime_model_enabled": runtime_model_enabled,
+        "runtime_status": "active" if runtime_model_enabled else "retired",
         "mode": "shadow_only",
         "affects_live_admission": False,
         "model_path": str(path),
         "model_exists": path.exists(),
+        "candidate": _candidate_status(config),
         "candidate_limit": int(config.get("s0_moe_shadow_candidate_limit", 25)),
         "rest_requests": 0,
     }

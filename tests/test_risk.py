@@ -161,6 +161,7 @@ def test_v45_continuous_admission_ignores_legacy_loss_cooldowns_but_keeps_daily_
         "opportunity_v4_strategy_version": "v4.5",
         "s0_continuous_permit_enabled": True,
         "s0_continuous_daily_pause_pct": 30,
+        "stage_s0_daily_loss_stop_enabled": True,
         "legacy_symbol_cooldown_blocks": True,
         "_stage_route": {"stage": "S0"},
     }
@@ -181,6 +182,35 @@ def test_v45_continuous_admission_ignores_legacy_loss_cooldowns_but_keeps_daily_
     assert allowed.allowed is True
     assert paused.allowed is False
     assert paused.reason == "daily_loss_limit"
+
+
+def test_s0_can_disable_ordinary_daily_loss_stop_but_keeps_profit_lock():
+    config = {
+        **base_config(),
+        "opportunity_v4_strategy_version": "v4.7.4",
+        "s0_continuous_permit_enabled": True,
+        "stage_s0_daily_loss_stop_enabled": False,
+        "_stage_route": {"stage": "S0"},
+    }
+    state = {
+        "bot_status": "running",
+        "daily_start_equity": 20,
+        "equity_high_watermark": 100,
+    }
+
+    allowed = assess_new_position(config, state, 8.0, "SOLUSDT", [], overrides={"direction": "LONG"})
+    locked = assess_new_position(
+        config,
+        {**state, "s0_daily_profit_lock_active": True},
+        28.0,
+        "SOLUSDT",
+        [],
+        overrides={"direction": "LONG"},
+    )
+
+    assert allowed.allowed is True
+    assert locked.allowed is False
+    assert locked.reason == "daily_profit_target"
 
 
 def test_equity_guard_scales_then_pauses_on_high_watermark_drawdown():

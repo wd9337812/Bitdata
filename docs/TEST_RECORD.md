@@ -492,3 +492,15 @@ This file tracks local verification for the two-stage futures system.
 - Runtime route verified as `extreme_v4_roll@v4.8`; the live `DEXEUSDT` position was tracked with `s0_full_bet_v48` and remained protected by one exchange stop-loss and one take-profit order.
 - Public and private WebSocket streams were connected; REST cooldown was inactive. No recent 429/500/502, database-lock, traceback, or container restart errors were found.
 - Post-deployment account check: equity about `28.67 U`, one protected position, zero normal open orders, and two conditional protection orders. The robot remained running.
+
+## 2026-07-27 v0.25.0 / V4.7.4 本地验证
+
+- 修复候选保护档案被信号层半成品字典整体覆盖的问题；新增字段级合并和来源留档测试。
+- 持仓监督默认每 5 秒运行，测试确认优先使用 WebSocket 最新价和入场 ATR，二者有效时不调用 REST 价格与 K 线接口。
+- 新增 S0 当日净利润锁测试：达到 40% 目标且有持仓时只等待空仓，空仓后锁定新开仓，S1 及以上不受影响。
+- 测试确认关闭 S0 普通日亏损停牌后，5U 硬停止和当日净利润锁仍可独立阻断新仓。
+- 行情事件与真实执行增加独立编号，测试确认同一行情可关联研究样本、每次 Binance 成交仍保持唯一执行身份。
+- MoE v1.4 使用约 214 万条、119 个币的 Binance 候选训练。未触碰测试 115 笔、PF 1.0949、净收益 +7.449 个百分点；0.16% 成本压力 PF 1.0353，只覆盖一个市场状态，因此判定为 `research_only_not_eligible`。
+- Python 编译检查通过；完整后端测试 `334 passed`。
+- 前端 `npm run build` 通过，生成 `index-BmeJuspv.js` 与版本化 CSS/依赖资源。
+- 本地 HTTP 冒烟：首页返回 HTTP 200；桌面与 390px 手机视口均正常，手机页面无横向溢出，浏览器控制台无错误。

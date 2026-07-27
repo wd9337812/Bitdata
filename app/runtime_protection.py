@@ -6,7 +6,7 @@ from typing import Any
 from app.binance_client import BinanceFuturesClient
 from app.binance_rate import request_priority
 from app.exchange_filters import ExchangeFilters
-from app.market_stream import stream_depth
+from app.market_stream import stream_depth, stream_ticker
 from app.protection_audit import audit_position_protection, enrich_positions_with_prices
 from app.risk import live_trading_allowed
 from app.state_store import save_state
@@ -681,10 +681,12 @@ def build_runtime_protection_action(
             opened_at = _now()
     age_seconds = max(0.0, (_now() - opened_at).total_seconds())
     interval = str(config.get("extreme_sprint_interval") or config.get("interval") or "5m")
-    atr_value = 0.0
-    if client is not None:
+    atr_value = float(tracked_item.get("entry_atr") or 0.0)
+    atr_source = "entry_snapshot" if atr_value > 0 else "missing"
+    if atr_value <= 0 and client is not None:
         try:
             atr_value = _atr_value(client, symbol, interval)
+            atr_source = "rest_kline"
         except Exception as exc:
             record_event("warning", "runtime_protection", f"ATR check failed for {symbol}: {exc}")
     atr_pct = atr_value / mark * 100 if mark > 0 and atr_value > 0 else 0.0
@@ -745,6 +747,8 @@ def build_runtime_protection_action(
         "pnl_pct": round(pnl_pct, 6),
         "age_seconds": round(age_seconds, 3),
         "atr_pct": round(atr_pct, 6),
+        "atr_source": atr_source,
+        "price_source": position.get("mark_price_source") or "account",
         "fast_invalid_pct": round(fast_invalid_pct, 6),
         "stagnation_seconds": stagnation_seconds,
         "stagnation_min_profit_pct": round(stagnation_min_profit_pct, 6),
@@ -765,9 +769,27 @@ def _manage_runtime_protection(
     if not config.get("dynamic_protection_runtime_enabled", True):
         return {"enabled": False, "actions": []}
     positions = [item for item in account.get("positions", []) if abs(_position_amount(item)) > 0]
-    if positions and client is not None:
+    missing_price_symbols: set[str] = set()
+    enriched_positions: list[dict[str, Any]] = []
+    stream_max_age = int(config.get("runtime_protection_stream_price_max_age_seconds", 10))
+    for position in positions:
+        enriched = dict(position)
+        symbol = _position_symbol(enriched)
+        ticker = stream_ticker(symbol, max_age_seconds=stream_max_age)
+        stream_price = float((ticker or {}).get("lastPrice") or 0.0)
+        if stream_price > 0:
+            enriched["markPrice"] = str(stream_price)
+            enriched["mark_price_source"] = "websocket"
+        elif _mark_price(enriched) <= 0:
+            missing_price_symbols.add(symbol)
+        enriched_positions.append(enriched)
+    positions = enriched_positions
+    if missing_price_symbols and client is not None:
         try:
             positions = enrich_positions_with_prices(positions, client.position_risk())
+            for position in positions:
+                if _position_symbol(position) in missing_price_symbols:
+                    position["mark_price_source"] = "positionRisk"
         except Exception as exc:
             record_event_throttled(
                 "warning",

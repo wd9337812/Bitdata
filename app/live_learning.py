@@ -401,7 +401,8 @@ def upsert_trade_records(records: list[dict[str, Any]]) -> int:
                     opportunity_id, entry_order_ids, exit_order_ids, entry_slippage_bps,
                     exit_reason, lineage_quality, strategy_family, strategy_version,
                     strategy_role, release_id, event_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    , event_group_id, execution_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record["symbol"],
@@ -433,6 +434,8 @@ def upsert_trade_records(records: list[dict[str, Any]]) -> int:
                     record.get("strategy_role"),
                     record.get("release_id"),
                     record.get("event_id"),
+                    record.get("event_group_id") or record.get("event_id"),
+                    record.get("execution_id"),
                 ),
             )
             inserted += 1
