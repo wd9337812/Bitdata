@@ -389,12 +389,30 @@ def score_records(records: list[dict[str, Any]], config: dict[str, Any]) -> dict
 
 def upsert_trade_records(records: list[dict[str, Any]]) -> int:
     init_live_learning_schema()
+    prepared_records: list[dict[str, Any]] = []
+    for source in records:
+        record = dict(source)
+        try:
+            lineage = match_trade_record(record)
+            for key, value in lineage.items():
+                if value is not None and record.get(key) in {None, ""}:
+                    record[key] = value
+            if record.get("strategy_family") and record.get("strategy_version"):
+                record["release_id"] = release_id(
+                    str(record["strategy_family"]),
+                    str(record["strategy_version"]),
+                )
+            finalize_trade_lineage(record)
+        except sqlite3.OperationalError:
+            record.setdefault("lineage_quality", "unavailable")
+        prepared_records.append(record)
+
     inserted = 0
     with connect() as conn:
-        for record in records:
+        for record in prepared_records:
             conn.execute(
                 """
-                INSERT OR REPLACE INTO live_trade_records (
+                INSERT INTO live_trade_records (
                     symbol, direction, open_time, close_time, open_price, close_price,
                     quantity, open_notional, close_notional, realized_pnl, commission,
                     funding_fee, net_pnl, hold_seconds, trade_count, source, payload, created_at,
@@ -403,6 +421,78 @@ def upsert_trade_records(records: list[dict[str, Any]]) -> int:
                     strategy_role, release_id, event_id
                     , event_group_id, execution_id
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(symbol, direction, open_time, close_time) DO UPDATE SET
+                    open_price = excluded.open_price,
+                    close_price = excluded.close_price,
+                    quantity = excluded.quantity,
+                    open_notional = excluded.open_notional,
+                    close_notional = excluded.close_notional,
+                    realized_pnl = excluded.realized_pnl,
+                    commission = excluded.commission,
+                    funding_fee = excluded.funding_fee,
+                    net_pnl = excluded.net_pnl,
+                    hold_seconds = excluded.hold_seconds,
+                    trade_count = excluded.trade_count,
+                    source = excluded.source,
+                    payload = CASE
+                        WHEN excluded.payload NOT IN ('', '{}') THEN excluded.payload
+                        ELSE live_trade_records.payload
+                    END,
+                    opportunity_id = COALESCE(
+                        NULLIF(excluded.opportunity_id, ''),
+                        live_trade_records.opportunity_id
+                    ),
+                    entry_order_ids = CASE
+                        WHEN excluded.entry_order_ids NOT IN ('', '[]') THEN excluded.entry_order_ids
+                        ELSE live_trade_records.entry_order_ids
+                    END,
+                    exit_order_ids = CASE
+                        WHEN excluded.exit_order_ids NOT IN ('', '[]') THEN excluded.exit_order_ids
+                        ELSE live_trade_records.exit_order_ids
+                    END,
+                    entry_slippage_bps = COALESCE(
+                        excluded.entry_slippage_bps,
+                        live_trade_records.entry_slippage_bps
+                    ),
+                    exit_reason = COALESCE(
+                        NULLIF(excluded.exit_reason, ''),
+                        live_trade_records.exit_reason
+                    ),
+                    lineage_quality = CASE
+                        WHEN excluded.lineage_quality = 'exact_order_id'
+                            THEN excluded.lineage_quality
+                        WHEN live_trade_records.lineage_quality IS NOT NULL
+                            THEN live_trade_records.lineage_quality
+                        ELSE excluded.lineage_quality
+                    END,
+                    strategy_family = COALESCE(
+                        NULLIF(excluded.strategy_family, ''),
+                        live_trade_records.strategy_family
+                    ),
+                    strategy_version = COALESCE(
+                        NULLIF(excluded.strategy_version, ''),
+                        live_trade_records.strategy_version
+                    ),
+                    strategy_role = COALESCE(
+                        NULLIF(excluded.strategy_role, ''),
+                        live_trade_records.strategy_role
+                    ),
+                    release_id = COALESCE(
+                        NULLIF(excluded.release_id, ''),
+                        live_trade_records.release_id
+                    ),
+                    event_id = COALESCE(
+                        NULLIF(excluded.event_id, ''),
+                        live_trade_records.event_id
+                    ),
+                    event_group_id = COALESCE(
+                        NULLIF(excluded.event_group_id, ''),
+                        live_trade_records.event_group_id
+                    ),
+                    execution_id = COALESCE(
+                        NULLIF(excluded.execution_id, ''),
+                        live_trade_records.execution_id
+                    )
                 """,
                 (
                     record["symbol"],

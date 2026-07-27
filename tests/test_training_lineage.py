@@ -146,6 +146,61 @@ def test_exact_order_lineage_captures_features_and_real_costs(monkeypatch, tmp_p
     assert quality["live"]["exact_matches"] == 1
     assert quality["live"]["slippage_rows"] == 1
     assert quality["live"]["events"] == 1
+    with connect() as conn:
+        stored = dict(
+            conn.execute(
+                "SELECT id, execution_id, exit_reason, lineage_quality "
+                "FROM live_trade_records WHERE symbol = 'BTCUSDT'"
+            ).fetchone()
+        )
+    assert stored["execution_id"] == "binance:123"
+    assert stored["exit_reason"] == "take_profit"
+    assert stored["lineage_quality"] == "exact_order_id"
+
+    monkeypatch.setattr(
+        "app.live_learning.match_trade_record",
+        lambda _: {
+            "opportunity_id": None,
+            "event_id": None,
+            "event_group_id": None,
+            "execution_id": None,
+            "lineage_quality": "unmatched",
+            "strategy_family": None,
+            "strategy_version": None,
+            "strategy_role": None,
+        },
+    )
+    monkeypatch.setattr("app.live_learning.finalize_trade_lineage", lambda _: None)
+    raw_record = {
+        key: value
+        for key, value in record.items()
+        if key
+        not in {
+            "opportunity_id",
+            "event_id",
+            "event_group_id",
+            "execution_id",
+            "lineage_quality",
+            "entry_slippage_bps",
+            "exit_reason",
+            "strategy_family",
+            "strategy_version",
+            "strategy_role",
+            "release_id",
+        }
+    }
+    raw_record["entry_order_ids"] = []
+    raw_record["exit_order_ids"] = []
+    upsert_trade_records([raw_record])
+
+    with connect() as conn:
+        preserved = dict(
+            conn.execute(
+                "SELECT id, execution_id, exit_reason, lineage_quality "
+                "FROM live_trade_records WHERE symbol = 'BTCUSDT'"
+            ).fetchone()
+        )
+    assert preserved == stored
 
 
 def test_user_trade_reconciliation_preserves_order_ids_and_split_commission():
