@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from app.strategy_capabilities import strategy_family_for_version
+from app.strategy_capabilities import strategy_family_for_version, strategy_supports
 
 
 STAGE_PROFILES = [
@@ -133,6 +133,21 @@ def _profile_values(profile: dict[str, Any], config: dict[str, Any], equity: flo
     result["base_risk_pct"] = result["risk_pct"]
     result["margin_pct"] = float(config.get(profile["margin_key"], profile["margin_default"]))
     result["leverage"] = float(config.get(profile["leverage_key"], profile["leverage_default"]))
+    if result.get("stage") == "S0" and strategy_supports(
+        config.get("opportunity_v4_strategy_version"), "v50_s30"
+    ):
+        # V5 is a separate S0 risk profile. Do not let an older persisted V4
+        # stage value silently cap the new strategy at the legacy 15% ceiling.
+        result["risk_pct"] = float(
+            config.get("opportunity_v50_max_risk_pct", 30.0)
+        )
+        result["base_risk_pct"] = result["risk_pct"]
+        result["margin_pct"] = float(
+            config.get("opportunity_v50_margin_pct", 90.0)
+        )
+        result["leverage"] = float(
+            config.get("opportunity_v50_max_leverage", 10.0)
+        )
     result["daily_loss_limit_pct"] = float(
         config.get(profile["daily_loss_key"], profile["daily_loss_default"])
     )

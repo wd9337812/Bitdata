@@ -29,6 +29,24 @@ def test_v4_live_switch_updates_growth_stage_identity():
     assert route["strategy_family"] == "extreme_v4_roll"
 
 
+def test_v50_s30_ignores_persisted_legacy_s0_risk_ceiling():
+    config = {
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v4_strategy_version": "v5.0-s30",
+        "stage_s0_risk_pct": 15.0,
+        "opportunity_v50_max_risk_pct": 30.0,
+        "opportunity_v50_margin_pct": 90.0,
+        "opportunity_v50_max_leverage": 10,
+    }
+
+    profile = stage_profile_for_equity(11.0, config)
+
+    assert profile["strategy_family"] == "extreme_v5_roll"
+    assert profile["risk_pct"] == 30.0
+    assert profile["margin_pct"] == 90.0
+    assert profile["leverage"] == 10.0
+
+
 def test_upward_switch_requires_buffer_and_three_confirmations():
     config = {"stage_routing_enabled": True, "stage_switch_up_buffer_pct": 5, "stage_switch_confirmations": 3}
     state = {"active_stage": "S2", "active_growth_mode": "extreme_sprint"}

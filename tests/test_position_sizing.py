@@ -98,3 +98,30 @@ def test_v432_canary_caps_continuous_risk_once_and_release_fallback_restores_bas
     assert fallback["continuous_quality_applied"] is False
     assert fallback["release_fallback_active"] is True
     assert fallback["final_risk_pct"] == 2.8
+
+
+def test_v50_risk_profile_is_not_capped_by_persisted_v4_stage_route():
+    result = effective_position_risk(
+        candidate_risk_pct=30.0,
+        candidate={
+            "opportunity_v4": {
+                "position_confidence": {
+                    "applied": True,
+                    "confidence": 1.0,
+                    "target_initial_risk_pct": 30.0,
+                }
+            },
+            "global_performance_guard": {"status": "normal", "risk_multiplier": 1.0},
+        },
+        guard={"allowed": True, "risk_multiplier": 1.0},
+        target={"effective_risk_multiplier": 1.0},
+        config={
+            "effective_position_sizing_enabled": True,
+            "opportunity_v4_strategy_version": "v5.0-s30",
+            "opportunity_v50_max_risk_pct": 30.0,
+            "_stage_route": {"stage": "S0", "risk_pct": 15.0},
+        },
+        mode="extreme_sprint",
+    )
+
+    assert result["final_risk_pct"] == 30.0

@@ -240,7 +240,8 @@ def effective_position_risk(
         max_risk = float(yolo_profile.get("max_risk_pct") or max_risk)
     stage_route = config.get("_stage_route") or {}
     stage_risk_cap = float(stage_route.get("risk_pct") or 0.0)
-    if stage_risk_cap > 0:
+    version = str(config.get("opportunity_v4_strategy_version") or "")
+    if stage_risk_cap > 0 and not strategy_supports(version, "v50_s30"):
         max_risk = min(max_risk, stage_risk_cap) if max_risk > 0 else stage_risk_cap
     if max_risk > 0:
         final_risk = min(final_risk, max_risk)
