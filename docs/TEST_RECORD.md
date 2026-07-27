@@ -517,3 +517,6 @@ This file tracks local verification for the two-stage futures system.
 - 前端 `npm run build` 通过，生成 `index-BB_WEk20.js` 与版本化 CSS/依赖资源。
 - 本地 HTTP 冒烟：首页与 `5` 个版本化 JS/CSS 资源全部返回 HTTP 200。
 - 完整数据口径、时间切分、回放结果和发布边界归档于 `docs/v0.25.2-vps-history-replay-hybrid-moe-2026-07-27.md`。
+- VPS 已部署提交 `4971b75`；部署前后均为空仓、普通订单 `0`、条件订单 `0`，机器人保持运行，S0 仍路由至 `extreme_v4_roll@v4.7.4`。
+- MoE v1.5 线上模型加载成功，首个完整扫描周期写入 `36` 条评估影子和 `4` 条选中影子，全部明确 `affects_live_admission=false`。
+- 部署后 Dashboard、公共/私有 WebSocket、REST 频控正常，未发现 429/500/502、数据库锁、推理异常或容器重启。
