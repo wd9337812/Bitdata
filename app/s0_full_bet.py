@@ -9,6 +9,11 @@ def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
 
+def _profile_prefix(config: dict[str, Any]) -> str:
+    version = str(config.get("opportunity_v4_strategy_version") or "").lower()
+    return "opportunity_v50" if strategy_supports(version, "v50_s30") else "opportunity_v44"
+
+
 def s0_full_bet_profile_active(config: dict[str, Any]) -> bool:
     route = config.get("_stage_route") or {}
     stage = str(route.get("stage") or "S0").upper()
@@ -61,7 +66,8 @@ def build_s0_full_bet_sizing(
 
     available = float(available_balance) if available_balance is not None else equity
     capital = min(equity, max(0.0, available))
-    margin_pct = _clamp(float(config.get("opportunity_v44_margin_pct", 90.0)), 1.0, 99.0)
+    prefix = _profile_prefix(config)
+    margin_pct = _clamp(float(config.get(f"{prefix}_margin_pct", 90.0)), 1.0, 99.0)
     margin_budget = capital * margin_pct / 100
 
     opportunity = (candidate or {}).get("opportunity_v4") or {}
@@ -71,19 +77,20 @@ def build_s0_full_bet_sizing(
         float(config.get("taker_fee_pct_round_trip", 0.08))
         + 2 * float(config.get("estimated_slippage_pct", 0.03)),
     )
-    cost_stress = max(1.0, float(config.get("opportunity_v44_cost_stress_multiplier", 1.5)))
+    cost_stress = max(1.0, float(config.get(f"{prefix}_cost_stress_multiplier", 1.5)))
     stressed_cost_pct = observed_cost_pct * cost_stress
     stop_distance_pct = abs(entry - stop) / entry * 100
     stressed_loss_per_notional_pct = stop_distance_pct + stressed_cost_pct
 
-    hard_risk_cap = max(0.01, float(config.get("opportunity_v44_stressed_risk_cap_pct", 15.0)))
+    default_cap = 30.0 if prefix == "opportunity_v50" else 15.0
+    hard_risk_cap = max(0.01, float(config.get(f"{prefix}_stressed_risk_cap_pct", default_cap)))
     maximum_risk = min(
         hard_risk_cap,
-        max(0.01, float(config.get("opportunity_v44_max_risk_pct", 15.0))),
+        max(0.01, float(config.get(f"{prefix}_max_risk_pct", default_cap))),
     )
     minimum_risk = min(
         maximum_risk,
-        max(0.01, float(config.get("opportunity_v44_min_risk_pct", 8.0))),
+        max(0.01, float(config.get(f"{prefix}_min_risk_pct", 12.0 if prefix == "opportunity_v50" else 8.0))),
     )
     target_risk = _clamp(float(requested_risk_pct), 0.0, maximum_risk)
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
@@ -91,8 +98,8 @@ def build_s0_full_bet_sizing(
         target_risk = min(target_risk, float(config.get("opportunity_v44_loss_reduced_risk_pct", 8.0)))
     safety_cap_active = target_risk + 1e-9 < minimum_risk
 
-    min_leverage = max(1, int(config.get("opportunity_v44_min_leverage", 3)))
-    max_leverage = max(min_leverage, int(config.get("opportunity_v44_max_leverage", 10)))
+    min_leverage = max(1, int(config.get(f"{prefix}_min_leverage", 3)))
+    max_leverage = max(min_leverage, int(config.get(f"{prefix}_max_leverage", 10)))
     selected_leverage = min_leverage
     for leverage in range(min_leverage, max_leverage + 1):
         projected = (
@@ -119,7 +126,9 @@ def build_s0_full_bet_sizing(
         "enabled": True,
         "applied": True,
         "profile": (
-            "s0_full_bet_v474"
+            "s0_full_bet_v50_s30"
+            if strategy_supports(version, "v50_s30")
+            else "s0_full_bet_v474"
             if version.startswith("v4.7.4")
             else "s0_full_bet_v473"
             if version.startswith("v4.7.3")
@@ -154,4 +163,13 @@ def build_s0_full_bet_sizing(
 
 
 def full_bet_rotation_required_edge_r(config: dict[str, Any]) -> float:
-    return max(0.0, float(config.get("opportunity_v44_rotation_min_edge_r", 0.35)))
+    prefix = _profile_prefix(config)
+    return max(
+        0.0,
+        float(
+            config.get(
+                f"{prefix}_rotation_min_edge_r",
+                config.get("opportunity_v44_rotation_min_edge_r", 0.35),
+            )
+        ),
+    )

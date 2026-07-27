@@ -11,13 +11,18 @@ from typing import Any
 from app.adaptive_calibration import adaptive_calibration
 from app.local_circuit import candidate_local_circuit_status, local_circuit_state
 from app.market_structure import MARKET_STRUCTURE_SCHEMA, market_structure, normalize_setup_type
-from app.strategy_capabilities import strategy_supports
+from app.strategy_capabilities import (
+    V5_STRATEGY_FAMILY,
+    strategy_family_for_version,
+    strategy_supports,
+)
 from app.telemetry import connect, db_path
 
 
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
 V4_FEATURE_SCHEMA = "v4.7.4"
+V5_FEATURE_SCHEMA = "v5.0-s30"
 
 V462_FEATURE_WEIGHTS = {
     "cross_sectional_strength": 0.08,
@@ -41,6 +46,25 @@ V411_FEATURE_WEIGHTS = {
     "entry_quality": 0.08,
     "anti_chase": 0.13,
     "liquidity": 0.02,
+}
+
+V50_FEATURE_WEIGHTS = {
+    "cross_sectional_strength": 0.12,
+    "regime_fit": 0.18,
+    "volume_persistence": 0.12,
+    "directed_flow": 0.20,
+    "medium_path": 0.16,
+    "medium_alignment": 0.10,
+    "entry_quality": 0.07,
+    "anti_chase": 0.04,
+    "liquidity": 0.01,
+}
+
+V50_SETUP_ADJUSTMENTS = {
+    "momentum": 0.03,
+    "breakout": 0.01,
+    "pullback": 0.05,
+    "prebreakout": -0.02,
 }
 
 V462_SETUP_ADJUSTMENTS = {
@@ -82,10 +106,12 @@ def _market_regime(candidate: dict[str, Any]) -> str:
 
 
 def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Load one independent decision result per opportunity for the active V4 release."""
+    """Load one independent decision result per opportunity for the active release."""
     lookback_hours = float(config.get("opportunity_v4_evidence_lookback_hours", 168))
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
     limit = int(config.get("opportunity_v4_evidence_max_trades", 2500))
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
+    family = strategy_family_for_version(version)
     with connect() as conn:
         try:
             columns = {str(row[1]) for row in conn.execute("PRAGMA table_info(shadow_trades)").fetchall()}
@@ -96,8 +122,8 @@ def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "WHERE status = 'CLOSED' AND strategy_family = ? AND strategy_version = ? "
                 "AND closed_at >= ? ORDER BY id DESC LIMIT ?",
                 (
-                    V4_STRATEGY_FAMILY,
-                    str(config.get("opportunity_v4_strategy_version") or "v4.3.2"),
+                    family,
+                    version,
                     cutoff,
                     limit,
                 ),
@@ -144,7 +170,8 @@ def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def evidence_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
-    key = f"{db_path()}:{config.get('opportunity_v4_strategy_version', 'v4.3.2')}"
+    version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
+    key = f"{db_path()}:{strategy_family_for_version(version)}:{version}"
     now = time.monotonic()
     ttl = float(config.get("opportunity_v4_evidence_cache_seconds", 60))
     cached = _CACHE.get(key)
@@ -488,18 +515,41 @@ def _v48_reentry_policy(
 
 def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], config: dict[str, Any]) -> dict[str, float]:
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
-    weights = V411_FEATURE_WEIGHTS if strategy_supports(version, "healthy_continuation") else V462_FEATURE_WEIGHTS
+    weights = (
+        V50_FEATURE_WEIGHTS
+        if strategy_supports(version, "v50_s30")
+        else V411_FEATURE_WEIGHTS
+        if strategy_supports(version, "healthy_continuation")
+        else V462_FEATURE_WEIGHTS
+    )
     base_quality = sum(features[name] * weight for name, weight in weights.items())
     structure = market_structure(candidate)
     setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
     setup_adjustments = (
+        V50_SETUP_ADJUSTMENTS
+        if strategy_supports(version, "v50_s30")
+        else
         V472_SETUP_ADJUSTMENTS
         if strategy_supports(version, "v472_router")
         else V462_SETUP_ADJUSTMENTS
     )
     setup_adjustment = setup_adjustments.get(setup_type, 0.0)
     smart_points = float(candidate.get("smart_flow_score_delta") or 0.0)
-    if strategy_supports(version, "exhaustion_reentry"):
+    if strategy_supports(version, "v50_s30"):
+        smart = candidate.get("smart_flow") or {}
+        confirmed = bool(
+            smart.get("available")
+            and float(smart.get("confidence") or 0.0)
+            >= float(config.get("smart_flow_min_confidence", 0.45))
+            and features["anti_chase"] >= 0.40
+            and features["medium_path"] >= 0.30
+        )
+        smart_points = _clamp(
+            smart_points if confirmed else 0.0,
+            -float(config.get("opportunity_v50_smart_flow_max_points", 10.0)),
+            float(config.get("opportunity_v50_smart_flow_max_points", 10.0)),
+        )
+    elif strategy_supports(version, "exhaustion_reentry"):
         smart = candidate.get("smart_flow") or {}
         confirmed = bool(
             smart.get("available")
@@ -624,6 +674,7 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
     v44_active = bool(strategy_supports(version, "full_bet") and config.get("opportunity_v44_full_bet_enabled", True))
     v472_router = strategy_supports(version, "v472_router")
+    v50_active = strategy_supports(version, "v50_s30")
     v44_structure = bool(
         (setup_type == "pullback" and phase == "RETEST")
         or (not v472_router and setup_type in {"momentum", "prebreakout"})
@@ -636,6 +687,21 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
             "exploration_scope": False,
             "trend_aligned": True,
             "reason": f"{version_label} 当前方向与中周期趋势一致，进入全仓短打候选通道",
+        }
+    if (
+        v50_active
+        and regime == "mixed"
+        and trend_aligned
+        and setup_type in {"momentum", "pullback", "breakout"}
+        and (setup_type != "pullback" or phase == "RETEST")
+    ):
+        return {
+            "scope": "v50_mixed_trend_aligned_full_bet",
+            "live_scope": True,
+            "canary_scope": True,
+            "exploration_scope": False,
+            "trend_aligned": True,
+            "reason": "V5 混合行情中只执行与中周期一致的短打机会",
         }
     if regime == "quiet" and direction == "LONG" and aligned and setup_type == "pullback" and phase == "RETEST":
         return {
@@ -733,21 +799,27 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
 def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2").lower()
     if strategy_supports(version, "full_bet") and config.get("opportunity_v44_full_bet_enabled", True):
-        stop_atr = float(config.get("opportunity_v44_stop_atr", 0.85))
-        take_profit_r = float(config.get("opportunity_v44_take_profit_r", 1.05))
+        v50_active = strategy_supports(version, "v50_s30")
+        profile_prefix = "opportunity_v50" if v50_active else "opportunity_v44"
+        stop_atr = float(config.get(f"{profile_prefix}_stop_atr", 0.85))
+        take_profit_r = float(config.get(f"{profile_prefix}_take_profit_r", 1.05))
         setup_type = normalize_setup_type(
             market_structure(candidate).get("setup_type") or candidate.get("entry_type")
         )
         v473_active = version.startswith(("v4.7.3", "v4.7.4"))
         max_hold_bars = (
-            int(config.get("opportunity_v472_pullback_max_hold_bars", 4))
+            int(config.get("opportunity_v50_max_hold_bars", 3))
+            if v50_active
+            else int(config.get("opportunity_v472_pullback_max_hold_bars", 4))
             if strategy_supports(version, "v472_router") and setup_type == "pullback"
             else int(config.get("opportunity_v44_max_hold_bars", 2))
         )
         profile = {
             "entry_phase": _entry_phase(candidate),
             "profile": (
-                "s0_full_bet_v474"
+                "s0_full_bet_v50_s30"
+                if v50_active
+                else "s0_full_bet_v474"
                 if version.startswith("v4.7.4")
                 else "s0_full_bet_v473"
                 if v473_active
@@ -758,7 +830,7 @@ def _protection_profile(candidate: dict[str, Any], config: dict[str, Any]) -> di
             "max_hold_bars": max_hold_bars,
             "fast_invalid_atr": stop_atr * 0.45,
             "break_even_trigger_atr": stop_atr
-            * float(config.get("opportunity_v44_break_even_trigger_r", 0.45)),
+            * float(config.get(f"{profile_prefix}_break_even_trigger_r", 0.45)),
             "trailing_trigger_atr": stop_atr * 0.85,
             "trailing_distance_atr": stop_atr * 0.50,
         }
@@ -894,13 +966,14 @@ def continuous_position_confidence(opportunity: dict[str, Any], config: dict[str
 
 def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     version_label = str(config.get("opportunity_v4_strategy_version") or "v4.9").upper()
+    v50_active = strategy_supports(version_label, "v50_s30")
     lane = str(opportunity.get("admission_lane") or "shadow_only")
     admitted = bool(opportunity.get("admitted"))
     if lane != "full_bet" or not admitted:
         return {
             "enabled": True,
             "applied": False,
-            "method": "s0_full_bet_v44",
+            "method": "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
             "lane": lane,
             "confidence": 0.0,
             "display_label": "仅影子观察",
@@ -909,20 +982,36 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
             "reason": f"{version_label} 只对通过相对排名和三重确认的 S0 候选计算全仓风险",
         }
 
-    rank_floor = float(config.get("opportunity_v44_min_rank_percentile", 0.80))
+    rank_key = "opportunity_v50_min_rank_percentile" if v50_active else "opportunity_v44_min_rank_percentile"
+    quality_key = "opportunity_v50_min_quality_score" if v50_active else "opportunity_v44_min_quality_score"
+    cost_key = "opportunity_v50_min_cost_ratio" if v50_active else "opportunity_v44_min_cost_ratio"
+    confirmations_key = "opportunity_v50_min_confirmations" if v50_active else "opportunity_v44_min_confirmations"
+    lower_key = (
+        "opportunity_v50_min_lower_expectancy_pct"
+        if v50_active
+        else "opportunity_v44_min_lower_expectancy_pct"
+    )
+    minimum_risk_key = "opportunity_v50_min_risk_pct" if v50_active else "opportunity_v44_min_risk_pct"
+    maximum_risk_key = "opportunity_v50_max_risk_pct" if v50_active else "opportunity_v44_max_risk_pct"
+    stressed_cap_key = (
+        "opportunity_v50_stressed_risk_cap_pct"
+        if v50_active
+        else "opportunity_v44_stressed_risk_cap_pct"
+    )
+    rank_floor = float(config.get(rank_key, 0.85 if v50_active else 0.80))
     rank = float(opportunity.get("rank_percentile") or 0.0)
     rank_component = _clamp((rank - rank_floor) / max(1.0 - rank_floor, 0.000001), 0.0, 1.0)
     confirmations = int(opportunity.get("v44_confirmations") or 0)
-    required = int(config.get("opportunity_v44_min_confirmations", 3))
+    required = int(config.get(confirmations_key, 2 if v50_active else 3))
     confirmation_component = _clamp((confirmations - required) / max(5 - required, 1), 0.0, 1.0)
     cost_ratio = float(opportunity.get("cost_ratio") or 0.0)
-    cost_floor = float(config.get("opportunity_v44_min_cost_ratio", 1.50))
+    cost_floor = float(config.get(cost_key, 2.50 if v50_active else 1.50))
     cost_component = _clamp((cost_ratio - cost_floor) / max(8.0 - cost_floor, 0.000001), 0.0, 1.0)
     lower = float(opportunity.get("lower_expected_net_pct") or 0.0)
     if version_label.startswith(("V4.7.3", "V4.7.4")):
         lower_floor = float(config.get("opportunity_v473_min_lower_expectancy_pct", 0.09))
     else:
-        lower_floor = float(config.get("opportunity_v44_min_lower_expectancy_pct", -0.05))
+        lower_floor = float(config.get(lower_key, -0.08 if v50_active else -0.05))
     lower_component = _clamp((lower - lower_floor) / max(0.15 - lower_floor, 0.000001), 0.0, 1.0)
     liquidity_component = 1.0 if (opportunity.get("liquidity_gate") or {}).get("passed") else 0.0
     confidence = _clamp(
@@ -934,8 +1023,11 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
         0.0,
         1.0,
     )
-    minimum_risk = float(config.get("opportunity_v44_min_risk_pct", 8.0))
-    maximum_risk = max(minimum_risk, float(config.get("opportunity_v44_max_risk_pct", 15.0)))
+    minimum_risk = float(config.get(minimum_risk_key, 12.0 if v50_active else 8.0))
+    maximum_risk = max(
+        minimum_risk,
+        float(config.get(maximum_risk_key, 30.0 if v50_active else 15.0)),
+    )
     calibration = opportunity.get("adaptive_calibration") or {}
     direction = str(opportunity.get("direction") or "LONG").upper()
     if float(opportunity.get("risk_multiplier") or 0.0) > 0:
@@ -946,7 +1038,7 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
         direction_risk_multiplier = float(config.get("opportunity_v462_short_risk_multiplier", 0.65))
     else:
         direction_risk_multiplier = 1.0
-    stressed_cap = float(config.get("opportunity_v44_stressed_risk_cap_pct", 15.0))
+    stressed_cap = float(config.get(stressed_cap_key, 30.0 if v50_active else 15.0))
     target = min(
         maximum_risk,
         stressed_cap,
@@ -955,7 +1047,7 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
     return {
         "enabled": True,
         "applied": True,
-        "method": "s0_full_bet_v44",
+        "method": "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
         "lane": lane,
         "confidence": round(confidence, 6),
         "display_label": "全仓强机会" if confidence >= 0.65 else "全仓机会",
@@ -1008,6 +1100,14 @@ def attach_v4_rankings(
     v44_lower = float(config.get("opportunity_v44_min_lower_expectancy_pct", -0.05))
     v44_cost_ratio = float(config.get("opportunity_v44_min_cost_ratio", 1.50))
     v44_confirmations_required = int(config.get("opportunity_v44_min_confirmations", 3))
+    v50_active = strategy_supports(version, "v50_s30")
+    if v50_active:
+        v44_rank = float(config.get("opportunity_v50_min_rank_percentile", 0.85))
+        v44_quality = float(config.get("opportunity_v50_min_quality_score", 52.0)) / 100
+        v44_expected = float(config.get("opportunity_v50_min_expected_net_pct", 0.02))
+        v44_lower = float(config.get("opportunity_v50_min_lower_expectancy_pct", -0.08))
+        v44_cost_ratio = float(config.get("opportunity_v50_min_cost_ratio", 2.50))
+        v44_confirmations_required = int(config.get("opportunity_v50_min_confirmations", 2))
     if v48_active:
         v44_quality = float(config.get("opportunity_v48_min_quality_score", 56.0)) / 100
         v44_expected = float(config.get("opportunity_v48_min_expected_net_pct", 0.03))
@@ -1082,7 +1182,8 @@ def attach_v4_rankings(
         )
     )
     ranked: list[tuple[float, dict[str, Any]]] = []
-    circuit_state = local_circuit_state(f"{V4_STRATEGY_FAMILY}@{version}")
+    strategy_family = strategy_family_for_version(version)
+    circuit_state = local_circuit_state(f"{strategy_family}@{version}")
     loaded_evidence = [] if reuse_existing_context else evidence_rows(config)
 
     for candidate, features, model in prepared:
@@ -1463,11 +1564,11 @@ def attach_v4_rankings(
         version_label = version.upper()
         opportunity = {
             "enabled": True,
-            "engine": "opportunity_v4",
-            "strategy_family": V4_STRATEGY_FAMILY,
+            "engine": "opportunity_v5" if v50_active else "opportunity_v4",
+            "strategy_family": strategy_family,
             "strategy_version": version,
             "strategy_role": "active" if live_enabled else "challenger",
-            "feature_schema_version": V4_FEATURE_SCHEMA,
+            "feature_schema_version": V5_FEATURE_SCHEMA if v50_active else V4_FEATURE_SCHEMA,
             "market_structure_schema": MARKET_STRUCTURE_SCHEMA,
             "setup_type": setup_type,
             "direction": direction,
@@ -1489,7 +1590,9 @@ def attach_v4_rankings(
                 ),
             },
             "feature_weights": dict(
-                V411_FEATURE_WEIGHTS
+                V50_FEATURE_WEIGHTS
+                if v50_active
+                else V411_FEATURE_WEIGHTS
                 if strategy_supports(version, "healthy_continuation")
                 else V462_FEATURE_WEIGHTS
             ),

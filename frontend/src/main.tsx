@@ -31,7 +31,7 @@ type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: an
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
-type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[]; v4_scores?: any[] };
+type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[]; v4_scores?: any[]; v5_scores?: any[]; active_opportunity_scores?: any[] };
 type LiveReactionData = { reactions: any[]; recent_trades: any[] };
 type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; by_release?: any[]; by_evidence_type?: any[]; by_admission_lane?: any[]; active_release?: Record<string, any>; challenger_release?: Record<string, any>; trades: any[] };
 type SimulationData = Record<string, any>;
@@ -65,7 +65,7 @@ const intervalOptions = [
 
 const stageManualOptions = [
   ["auto", "自动（推荐）：按账户权益选择阶段"],
-  ["extreme_sprint", "手动机会引擎 V4 滚仓"],
+  ["extreme_sprint", "手动 V5.0-S30 全仓短打"],
   ["yolo_scalp", "手动盘口剥头皮"],
   ["grid", "手动网格"],
   ["attack", "手动进攻模式（兼容旧配置）"],
@@ -232,7 +232,19 @@ function App() {
     funnel?.opportunity_v4?.local_circuit_blocked
       ?? Object.values(localCircuit.cohorts || {}).filter((item: any) => item?.blocked_at).length,
   );
-  const currentPerformanceScope = `${performanceGuard.active_strategy_family || "extreme_v4_roll"}@${performanceGuard.active_strategy_version || "v4.7.4"}`;
+  const activeStrategyVersion = String(
+    performanceGuard.active_strategy_version
+      || config.opportunity_v4_strategy_version
+      || "v5.0-s30",
+  );
+  const activeStrategyFamily = String(
+    performanceGuard.active_strategy_family
+      || (activeStrategyVersion.toLowerCase().startsWith("v5.0-s30") ? "extreme_v5_roll" : "extreme_v4_roll"),
+  );
+  const activeStrategyLabel = activeStrategyVersion.toLowerCase().startsWith("v5.0-s30")
+    ? "V5.0-S30"
+    : activeStrategyVersion.toUpperCase();
+  const currentPerformanceScope = `${activeStrategyFamily}@${activeStrategyVersion}`;
   const moe = status?.s0_moe || {};
   const moeOnline = moe.online_shadow?.current_version || {};
   const moeSelected = moeOnline.selected || {};
@@ -441,7 +453,7 @@ function App() {
                 sub={data.health?.offsetMs !== undefined ? `时间偏差 ${fmt(data.health.offsetMs, 0)} ms` : data.health?.error}
                 />
               <MetricCard
-                title="V4.7.4 全局自适应"
+                title={`${activeStrategyLabel} 全局自适应`}
                 value={globalAdaptiveState}
                 sub={`${fmt(globalAdaptiveStats.shadow_trades, 0)} 影子 / ${fmt(globalAdaptiveStats.live_trades, 0)} 实盘 · ${fmt(globalAdaptiveStats.symbols, 0)} 币种 · PF ${fmt(globalAdaptiveStats.profit_factor, 2)}`}
                 tone={globalAdaptive.negative ? "negative" : globalAdaptive.ready ? "positive" : ""}
@@ -563,7 +575,7 @@ function App() {
             <ProtectionAuditPanel audit={runtime?.protection_audit} projection={runtime?.account_projection} supervisor={runtime?.account_supervisor} />
             <div className="metrics">
               <MetricCard
-                title="V4.7.4 快速退出监督"
+                title={`${activeStrategyLabel} 快速退出监督`}
                 value={runtimeProtectionActions.length > 0 ? (activeRuntimeProtection.reason_label || activeRuntimeProtection.reason || "已执行检查") : `${fmt(config.runtime_protection_supervisor_seconds || 5, 0)} 秒监督中`}
                 sub={runtimeProtectionActions.length > 0
                   ? `${activeRuntimeProtection.symbol || "-"} · 价格 ${activeRuntimeProtection.price_source || "等待"} · ATR ${activeRuntimeProtection.atr_source || "等待"}`
@@ -792,8 +804,8 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
         <div><span>MoE 影子建议</span><strong>{!moe.enabled ? "未评估" : !moe.active_gate ? "当前场景未验证" : moe.passed ? "模型建议记录机会" : "模型优势不足"}</strong></div>
         <div><span>MoE 预测/门槛</span><strong>{moe.active_gate ? `${fmt(moe.model_edge, 3)} / ${fmt(moe.edge_floor, 3)}` : "不参与实盘准入"}</strong></div>
-        <div><span>V4 本轮排名</span><strong>{v4.enabled ? `前 ${fmt((1 - Number(v4.rank_percentile || 0)) * 100, 0)}%` : "-"}</strong></div>
-        <div><span>V4.7.4 准入通道</span><strong>{v4.admission_lane === "full_bet" ? "全仓短打" : "仅影子"}</strong></div>
+        <div><span>{`${String(v4.strategy_version || "v5.0-s30").toUpperCase()} 本轮排名`}</span><strong>{v4.enabled ? `前 ${fmt((1 - Number(v4.rank_percentile || 0)) * 100, 0)}%` : "-"}</strong></div>
+        <div><span>{`${String(v4.strategy_version || "v5.0-s30").toUpperCase()} 准入通道`}</span><strong>{v4.admission_lane === "full_bet" ? "全仓短打" : "仅影子"}</strong></div>
         <div><span>{isGlobalCalibration ? "校准范围" : "方向关系"}</span><strong>{isGlobalCalibration ? "全局 · 不按币种" : adaptive.relation === "aligned" ? "顺势" : adaptive.relation === "countertrend" ? "逆势" : adaptive.relation === "neutral" ? "中性" : "等待校准"}</strong></div>
         <div><span>{isGlobalCalibration ? "全局风险倍率" : "动态仓位倍率"}</span><strong>{adaptive.enabled ? `${fmt(adaptive.risk_multiplier, 2)}x` : "未启用"}</strong></div>
         <div><span>12 / 24小时样本</span><strong>{adaptive.enabled ? `${fmt(adaptive.stats_12h?.shadow_trades ?? adaptive.stats_12h?.current_trades, 0)} 影子 / ${fmt(adaptive.stats_24h?.live_trades ?? adaptive.stats_24h?.current_trades, 0)} 实盘` : "-"}</strong></div>
@@ -801,11 +813,11 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>计划止损风险</span><strong>{positionConfidence.target_initial_risk_pct != null ? `${fmt(positionConfidence.target_initial_risk_pct, 2)}%` : "等待准入"}</strong></div>
         <div><span>保证金方式</span><strong>{v4.admission_lane === "full_bet" ? "约 90% · 单仓全进全出" : "不下单"}</strong></div>
         <div><span>动态杠杆范围</span><strong>{v4.admission_lane === "full_bet" ? "3x - 10x" : "-"}</strong></div>
-        <div><span>V4.7.4 保守净期望</span><strong>{v4.enabled ? `${fmt(v4.lower_expected_net_pct, 3)}%` : "未形成 V4 触发"}</strong></div>
-        <div><span>V4.7.4 成本比</span><strong>{v4.enabled ? `${fmt(v4.cost_ratio, 2)}x` : "未形成 V4 触发"}</strong></div>
+        <div><span>保守净期望</span><strong>{v4.enabled ? `${fmt(v4.lower_expected_net_pct, 3)}%` : "未形成当前版本触发"}</strong></div>
+        <div><span>收益成本比</span><strong>{v4.enabled ? `${fmt(v4.cost_ratio, 2)}x` : "未形成当前版本触发"}</strong></div>
         <div><span>3 分钟兑现检查</span><strong>{profile.stagnation_seconds ? `${fmt(profile.stagnation_seconds, 0)} 秒内至少 ${fmt(profile.stagnation_min_profit_pct, 3)}%` : "不适用"}</strong></div>
         <div><span>最长持仓</span><strong>{profile.max_hold_seconds ? `${fmt(profile.max_hold_seconds / 60, 1)} 分钟` : `${fmt(profile.max_hold_bars, 0)} 根 K 线`}</strong></div>
-        <div><span>V4.7.4 全局24小时</span><strong>{adaptive.ready ? (adaptive.adjustment_action || "已就绪") : "样本积累中"}</strong></div>
+        <div><span>当前版本全局24小时</span><strong>{adaptive.ready ? (adaptive.adjustment_action || "已就绪") : "样本积累中"}</strong></div>
         <div><span>全局市场状态</span><strong>{adaptive.market_regime_state === "trend" ? "趋势市场" : "震荡或数据不足"} · {adaptive.global_direction_bias === "LONG" ? "全局偏多" : adaptive.global_direction_bias === "SHORT" ? "全局偏空" : "方向中性"}</strong></div>
         <div><span>全局聪明钱代理</span><strong>{adaptive.smart_flow_global?.available ? `${adaptive.smart_flow_global.bias || "中性"} · ${fmt(Number(adaptive.smart_flow_global.average_score || 0), 3)} · ${fmt(Number(adaptive.smart_flow_global.sample_count || 0), 0)} 样本` : "当前版本暂无可用聚合数据"}</strong></div>
         <div><span>全局有效门槛</span><strong>{adaptive.effective_thresholds ? `前 ${fmt((1 - Number(adaptive.effective_thresholds.rank_percentile || 0)) * 100, 0)}% · 成本比 ${fmt(adaptive.effective_thresholds.cost_ratio, 2)}x` : "保持基础门槛"}</strong></div>
@@ -881,6 +893,8 @@ function V4OpportunityPanel({ funnel, performanceGuard }: { funnel: any; perform
   const v4 = funnel?.opportunity_v4 || {};
   const smartFlow = funnel?.smart_flow || {};
   if (!v4.enabled) return null;
+  const strategyLabel = String(v4.strategy_version || "v5.0-s30").toUpperCase();
+  const v5Active = String(v4.strategy_version || "").toLowerCase().startsWith("v5.0-s30");
   const topBlockers = Object.entries(v4.blocked_categories || v4.blocked_reasons || {})
     .sort((left: any, right: any) => Number(right[1]) - Number(left[1]))
     .slice(0, 3);
@@ -888,8 +902,8 @@ function V4OpportunityPanel({ funnel, performanceGuard }: { funnel: any; perform
     <div className="panel">
       <div className="panel-head">
         <div>
-          <h2>{v4.strategy_version || "v4.7.4"} 事件证据与全仓短打</h2>
-          <p>先形成 V4 基础排名，再对决策短名单补齐聪明钱并最终重排；合格后使用单仓全进全出，旧版本信用和全局 PF 只作背景。</p>
+          <h2>{strategyLabel} 事件证据与全仓短打</h2>
+          <p>先形成当前版本基础排名，再对决策短名单补齐聪明钱并最终重排；合格后使用单仓全进全出，旧版本信用和全局 PF 不参与准入。</p>
         </div>
       </div>
       <div className="metrics">
@@ -899,12 +913,12 @@ function V4OpportunityPanel({ funnel, performanceGuard }: { funnel: any; perform
         <MetricCard title="结构可交易" value={`${fmt(v4.structure_ready, 0)} 个`} sub="方向、入场形态与当前市场结构有效" />
         <MetricCard title="盘口可执行" value={`${fmt(v4.liquidity_ready, 0)} 个`} sub="按本次预计下单额动态检查深度与点差" />
         <MetricCard title="聪明钱覆盖" value={`${fmt(smartFlow.available, 0)} / ${fmt(smartFlow.shortlisted, 0)} 个`} sub={`短名单上限 ${fmt(smartFlow.symbol_limit, 0)} 个；${fmt(smartFlow.adjusted, 0)} 个获得软评分修正`} tone={smartFlow.enabled ? "positive" : ""} />
-        <MetricCard title="旧证据阻断" value={`${fmt(v4.local_circuit_blocked, 0)} 个`} sub="旧版本仅作历史背景，不参与 V4.7.4 准入、仓位或模型判断" tone="positive" />
+        <MetricCard title="旧证据阻断" value={`${fmt(v4.local_circuit_blocked, 0)} 个`} sub={`旧版本仅供复盘，不参与 ${strategyLabel} 准入、仓位或模型判断`} tone="positive" />
         <MetricCard title="连续准入" value={performanceGuard?.allowed ? "可开仓" : "安全暂停"} sub="普通亏损只递进降仓；S0 普通日亏损停牌关闭，5U 硬停止和运行安全异常仍会暂停" tone={performanceGuard?.allowed ? "positive" : "negative"} />
         <MetricCard title="全仓短打" value={`${fmt(v4.admitted, 0)} 个`} sub="约 90% 可用保证金，单币单向、一次全平" tone={Number(v4.admitted || 0) > 0 ? "positive" : ""} />
-        <MetricCard title="V4.7.4 准入底线" value="0.20% / 0.09%" sub="扣费后期望 / 保守净期望；两个条件必须同时满足" />
-        <MetricCard title="快速兑现" value="3 分钟 / 8 分钟" sub="独立 5 秒监督；3 分钟未覆盖成本空间主动退出，最长 8 分钟" />
-        <MetricCard title="计划风险" value="8% - 15%" sub="仅最强机会接近 15%，连续两次亏损后回落至 8%" />
+        <MetricCard title={`${strategyLabel} 准入底线`} value={v5Active ? "0.02% / -0.08%" : "按当前版本配置"} sub="扣费后期望 / 保守净期望；还需同时通过确认项、排名和流动性硬门" />
+        <MetricCard title="快速兑现" value={v5Active ? "3 根K线内" : "按当前版本配置"} sub="独立 5 秒保护监督；达到保本触发后收紧风险，超时退出" />
+        <MetricCard title="计划风险" value={v5Active ? "12% - 30%" : "按当前版本配置"} sub={v5Active ? "普通机会 12%，强机会逐级提高；三连止损冷却后回到 12% 基线" : "由当前版本的风险配置决定"} />
         <MetricCard title="动态杠杆" value="3 - 10 倍" sub="按止损距离和成本选择，不追加、不分批止盈" />
       </div>
       <p>{topBlockers.length ? `本轮主要等待原因：${topBlockers.map(([reason, count]: any) => `${reason}（${count}）`).join("；")}` : "本轮没有候选被阻断。"}</p>
@@ -1259,6 +1273,7 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
   const candidate = challenger.all || {};
   const validation = challenger.validation || {};
   const hasChallenger = Boolean(challenger.strategy_version);
+  const activeStrategyLabel = String(active.strategy_version || "v5.0-s30").toUpperCase();
   const evidenceTypes = data.by_evidence_type || [];
   const admissionLanes = data.by_admission_lane || [];
   const checks = [
@@ -1279,11 +1294,11 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
         <div className="metrics">
           <MetricCard title={`${active.strategy_version || "V4"} 近期基线`} value={`${fmt(activeRecent.closed, 0)} 笔`} sub={`${pfLabel(activeRecent.profit_factor, activeRecent.closed)} · 净收益 ${fmt(activeRecent.net_pnl, 4)} U`} tone={Number(activeRecent.net_pnl || 0) >= 0 ? "positive" : "negative"} />
           <MetricCard title="当前安全观察窗" value={`${fmt(recovery.closed, 0)} / 20 笔`} sub={`${pfLabel(recovery.profit_factor, recovery.closed)} · 只对应当前 V4`} tone={Number(recovery.net_pnl || 0) >= 0 ? "positive" : "negative"} />
-          <MetricCard title="V4.7.4 运行方式" value="回踩优先短打" sub="回踩主通道；动量和预突破受限探索；快速保护独立 5 秒监督" />
+          <MetricCard title={`${activeStrategyLabel} 运行方式`} value="全仓短打" sub="当前版本独立排序；合格后单仓全进全出；快速保护独立 5 秒监督" />
         </div>
       </div>
       {hasChallenger && <div className="panel table-wrap">
-        <h2>V4 候选晋级清单</h2>
+        <h2>{activeStrategyLabel} 候选晋级清单</h2>
         <table>
           <thead><tr><th>检查项</th><th>当前</th><th>最低要求</th><th>状态</th></tr></thead>
           <tbody>
@@ -1293,14 +1308,14 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
         </table>
       </div>}
       <div className="panel table-wrap">
-        <h2>V4.7.4 三类证据</h2>
+        <h2>{activeStrategyLabel} 三类证据</h2>
         <table><thead><tr><th>类型</th><th>含义</th><th>已结束</th><th>胜率</th><th>PF</th><th>净收益</th><th>成本</th></tr></thead><tbody>
           {evidenceTypes.map((row: any) => <tr key={row.evidence_type}><td>{row.evidence_type === "decision" ? "决策样本" : row.evidence_type === "exploration" ? "探索样本" : "同机会对照"}</td><td>{row.evidence_type === "decision" ? "当前版本排名靠前、确认充分且按事件去重的机会；准入口径只取单账户可执行的非重叠路径" : row.evidence_type === "exploration" ? "从仅影子机会中抽样，用于检查是否漏判" : "同一时刻用简单规则做基线，不参与准入"}</td><td>{fmt(row.opportunities || row.closed, 0)}</td><td>{fmt(row.win_rate, 1)}%</td><td>{pfLabel(row.profit_factor, row.closed)}</td><td>{fmt(row.net_pnl, 4)} U</td><td>{fmt(row.cost, 4)} U</td></tr>)}
-          {!evidenceTypes.length && <tr><td colSpan={7}>V4 刚启用，等待第一批决策、探索和对照样本结束。</td></tr>}
+          {!evidenceTypes.length && <tr><td colSpan={7}>{activeStrategyLabel} 刚启用，等待第一批决策、探索和对照样本结束。</td></tr>}
         </tbody></table>
       </div>
       <div className="panel table-wrap">
-        <h2>V4.7.4 通道表现</h2>
+        <h2>{activeStrategyLabel} 通道表现</h2>
         <table><thead><tr><th>通道</th><th>独立机会</th><th>已结束</th><th>胜率</th><th>PF</th><th>净收益</th><th>成本</th></tr></thead><tbody>
           {admissionLanes.map((row: any) => <tr key={row.admission_lane}><td>{row.admission_lane === "full_bet" ? "全仓短打" : row.admission_lane === "shadow_only" ? "仅影子" : row.admission_lane === "validated" ? "旧核心已验证" : row.admission_lane === "core_provisional" ? "旧核心受限" : row.admission_lane === "core_canary" ? "旧核心试运行" : row.admission_lane === "limited_exploration" ? "旧受限探索" : "旧数据未分类"}</td><td>{fmt(row.opportunities, 0)}</td><td>{fmt(row.closed, 0)}</td><td>{fmt(row.win_rate, 1)}%</td><td>{pfLabel(row.profit_factor, row.closed)}</td><td>{fmt(row.net_pnl, 4)} U</td><td>{fmt(row.cost, 4)} U</td></tr>)}
           {!admissionLanes.length && <tr><td colSpan={7}>当前版本刚启用，等待第一批按通道分类的事件级影子结果。</td></tr>}
@@ -1632,17 +1647,16 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
         <div className="panel">
           <div className="panel-head"><div><h2>当前生效设置</h2><p>这里只显示当前阶段真正参与执行的参数。旧策略和未来阶段参数已收进专家设置。</p></div><button className="secondary" onClick={() => setExpert(true)}>进入专家设置</button></div>
           <div className="form-grid">
-            {toggle("stage_routing_enabled", "按权益自动选择阶段", "推荐开启；当前 S0 使用 V4.7.4 回踩优先的单仓短打，后续阶段仍按权益自动切换")}
+            {toggle("stage_routing_enabled", "按权益自动选择阶段", "推荐开启；当前 S0 使用 V5.0-S30 单仓全进全出短打，后续阶段仍按权益自动切换")}
             {select("stage_manual_mode", "阶段控制", stageManualOptions.slice(0, 4), "自动模式会按权益切换策略")}
             {toggle("dry_run", "模拟交易", "开启后绝不会真实下单")}
             {toggle("live_trading_enabled", "允许实盘交易", "还需要正确的实盘确认短语")}
-            {toggle("allow_short", "允许系统做空", "V4 会按方向分别计算排名与独立证据")}
+            {toggle("allow_short", "允许系统做空", "V5 会按方向分别计算排名与当前版本独立证据")}
             {number("hard_stop_equity", "权益硬停止线 U", "当前建议保持 5U")}
-            {number("stage_s0_risk_pct", "S0 压力风险硬上限%", "默认 15%；包含止损距离和放大的手续费、滑点压力，不代表每单固定亏 15%")}
+            {number("stage_s0_risk_pct", "S0 压力风险硬上限%", "默认 30%；这是最强机会的压力上限，普通机会仍从 12% 基线起步")}
             {number("stage_s0_max_leverage", "S0 最大杠杆", "默认 10 倍；系统会按止损距离在 3-10 倍间动态选择")}
-            {toggle("opportunity_v4_live_enabled", "V4.7.4 当前实盘排序", "当前版本证据独立，旧版本只供复盘，不参与准入和仓位")}
-            {toggle("opportunity_v44_full_bet_enabled", "启用 S0 单仓全进全出", "V4.7.4 使用约 90% 新鲜可用保证金，只持有一个币种和一个方向")}
-            {toggle("opportunity_v49_global_adaptive_enabled", "启用 V4.7.4 全局24小时自适应", "根据当前版本全部实盘和影子结果，每2小时最多调整一个全局门槛；不按单币种惩罚")}
+            {toggle("opportunity_v4_live_enabled", "V5.0-S30 当前实盘排序", "当前版本证据独立，旧版本只供复盘，不参与准入和仓位")}
+            {toggle("opportunity_v44_full_bet_enabled", "启用 S0 单仓全进全出", "V5.0-S30 最多使用约 90% 新鲜可用保证金，只持有一个币种和一个方向")}
             {toggle("stage_s0_daily_loss_stop_enabled", "S0 普通日亏损停牌", "默认关闭；5U 权益硬停止、每仓止盈止损和运行安全保护仍始终生效")}
             {toggle("stage_s0_daily_profit_lock_enabled", "S0 当日净利润锁", "默认开启；达到目标后不强平受保护持仓，空仓后停止当天新开仓")}
             {number("stage_s0_daily_profit_target_pct", "S0 当日净利润目标%", "默认 40%；按 UTC 当日初始权益计算，次日自动恢复")}
@@ -1651,21 +1665,31 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {number("s0_moe_online_window_hours", "MoE 线上统计窗口（小时）", "默认 24 小时；同时保留当前策略版本的全量统计")}
             {number("s0_moe_retrain_min_selected_closes", "MoE 候选重训练最少闭合样本", "默认 200 笔通过模型门控且已结束的独立影子机会")}
             {number("s0_moe_retrain_min_regimes", "MoE 候选重训练最少市场状态", "默认至少覆盖 2 种市场状态，避免只学到单边行情")}
-            {number("opportunity_v44_margin_pct", "计划使用保证金%", "默认 90%；保留约 10% 处理费用和价格波动")}
-            {number("opportunity_v44_min_risk_pct", "最低计划风险%", "默认 8%；方向验证和当前排名共同决定实际值")}
-            {number("opportunity_v44_max_risk_pct", "最高计划风险%", "默认 15%；仅最强机会接近上限，连续两次亏损后自动降回 8%")}
-            {number("opportunity_v44_stressed_risk_cap_pct", "压力风险硬上限%", "默认 15%；任何仓位计算不得越过")}
-            {number("opportunity_v44_min_confirmations", "最低确认项", "默认五项中至少 3 项：量能、方向资金流、横截面排名、中周期路径和防追高")}
-            {number("opportunity_v44_stop_atr", "初始止损 ATR", "默认 0.85 ATR")}
-            {number("opportunity_v44_take_profit_r", "初始止盈 R", "默认 1.05R；0.45R 开始保护到保本附近")}
-            {number("opportunity_v44_max_hold_bars", "低收益最长持仓 K 线数", "默认 2 根 5 分钟 K 线；约 10 分钟仍未覆盖成本则退出")}
+            {number("opportunity_v50_margin_pct", "计划使用保证金%", "默认 90%；保留约 10% 处理费用和价格波动")}
+            {number("opportunity_v50_min_risk_pct", "普通机会风险基线%", "默认 12%；亏损后降仓和三连止损冷却恢复都回到该基线")}
+            {number("opportunity_v50_max_risk_pct", "最强机会风险上限%", "默认 30%；只在排名、确认、净期望和成本全部较强时接近上限")}
+            {number("opportunity_v50_stressed_risk_cap_pct", "压力风险硬上限%", "默认 30%；仓位计算包含放大的手续费和滑点后仍不得越过")}
+            {number("opportunity_v50_min_rank_percentile", "最低相对排名分位", "默认 0.85，即只考虑本轮前 15%")}
+            {number("opportunity_v50_min_quality_score", "最低模型质量分", "默认 52 分；当前版本独立计算")}
+            {number("opportunity_v50_min_expected_net_pct", "最低扣费后期望%", "默认 0.02%；手续费和滑点已计入")}
+            {number("opportunity_v50_min_lower_expectancy_pct", "最低保守净期望%", "默认 -0.08%；用于允许小样本但高排名机会受控试仓")}
+            {number("opportunity_v50_min_cost_ratio", "最低收益成本比", "默认 2.5 倍")}
+            {number("opportunity_v50_min_confirmations", "最低确认项", "默认至少 2 项：量能、方向资金流、横截面排名、中周期路径和防追高")}
+            {number("opportunity_v50_smart_flow_max_points", "聪明钱最大软修正分", "默认正负 10 分；只能修正排名，不能独立触发开仓")}
+            {number("opportunity_v50_min_leverage", "最低动态杠杆", "默认 3 倍")}
+            {number("opportunity_v50_max_leverage", "最高动态杠杆", "默认 10 倍")}
+            {number("opportunity_v50_stop_atr", "初始止损 ATR", "默认 0.90 ATR")}
+            {number("opportunity_v50_take_profit_r", "初始止盈 R", "默认 1.05R；0.45R 开始保护到保本附近")}
+            {number("opportunity_v50_break_even_trigger_r", "保本触发 R", "默认 0.45R")}
+            {number("opportunity_v50_max_hold_bars", "最长持仓 K 线数", "默认 3 根 5 分钟 K 线；短打不恋战")}
             {toggle("opportunity_v44_runtime_exit_enabled", "自动执行快速失效与时间退出", "推荐开启；退出失败时保留交易所止盈止损，不先撤保护单")}
-            {number("opportunity_v44_rotation_min_edge_r", "换仓最低净优势 R", "默认 0.35R；已扣除额外平仓和重开成本")}
-            {number("opportunity_v44_release_pause_drawdown_pct", "版本回撤暂停线%", "默认 35%；5U 权益硬停止仍始终有效")}
-            {toggle("s0_continuous_permit_enabled", "启用 S0 连续准入", "当前版本普通亏损只降低仓位；5U 硬停止或运行安全故障仍会暂停新仓")}
-            {number("execution_max_spread_pct", "V4 盘口最大点差%", "流动性硬门，超过后不实盘")}
-            {number("execution_min_depth_notional_usdt", "V4 最低盘口深度 U", "流动性硬门，低于后不实盘")}
-            {toggle("runtime_stop_management_enabled", "自动保本与移动止盈", "对新开的 V4 仓位生效")}
+            {number("opportunity_v50_loss_1_multiplier", "一次亏损后仓位倍率", "默认 0.80x；盈利后快速恢复")}
+            {number("opportunity_v50_loss_2_multiplier", "两次连续亏损后仓位倍率", "默认 0.60x")}
+            {number("opportunity_v50_loss_3_cooldown_minutes", "三连止损冷却分钟", "默认 20 分钟；到时自动恢复 12% 风险基线，不会无限停牌")}
+            {toggle("s0_continuous_permit_enabled", "启用 S0 连续准入", "普通亏损只降仓；三连止损短暂冷却；5U 硬停止或运行安全故障仍会暂停新仓")}
+            {number("execution_max_spread_pct", "盘口最大点差%", "流动性硬门，超过后不实盘")}
+            {number("execution_min_depth_notional_usdt", "最低盘口深度 U", "流动性硬门，低于后不实盘")}
+            {toggle("runtime_stop_management_enabled", "自动保本与移动止盈", "对新开的 V5 仓位生效")}
           </div>
         </div>
         <div className="panel danger-zone">
@@ -1907,17 +1931,17 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("yolo_scalp_min_order_lift_min_cost_ratio", "补齐订单最低成本比", "默认 3；预期波动至少覆盖手续费和滑点")}
           {number("yolo_scalp_min_order_lift_min_net_profit_usdt", "补齐订单最低净利润U", "默认 0.03U；太小的毛利不强行成交")}
           {toggle("opportunity_v4_enabled", "启用 V4 机会引擎", "推荐开启：计算扣费后净期望并记录公平影子证据，不增加 Binance 下单请求")}
-          {toggle("opportunity_v4_live_enabled", "V4 作为当前实盘排序器", "默认开启；旧策略实验已退出实盘和日常界面")}
-          {text("opportunity_v4_strategy_version", "V4 当前版本号", "当前 v4.7.4；不同版本实盘和影子证据严格隔离")}
-          {toggle("opportunity_v44_full_bet_enabled", "V4.7.4 S0 单仓全进全出", "只持有一个币种和一个方向；一次建仓、一次全平，禁止盈利追加和分批止盈")}
-          {toggle("opportunity_v49_global_adaptive_enabled", "V4.7.4 全局动态校准", "只读取当前版本本地实盘与影子数据库，不增加 Binance API 请求，也不按单币种调参")}
+          {toggle("opportunity_v4_live_enabled", "V5.0-S30 作为当前实盘排序器", "默认开启；旧策略实验已退出实盘和日常界面")}
+          {text("opportunity_v4_strategy_version", "当前策略版本号", "默认 v5.0-s30；不同版本实盘和影子证据严格隔离")}
+          {toggle("opportunity_v44_full_bet_enabled", "V5.0-S30 S0 单仓全进全出", "只持有一个币种和一个方向；一次建仓、一次全平，禁止盈利追加和分批止盈")}
+          {toggle("opportunity_v49_global_adaptive_enabled", "V5.0-S30 全局动态校准", "只读取当前版本本地实盘与影子数据库，不增加 Binance API 请求，也不按单币种调参")}
           {number("opportunity_v49_global_window_hours", "全局统计窗口小时", "默认 24 小时")}
           {number("opportunity_v49_global_update_hours", "全局调整间隔小时", "默认 2 小时；一次只改一个主要变量")}
           {number("opportunity_v49_global_min_shadow_trades", "调整前最少影子样本", "默认 20 笔独立结束机会")}
           {number("opportunity_v49_global_min_live_trades", "调整前最少实盘样本", "默认 8 笔独立结束机会")}
           {number("opportunity_v49_global_target_live_trades", "24小时目标实盘样本", "默认 12 笔；正期望但频率不足时优先小幅放宽排名")}
-          {toggle("opportunity_v410_global_regime_enabled", "V4.7.4 启用全局市场状态", "根据当前版本结果识别趋势或震荡；只影响全局方向倍率，不为单币种建永久参数")}
-          {toggle("opportunity_v410_global_smart_flow_enabled", "V4.7.4 启用全局聪明钱代理", "把已有聪明钱复合信号汇总为全局背景，不新增 Binance 请求，也不单独触发开仓")}
+          {toggle("opportunity_v410_global_regime_enabled", "V5.0-S30 启用全局市场状态", "根据当前版本结果识别趋势或震荡；只影响全局方向倍率，不为单币种建永久参数")}
+          {toggle("opportunity_v410_global_smart_flow_enabled", "V5.0-S30 启用全局聪明钱代理", "把已有聪明钱复合信号汇总为全局背景，不新增 Binance 请求，也不单独触发开仓")}
           {number("opportunity_v410_direction_aligned_multiplier", "全局顺势倍率", "默认 1.05x；只在当前全局方向有证据时小幅增加")}
           {number("opportunity_v410_direction_countertrend_multiplier", "全局逆势倍率", "默认 0.90x；只是降倍率，不直接禁止机会")}
           {number("opportunity_v47_aligned_multiplier", "顺势基础倍率", "默认 1.00x；多空使用完全对称的行情关系")}
@@ -1940,11 +1964,11 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("opportunity_v48_reentry_hard_losses", "同结构连续亏损硬门", "默认 2 次；新结构确认后自动解除")}
           {number("opportunity_v472_episode_dedupe_minutes", "同一行情事件去重（分钟）", "默认 45 分钟；同币、同方向、同形态和同市场状态只算一个事件")}
           {number("opportunity_v472_symbol_max_events_per_window", "单币 6 小时最多事件数", "默认 3 次；限制反复追逐同一币，但新结构仍可重新评估")}
-          {number("opportunity_v472_pullback_min_cost_ratio", "回踩最低成本比", "默认 1.8；回踩是 V4.7.4 的主要实盘通道")}
+          {number("opportunity_v472_pullback_min_cost_ratio", "历史回踩最低成本比", "仅用于旧版回放；V5.0-S30 使用独立全局成本门槛")}
           {number("opportunity_v472_breakout_min_cost_ratio", "突破最低成本比", "默认 2.3；突破需要更厚的扣费后空间")}
           {number("opportunity_v472_pullback_max_hold_bars", "回踩最长持仓 K 线", "默认 4 根；其他形态保持 2 根快速退出")}
-          {number("opportunity_v473_min_expected_net_pct", "V4.7.4 最低扣费后期望%", "默认 0.20%；只有预期波动明显覆盖手续费和滑点才允许实盘")}
-          {number("opportunity_v473_min_lower_expectancy_pct", "V4.7.4 最低保守净期望%", "默认 0.09%；在不确定性折扣后仍须为正")}
+          {number("opportunity_v473_min_expected_net_pct", "历史版本最低扣费后期望%", "仅用于旧版回放；V5.0-S30 使用独立全局期望门槛")}
+          {number("opportunity_v473_min_lower_expectancy_pct", "历史版本最低保守净期望%", "仅用于旧版回放；不参与 V5.0-S30 准入")}
           {number("opportunity_v473_stagnation_seconds", "未兑现检查秒数", "默认 180 秒；到时仍未覆盖成本空间则主动退出")}
           {number("opportunity_v473_stagnation_min_profit_pct", "未兑现最低利润%", "默认 0.12%；约等于保守往返成本底线")}
           {number("opportunity_v473_max_hold_seconds", "最长持仓秒数", "默认 480 秒；只有已经进入盈利保护的仓位才允许持有到此")}

@@ -113,3 +113,42 @@ def test_full_bet_never_uses_more_than_available_balance():
     assert result["margin_budget"] == pytest.approx(10.8)
     assert result["margin_used"] <= 10.8
     assert result["stressed_risk_pct"] <= 15.0
+
+
+def test_v50_s30_uses_isolated_risk_profile_and_thirty_percent_cap():
+    candidate = {
+        "strategy_version": "v5.0-s30",
+        "opportunity_v4": {
+            "strategy_version": "v5.0-s30",
+            "full_bet_admitted": True,
+            "estimated_cost_pct": 0.14,
+        },
+    }
+    config = {
+        **_config(),
+        "opportunity_v4_strategy_version": "v5.0-s30",
+        "opportunity_v50_margin_pct": 90.0,
+        "opportunity_v50_min_risk_pct": 12.0,
+        "opportunity_v50_max_risk_pct": 30.0,
+        "opportunity_v50_stressed_risk_cap_pct": 30.0,
+        "opportunity_v50_min_leverage": 3,
+        "opportunity_v50_max_leverage": 10,
+        "opportunity_v50_cost_stress_multiplier": 1.5,
+    }
+
+    result = build_s0_full_bet_sizing(
+        equity=20.0,
+        available_balance=20.0,
+        entry=100.0,
+        stop=99.0,
+        requested_risk_pct=45.0,
+        candidate=candidate,
+        config=config,
+    )
+
+    assert result["profile"] == "s0_full_bet_v50_s30"
+    assert result["margin_utilization_pct"] <= 90.0
+    assert result["target_risk_pct"] == 30.0
+    assert result["hard_risk_cap_pct"] == 30.0
+    assert result["stressed_risk_pct"] <= 30.0
+    assert 3 <= result["leverage"] <= 10

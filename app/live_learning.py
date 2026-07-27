@@ -23,6 +23,7 @@ ORDERBOOK_SCALP_FAMILY = "orderbook_scalp"
 EXTREME_V2_FAMILY = "extreme_v2_roll"
 EXTREME_V3_FAMILY = "extreme_v3_roll"
 EXTREME_V4_FAMILY = "extreme_v4_roll"
+EXTREME_V5_FAMILY = "extreme_v5_roll"
 GRID_STRATEGY_FAMILY = "grid_stable"
 LEGACY_STRATEGY_FAMILY = "legacy_mixed"
 
@@ -39,7 +40,14 @@ def _strategy_family_for_candidate(candidate: dict[str, Any], config: dict[str, 
     if not config.get("strategy_family_credit_enabled", True):
         return None
     explicit = str(candidate.get("strategy_family") or "")
-    if explicit in {ORDERBOOK_SCALP_FAMILY, EXTREME_V2_FAMILY, EXTREME_V3_FAMILY, EXTREME_V4_FAMILY, GRID_STRATEGY_FAMILY}:
+    if explicit in {
+        ORDERBOOK_SCALP_FAMILY,
+        EXTREME_V2_FAMILY,
+        EXTREME_V3_FAMILY,
+        EXTREME_V4_FAMILY,
+        EXTREME_V5_FAMILY,
+        GRID_STRATEGY_FAMILY,
+    }:
         return explicit
     if str(candidate.get("strategy_generation") or "").lower() == "v3":
         return EXTREME_V3_FAMILY
@@ -65,6 +73,7 @@ def _experiment_credit(
         EXTREME_V2_FAMILY: "极限 V2 新策略观察",
         EXTREME_V3_FAMILY: "机会引擎 V3 新策略观察",
         EXTREME_V4_FAMILY: "机会引擎 V4 新策略观察",
+        EXTREME_V5_FAMILY: "机会引擎 V5 新策略观察",
         GRID_STRATEGY_FAMILY: "网格新策略观察",
     }
     return {
@@ -657,10 +666,24 @@ def _parse_iso_ms(value: Any) -> int | None:
 
 
 def _strategy_score_config(config: dict[str, Any], family: str) -> dict[str, Any]:
-    if family not in {ORDERBOOK_SCALP_FAMILY, EXTREME_V2_FAMILY, EXTREME_V3_FAMILY, EXTREME_V4_FAMILY}:
+    if family not in {
+        ORDERBOOK_SCALP_FAMILY,
+        EXTREME_V2_FAMILY,
+        EXTREME_V3_FAMILY,
+        EXTREME_V4_FAMILY,
+        EXTREME_V5_FAMILY,
+    }:
         return config
     scoped = dict(config)
-    prefix = "scalp" if family == ORDERBOOK_SCALP_FAMILY else "v4" if family == EXTREME_V4_FAMILY else "v3" if family == EXTREME_V3_FAMILY else "extreme"
+    prefix = (
+        "scalp"
+        if family == ORDERBOOK_SCALP_FAMILY
+        else "v4"
+        if family in {EXTREME_V4_FAMILY, EXTREME_V5_FAMILY}
+        else "v3"
+        if family == EXTREME_V3_FAMILY
+        else "extreme"
+    )
     defaults = {
         "scalp": (35, 5.0, 7.5, 12.0, 4.5, 1.0, 3.0, 4.0),
         "extreme": (300, 5.0, 7.0, 10.0, 3.0, 2.0, 6.0, 3.0),
@@ -696,7 +719,14 @@ def _strategy_metadata_from_payload(payload: dict[str, Any]) -> dict[str, str]:
     explicit = str(decision.get("strategy_family") or candidate.get("strategy_family") or "")
     version = str(decision.get("strategy_version") or candidate.get("strategy_version") or "legacy")
     role = str(decision.get("strategy_role") or candidate.get("strategy_role") or (ACTIVE_ROLE if version != "legacy" else "legacy"))
-    if explicit in {ORDERBOOK_SCALP_FAMILY, EXTREME_V2_FAMILY, EXTREME_V3_FAMILY, EXTREME_V4_FAMILY, GRID_STRATEGY_FAMILY}:
+    if explicit in {
+        ORDERBOOK_SCALP_FAMILY,
+        EXTREME_V2_FAMILY,
+        EXTREME_V3_FAMILY,
+        EXTREME_V4_FAMILY,
+        EXTREME_V5_FAMILY,
+        GRID_STRATEGY_FAMILY,
+    }:
         return {"strategy_family": explicit, "strategy_version": version, "strategy_role": role}
     if str(decision.get("strategy_generation") or candidate.get("strategy_generation") or "").lower() == "v3":
         return {"strategy_family": EXTREME_V3_FAMILY, "strategy_version": version, "strategy_role": role}
@@ -1008,7 +1038,7 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
         else "v3_credit_score_weight"
         if strategy_family == EXTREME_V3_FAMILY
         else "v4_credit_score_weight"
-        if strategy_family == EXTREME_V4_FAMILY
+        if strategy_family in {EXTREME_V4_FAMILY, EXTREME_V5_FAMILY}
         else "extreme_credit_score_weight"
         if strategy_family == EXTREME_V2_FAMILY
         else "live_credit_score_weight"
@@ -1023,8 +1053,8 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
     reasons = [f"实盘信用 {score:.1f} 分（{credit.get('status_label', '-')}）"]
     multiplier = live_credit_multiplier(credit, config)
     cooldown = live_credit_cooldown_summary(credit, config)
-    if strategy_family in {EXTREME_V3_FAMILY, EXTREME_V4_FAMILY}:
-        prefix = "v4" if strategy_family == EXTREME_V4_FAMILY else "opportunity_v3"
+    if strategy_family in {EXTREME_V3_FAMILY, EXTREME_V4_FAMILY, EXTREME_V5_FAMILY}:
+        prefix = "v4" if strategy_family in {EXTREME_V4_FAMILY, EXTREME_V5_FAMILY} else "opportunity_v3"
         v3_floor = float(
             config.get(f"{prefix}_credit_cooldown_min_multiplier", 0.35)
             if cooldown.get("active") or int(credit.get("consecutive_losses") or 0) > 0
@@ -1032,7 +1062,14 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
         )
         v3_ceiling = float(config.get(f"{prefix}_credit_max_multiplier", 1.20))
         multiplier = max(v3_floor, min(multiplier, v3_ceiling))
-        reasons.append(f"{'V4' if strategy_family == EXTREME_V4_FAMILY else 'V3'} 独立信用倍率限制 {v3_floor:.2f}-{v3_ceiling:.2f}x")
+        family_label = (
+            "V5"
+            if strategy_family == EXTREME_V5_FAMILY
+            else "V4"
+            if strategy_family == EXTREME_V4_FAMILY
+            else "V3"
+        )
+        reasons.append(f"{family_label} 独立信用倍率限制 {v3_floor:.2f}-{v3_ceiling:.2f}x")
     boost_ok, boost_failures = live_credit_boost_qualified(credit, config)
     if multiplier > 1.0 and not boost_ok:
         cap = float(config.get("live_credit_unqualified_boost_cap", 1.0))
@@ -1087,7 +1124,19 @@ def apply_live_credit_to_candidate(candidate: dict[str, Any], config: dict[str, 
             reasons.append("剥头皮试验期：旧信用不硬拦截")
         candidate["legacy_live_credit"] = legacy_credit
     elif legacy_credit is not None:
-        label = "剥头皮" if strategy_family == ORDERBOOK_SCALP_FAMILY else "机会引擎 V4" if strategy_family == EXTREME_V4_FAMILY else "机会引擎 V3" if strategy_family == EXTREME_V3_FAMILY else "极限 V2" if strategy_family == EXTREME_V2_FAMILY else "当前策略"
+        label = (
+            "剥头皮"
+            if strategy_family == ORDERBOOK_SCALP_FAMILY
+            else "机会引擎 V5"
+            if strategy_family == EXTREME_V5_FAMILY
+            else "机会引擎 V4"
+            if strategy_family == EXTREME_V4_FAMILY
+            else "机会引擎 V3"
+            if strategy_family == EXTREME_V3_FAMILY
+            else "极限 V2"
+            if strategy_family == EXTREME_V2_FAMILY
+            else "当前策略"
+        )
         reasons.append(f"{label}独立信用：旧策略信用仅展示，不参与仓位")
         candidate["legacy_live_credit"] = legacy_credit
 

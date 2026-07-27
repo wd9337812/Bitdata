@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.s0_full_bet import is_s0_full_bet
+from app.strategy_capabilities import strategy_supports
 
 from app.performance_guard import observed_round_trip_cost_pct
 
@@ -224,7 +225,13 @@ def effective_position_risk(
         # caps. The stage route remains the final hard ceiling below.
         max_risk = max(max_risk, float(config.get("opportunity_v432_initial_max_risk_pct", 7.5)))
     if full_bet_applied:
-        max_risk = max(max_risk, float(config.get("opportunity_v44_max_risk_pct", 15.0)))
+        version = str(config.get("opportunity_v4_strategy_version") or "")
+        profile_cap = (
+            float(config.get("opportunity_v50_max_risk_pct", 30.0))
+            if strategy_supports(version, "v50_s30")
+            else float(config.get("opportunity_v44_max_risk_pct", 15.0))
+        )
+        max_risk = max(max_risk, profile_cap)
     if scalp_tier != "none":
         key_prefix = "yolo_scalp" if mode == "yolo_scalp" else "extreme_scalp"
         scalp_cap = float(config.get(f"{key_prefix}_max_risk_pct", config.get("extreme_scalp_max_risk_pct", 18.0)))
@@ -248,6 +255,15 @@ def effective_position_risk(
         performance_mode = "minimum_cap"
     else:
         final_risk *= performance_multiplier
+    absolute_performance_cap = performance.get("risk_cap_pct")
+    performance_absolute_cap = (
+        max(0.0, float(absolute_performance_cap))
+        if absolute_performance_cap is not None
+        else None
+    )
+    if performance_absolute_cap is not None:
+        final_risk = min(final_risk, performance_absolute_cap)
+        performance_mode = "absolute_cap"
     return {
         "tier": tier,
         "scalp_tier": scalp_tier,
@@ -267,6 +283,11 @@ def effective_position_risk(
         "stage_risk_cap_pct": round(stage_risk_cap, 6),
         "performance_multiplier": round(performance_multiplier, 6),
         "performance_cap_pct": round(performance_cap, 6),
+        "performance_absolute_cap_pct": (
+            round(performance_absolute_cap, 6)
+            if performance_absolute_cap is not None
+            else None
+        ),
         "performance_mode": performance_mode,
         "final_risk_pct": round(final_risk, 8),
         "risk_chain": {
@@ -275,6 +296,11 @@ def effective_position_risk(
             "continuous_quality_risk_pct": round(sizing_input_risk, 8),
             "guard_and_target_risk_pct": round(calculated, 8),
             "license_or_performance_cap_pct": round(performance_cap, 8),
+            "absolute_performance_cap_pct": (
+                round(performance_absolute_cap, 8)
+                if performance_absolute_cap is not None
+                else None
+            ),
             "final_risk_pct": round(final_risk, 8),
         },
         "yolo_scalp_profile": yolo_profile,

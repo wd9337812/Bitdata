@@ -18,6 +18,7 @@ from app.learning_report import latest_daily_learning_report, save_daily_learnin
 from app.live_learning import (
     EXTREME_V2_FAMILY,
     EXTREME_V4_FAMILY,
+    EXTREME_V5_FAMILY,
     ORDERBOOK_SCALP_FAMILY,
     list_live_scores,
     list_strategy_live_scores,
@@ -41,6 +42,7 @@ from app.target import target_progress
 from app.binance_rate import BinanceRateLimitError, cache_status, rate_status, request_priority
 from app.adaptive_calibration import adaptive_calibration_status
 from app.s0_moe import moe_runtime_status
+from app.strategy_capabilities import strategy_family_for_version
 from app.telemetry import (
     heartbeat,
     latest_strategy_payload,
@@ -66,7 +68,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.25.2")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.26.0")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -283,12 +285,20 @@ def strategy_releases() -> dict[str, Any]:
 @app.get("/api/live-learning", dependencies=[Depends(require_auth)])
 def live_learning(limit: int = 100) -> dict[str, Any]:
     config = load_config()
+    active_version = str(config.get("opportunity_v4_strategy_version") or "")
+    active_opportunity_family = strategy_family_for_version(active_version)
     return {
         "scores": list_live_scores(limit, config),
         "strategy_scores": list_strategy_live_scores(limit, config),
         "scalp_scores": list_strategy_live_scores(limit, config, strategy_family=ORDERBOOK_SCALP_FAMILY),
         "extreme_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V2_FAMILY),
         "v4_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V4_FAMILY),
+        "v5_scores": list_strategy_live_scores(limit, config, strategy_family=EXTREME_V5_FAMILY),
+        "active_opportunity_scores": list_strategy_live_scores(
+            limit,
+            config,
+            strategy_family=active_opportunity_family,
+        ),
     }
 
 

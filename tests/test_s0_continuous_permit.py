@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.s0_continuous_permit import s0_continuous_permit_status
 from app.state_store import save_state
@@ -102,3 +102,39 @@ def test_five_usdt_hard_stop_remains_unconditional(monkeypatch, tmp_path):
 
     assert status["allowed"] is False
     assert status["status"] == "hard_stop"
+
+
+def test_v50_three_losses_cool_down_then_restore_at_twelve_percent(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        **_config(),
+        "opportunity_v4_strategy_version": "v5.0-s30",
+        "opportunity_v50_loss_3_cooldown_minutes": 20.0,
+        "opportunity_v50_min_risk_pct": 12.0,
+    }
+    now = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
+    close_ms = int(now.timestamp() * 1000)
+    rows = [_row(1, -0.5), _row(2, -0.5), _row(3, -0.5)]
+    for index, row in enumerate(rows):
+        row["close_time"] = close_ms - (2 - index) * 1000
+
+    cooling = s0_continuous_permit_status(
+        config,
+        equity=17.0,
+        live_rows=rows,
+        now=now + timedelta(minutes=1),
+    )
+    assert cooling["allowed"] is False
+    assert cooling["status"] == "loss_cooldown"
+    assert cooling["loss_cooldown_active"] is True
+
+    restored = s0_continuous_permit_status(
+        config,
+        equity=17.0,
+        live_rows=rows,
+        now=now + timedelta(minutes=21),
+    )
+    assert restored["allowed"] is True
+    assert restored["status"] == "baseline_recovery"
+    assert restored["risk_cap_pct"] == 12.0
+    assert restored["risk_multiplier"] == 1.0

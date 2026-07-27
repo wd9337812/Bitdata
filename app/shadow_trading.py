@@ -23,6 +23,7 @@ from app.strategy_releases import (
     release_id,
 )
 from app.opportunity_v4 import V4_CONTROL_FAMILY, V4_STRATEGY_FAMILY
+from app.strategy_capabilities import V5_STRATEGY_FAMILY
 from app.telemetry import connect, now_iso
 from app.training_lineage import (
     ensure_event_id,
@@ -107,7 +108,7 @@ def _candidate_price(candidate: dict[str, Any]) -> float:
 def _candidate_signal_type(candidate: dict[str, Any]) -> str:
     family = str(candidate.get("strategy_family") or "")
     raw = str(candidate.get("entry_type") or "watch")
-    if family in {V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY}:
+    if family in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY, V4_CONTROL_FAMILY}:
         structure = market_structure(candidate)
         return normalize_setup_type(structure.get("setup_type") or raw)
     return raw
@@ -151,7 +152,7 @@ def _same_v4_episode(
     now: datetime,
 ) -> bool:
     family = str(candidate.get("strategy_family") or "")
-    if family not in {V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY}:
+    if family not in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY, V4_CONTROL_FAMILY}:
         return False
     window_minutes = int(config.get("opportunity_v43_episode_dedupe_minutes", 30))
     if window_minutes <= 0:
@@ -269,7 +270,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
         }
         for row in active_rows:
             family = str(row["strategy_family"] or "legacy_mixed")
-            if family not in {V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY}:
+            if family not in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY, V4_CONTROL_FAMILY}:
                 continue
             active_keys.add(
                 (
@@ -375,7 +376,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
             evidence_type = str(candidate.get("evidence_type") or "decision")
             is_v3 = candidate.get("strategy_family") == V3_FAMILY and strategy_role == ACTIVE_ROLE
             is_v33 = candidate.get("strategy_family") == V3_FAMILY and strategy_role == CHALLENGER_ROLE
-            is_v4 = candidate.get("strategy_family") == V4_STRATEGY_FAMILY
+            is_v4 = candidate.get("strategy_family") in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY}
             is_v4_control = candidate.get("strategy_family") == V4_CONTROL_FAMILY
             v31 = candidate.get("opportunity_v31") or candidate.get("v31_challenger") or {}
             is_v31 = candidate.get("strategy_family") == "extreme_v31_challenger"
@@ -437,10 +438,16 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 market_regime = str(structure.get("market_regime") or (candidate.get("market_state") or {}).get("state") or "unknown")
                 candidate_hold_minutes = hold_minutes
                 protection: dict[str, Any] = {}
-                if strategy_family in {V3_FAMILY, V4_STRATEGY_FAMILY, V4_CONTROL_FAMILY, "extreme_v31_challenger"}:
+                if strategy_family in {
+                    V3_FAMILY,
+                    V4_STRATEGY_FAMILY,
+                    V5_STRATEGY_FAMILY,
+                    V4_CONTROL_FAMILY,
+                    "extreme_v31_challenger",
+                }:
                     protection = (
                         v4.get("protection_profile")
-                        if strategy_family == V4_STRATEGY_FAMILY
+                        if strategy_family in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY}
                         else signal.get("protection_profile")
                     ) or {}
                     max_hold_seconds = int(protection.get("max_hold_seconds") or 0)
@@ -612,7 +619,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
     current_family = active_family(config)
     current_version = active_release_version(config)
     candidate_version = challenger_version(config)
-    v4_live = current_family == V4_STRATEGY_FAMILY
+    v4_live = current_family in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY}
     with connect() as conn:
         ensure_shadow_tables(conn)
         migrate_shadow_release_metadata(conn, config)
@@ -678,7 +685,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ?
             GROUP BY COALESCE(evidence_type, 'decision')
             """,
-            (V4_STRATEGY_FAMILY, candidate_version),
+            (current_family if v4_live else V4_STRATEGY_FAMILY, candidate_version),
         ).fetchall()
         admission_lane_rows = conn.execute(
             """
@@ -696,7 +703,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
               AND COALESCE(evidence_type, 'decision') = 'decision'
             GROUP BY COALESCE(NULLIF(json_extract(payload, '$.admission_lane'), ''), 'unclassified')
             """,
-            (V4_STRATEGY_FAMILY, candidate_version),
+            (current_family if v4_live else V4_STRATEGY_FAMILY, candidate_version),
         ).fetchall()
         active_rows = [
             dict(row)
@@ -712,7 +719,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
                 "SELECT * FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ? "
                 "AND strategy_role = ? ORDER BY id DESC LIMIT ?",
                 (
-                    V4_STRATEGY_FAMILY,
+                    current_family if v4_live else V4_STRATEGY_FAMILY,
                     candidate_version,
                     "active" if v4_live else "challenger",
                     max(500, int(config.get("opportunity_v4_admission_min_trades", 40)) * 10),
@@ -776,7 +783,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         trades.append(item)
     # V4 primary performance uses only decision shadows. Exploration and paired
     # controls remain visible by evidence type, but cannot inflate live admission.
-    if current_family == V4_STRATEGY_FAMILY:
+    if current_family in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY}:
         active_rows = [row for row in active_rows if str(row.get("evidence_type") or "decision") == "decision"]
         if strategy_supports(current_version, "continuous_permit"):
             eligible_active_rows = filter_live_eligible_v4_shadows(
@@ -828,14 +835,16 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             "all": _shadow_stats(active_rows),
             "recent": _shadow_stats(active_closed[:shadow_window]),
             "recovery": _shadow_stats(active_closed[:recovery_window]),
-            "primary_evidence_type": "decision" if current_family == V4_STRATEGY_FAMILY else "all",
+            "primary_evidence_type": "decision"
+            if current_family in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY}
+            else "all",
             "execution_scope": "single_position_non_overlapping"
             if strategy_supports(current_version, "continuous_permit")
             else "all_eligible_decisions",
             "research_parallel_excluded": research_parallel_excluded,
         },
         "challenger_release": None if v4_live else {
-            "strategy_family": V4_STRATEGY_FAMILY,
+            "strategy_family": current_family if v4_live else V4_STRATEGY_FAMILY,
             "strategy_version": candidate_version,
             "strategy_role": CHALLENGER_ROLE,
             "all": candidate_stats,

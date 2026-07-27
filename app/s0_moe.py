@@ -10,6 +10,7 @@ from typing import Any
 
 from app.market_structure import market_structure, normalize_setup_type
 from app.telemetry import connect, db_path
+from app.strategy_capabilities import strategy_family_for_version
 from app.training_lineage import capture_minute_features
 
 
@@ -154,6 +155,7 @@ def _aggregate_online_evidence(
 @lru_cache(maxsize=16)
 def _online_evidence_cached(
     database: str,
+    strategy_family: str,
     strategy_version: str,
     model_version: str,
     window_hours: float,
@@ -169,11 +171,11 @@ def _online_evidence_cached(
                     SELECT id, opened_at, closed_at, symbol, direction, status, net_pnl,
                            estimated_cost, opportunity_id, market_regime, payload
                     FROM shadow_trades
-                    WHERE strategy_family = 'extreme_v4_roll' AND strategy_version = ?
+                    WHERE strategy_family = ? AND strategy_version = ?
                       AND payload LIKE ?
                     ORDER BY id DESC LIMIT 50000
                     """,
-                    (strategy_version, f'%"version":"{model_version}"%'),
+                    (strategy_family, strategy_version, f'%"version":"{model_version}"%'),
                 ).fetchall()
             ]
     except Exception as exc:
@@ -196,9 +198,11 @@ def _online_evidence_cached(
 
 def online_moe_evidence(config: dict[str, Any], model_version: str) -> dict[str, Any]:
     strategy_version = str(config.get("opportunity_v4_strategy_version") or "unknown")
+    strategy_family = strategy_family_for_version(strategy_version)
     window_hours = float(config.get("s0_moe_online_window_hours", 24.0))
     return _online_evidence_cached(
         str(db_path().resolve()),
+        strategy_family,
         strategy_version,
         model_version,
         window_hours,

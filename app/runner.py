@@ -17,7 +17,7 @@ from app.live_reaction import sync_live_reaction_from_binance
 from app.local_circuit import record_v4_live_open
 from app.market_stream import start_market_stream_thread
 from app.opportunity_queue import read_opportunities
-from app.opportunity_v4 import V4_CONTROL_FAMILY, V4_STRATEGY_FAMILY
+from app.opportunity_v4 import V4_CONTROL_FAMILY
 from app.performance_guard import global_performance_guard, update_release_equity_guard
 from app.protection_audit import audit_account_protection
 from app.recovery_controller import consume_recovery_permit, revoke_recovery_permit
@@ -27,6 +27,7 @@ from app.runtime_protection import manage_runtime_protection
 from app.s0_daily_profit_lock import s0_daily_profit_lock_status
 from app.shadow_trading import update_shadow_trades
 from app.stage_modes import apply_stage_route
+from app.strategy_capabilities import strategy_family_for_version, strategy_supports
 from app.trading_engine import (
     build_best_growth_decision,
     build_grid_decisions,
@@ -275,7 +276,11 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
         "fast_invalid_seconds": protection_profile.get("fast_invalid_seconds"),
         "strategy_family": strategy_family,
         "strategy_version": str(opportunity_v4.get("strategy_version") or candidate.get("strategy_version") or ""),
-        "protection_version": "v5_dynamic" if strategy_family in {"extreme_v3_roll", "extreme_v4_roll"} else protection_profile.get("protection_version"),
+        "protection_version": (
+            "v5_dynamic"
+            if strategy_family in {"extreme_v3_roll", "extreme_v4_roll", "extreme_v5_roll"}
+            else protection_profile.get("protection_version")
+        ),
         "break_even_atr": protection_profile.get("break_even_atr"),
         "trailing_trigger_atr": protection_profile.get("trailing_trigger_atr"),
         "trailing_distance_atr": protection_profile.get("trailing_distance_atr"),
@@ -652,6 +657,8 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         exploration_count = 0
         control_count = 0
         v4_version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
+        v4_family = strategy_family_for_version(v4_version)
+        v50_active = strategy_supports(v4_version, "v50_s30")
         v4_shadow_role = "active" if config.get("opportunity_v4_live_enabled", False) else "challenger"
         v4_rows = list(scan.get("v4_candidates") or scan.get("candidates", []))
         decision_rows = [item for item in v4_rows if (item.get("opportunity_v4") or {}).get("decision_candidate")]
@@ -688,11 +695,11 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             shadow_candidates.append(
                 {
                     **item,
-                    "strategy": "opportunity_v4_candidate",
-                    "strategy_family": V4_STRATEGY_FAMILY,
+                    "strategy": "opportunity_v5_candidate" if v50_active else "opportunity_v4_candidate",
+                    "strategy_family": v4_family,
                     "strategy_version": v4_version,
                     "strategy_role": v4_shadow_role,
-                    "strategy_generation": "v4-shadow",
+                    "strategy_generation": "v5-shadow" if v50_active else "v4-shadow",
                     "evidence_type": evidence_type,
                     "score": float(v4.get("score") or item.get("score") or 0),
                     "passed": False,

@@ -27,7 +27,7 @@ export const modeLabel: Record<string, string> = {
   attack: "进攻",
   tournament: "锦标赛",
   tournament_sprint: "锦标赛冲刺",
-  extreme_sprint: "机会引擎 V4 滚仓",
+  extreme_sprint: "V5.0-S30 全仓短打",
   yolo_scalp: "盘口剥头皮",
   grid: "稳定网格",
 };

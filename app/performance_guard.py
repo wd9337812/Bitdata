@@ -13,6 +13,7 @@ from app.strategy_capabilities import strategy_supports
 from app.strategy_releases import (
     ACTIVE_ROLE,
     V4_FAMILY,
+    V5_FAMILY,
     active_family,
     active_release_version,
     ensure_live_release_columns,
@@ -163,7 +164,7 @@ def global_performance_guard(
                         (live_limit,),
                     ).fetchall()
                 ]
-                if release_only and (current_family == V4_FAMILY or scoped_live):
+                if release_only and (current_family in {V4_FAMILY, V5_FAMILY} or scoped_live):
                     live = scoped_live
                     live_scope = f"{current_family}@{current_version}"
                 else:
@@ -182,7 +183,7 @@ def global_performance_guard(
                 # Diagnostic-only V4 shadows must never grant or veto a live permit.
                 # Fetch a bounded release slice, then keep one independent opportunity
                 # from a lane that could actually have reached live execution.
-                decision_only = current_family == V4_FAMILY
+                decision_only = current_family in {V4_FAMILY, V5_FAMILY}
                 shadow_evidence_clause = (
                     " AND COALESCE(evidence_type, 'decision') = 'decision'"
                     if decision_only
@@ -210,7 +211,7 @@ def global_performance_guard(
                 if strategy_supports(current_version, "continuous_permit"):
                     scoped_shadow = executable_single_position_shadows(scoped_shadow)
                 scoped_shadow_total = len(scoped_shadow)
-                if release_only and (current_family == V4_FAMILY or scoped_shadow):
+                if release_only and (current_family in {V4_FAMILY, V5_FAMILY} or scoped_shadow):
                     shadow = scoped_shadow
                     shadow_scope = (
                         f"{current_family}@{current_version}:live_lanes"
@@ -366,7 +367,7 @@ def global_performance_guard(
     # newly isolated strategy family. The active release must earn or lose its own status.
     release_warmup = bool(
         release_only
-        and current_family != V4_FAMILY
+        and current_family not in {V4_FAMILY, V5_FAMILY}
         and not current_live_ready
         and fallback_live_severe
     )
@@ -582,6 +583,11 @@ def global_performance_guard(
             else recovery_multiplier
             if risk_off
             else 1.0
+        ),
+        "risk_cap_pct": (
+            continuous_permit.get("risk_cap_pct")
+            if continuous_active
+            else None
         ),
         "pause_until": pause_until.isoformat() if pause_until else None,
         "live": live,

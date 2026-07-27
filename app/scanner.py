@@ -23,7 +23,7 @@ from app.opportunity_engine import (
     score_v3_opportunity,
 )
 from app.opportunity_queue import read_opportunities
-from app.opportunity_v4 import V4_STRATEGY_FAMILY, attach_v4_rankings
+from app.opportunity_v4 import attach_v4_rankings
 from app.s0_moe import attach_moe_shadow
 from app.position_sizing import effective_position_risk
 from app.s0_full_bet import s0_full_bet_profile_active
@@ -31,7 +31,7 @@ from app.scalp_engine import build_scalp_signal
 from app.shadow_trading import active_shadow_symbols
 from app.smart_flow import enrich_smart_flow_candidates
 from app.strategy import StrategyParams, atr, ema
-from app.strategy_capabilities import strategy_supports
+from app.strategy_capabilities import strategy_family_for_version, strategy_supports
 
 
 MODE_PRESETS: dict[str, dict[str, Any]] = {
@@ -1907,14 +1907,22 @@ def _apply_v4_live_selection(
     base_risk = float(candidate.get("base_risk_pct") or mode.get("risk_pct") or 0.0)
     version = str(v4.get("strategy_version") or config.get("opportunity_v4_strategy_version") or "v4.3.2")
     version_label = version.upper()
+    strategy_family = strategy_family_for_version(version)
+    v50_active = strategy_supports(version, "v50_s30")
     full_bet = bool(strategy_supports(version, "full_bet") and v4.get("full_bet_admitted"))
     signal = dict(candidate.get("signal") or {})
     if v4.get("protection_profile"):
         signal["protection_profile"] = dict(v4["protection_profile"])
     result.update(
         {
-            "strategy": "opportunity_v44_full_bet" if full_bet else "opportunity_v432_continuous_roll",
-            "strategy_family": V4_STRATEGY_FAMILY,
+            "strategy": (
+                "opportunity_v50_s30"
+                if v50_active
+                else "opportunity_v44_full_bet"
+                if full_bet
+                else "opportunity_v432_continuous_roll"
+            ),
+            "strategy_family": strategy_family,
             "strategy_version": version,
             "strategy_role": "active",
             "strategy_generation": version,
@@ -1944,7 +1952,7 @@ def _apply_v4_live_selection(
                 else f"{version_label} 仅影子观察"
             ],
             "symbol_quality": {
-                "engine": "opportunity_v4",
+                "engine": "opportunity_v5" if v50_active else "opportunity_v4",
                 "score": float(v4.get("score") or 0),
                 "allowed": admitted,
                 "pool": "trade" if admitted else "observe",
@@ -1994,7 +2002,7 @@ def _apply_v4_live_selection(
         }
         result["risk_adjustment"] = {
             **(result.get("risk_adjustment") or {}),
-            "type": "v44_full_bet_dynamic_risk",
+            "type": "v50_s30_dynamic_risk" if v50_active else "v44_full_bet_dynamic_risk",
             "multiplier": 1.0,
             "v4_admission_multiplier": 1.0,
             "admission_lane": "full_bet",
@@ -2890,6 +2898,7 @@ def scan_growth_candidates(
         for candidate in candidates
         if abs(float(candidate.get("smart_flow_score_delta") or 0)) > 0
     }
+    active_version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
     funnel = {
         "recall": {
             "count": len(recalled_symbols),
@@ -2939,8 +2948,8 @@ def scan_growth_candidates(
         },
         "opportunity_v4": {
             "enabled": bool(config.get("opportunity_v4_enabled", True)),
-            "strategy_family": V4_STRATEGY_FAMILY,
-            "strategy_version": str(config.get("opportunity_v4_strategy_version") or "v4.3.2"),
+            "strategy_family": strategy_family_for_version(active_version),
+            "strategy_version": active_version,
             "shadow_ready": v4_shadow_ready,
             "admitted": v4_admitted,
             "canary_ready": v43_canary_ready,
