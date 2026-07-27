@@ -117,3 +117,38 @@ def test_online_metrics_only_treat_passed_rows_as_selected():
     assert result["selected"]["closed"] == 1
     assert result["selected"]["net_pnl"] == 2.0
     assert result["selected"]["profit_factor"] == 999.0
+
+
+def test_v15_runtime_features_include_smart_flow_and_liquidity(monkeypatch):
+    monkeypatch.setattr(s0_moe, "_micro_features", lambda candidate, direction: {})
+    monkeypatch.setattr(
+        s0_moe,
+        "market_structure",
+        lambda candidate: {
+            "setup_type": "pullback",
+            "market_regime": "quiet",
+            "medium_path_efficiency": 0.62,
+        },
+    )
+    candidate = {
+        "direction": "LONG",
+        "depth": {"spread_pct": 0.03, "depth_notional": 9_999.0},
+        "smart_flow": {"directional_alignment": 0.7},
+        "opportunity_v4": {
+            "score": 72.0,
+            "rank_percentile": 0.91,
+            "features": {
+                "medium_alignment": 0.8,
+                "liquidity": 0.9,
+            },
+        },
+    }
+
+    row = s0_moe._feature_row(candidate)
+
+    assert row["medium_alignment"] == 0.8
+    assert row["liquidity"] == 0.9
+    assert row["smart_flow_alignment"] == 0.7
+    assert row["spread_pct"] == 0.03
+    assert row["depth_log"] > 9.0
+    assert s0_moe._model_path({}).name == "s0_binance_moe_v1_5.joblib"

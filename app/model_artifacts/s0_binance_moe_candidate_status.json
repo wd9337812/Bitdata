@@ -1,73 +1,75 @@
 {
-  "version": "s0_binance_moe_v1_4",
-  "generated_at": "2026-07-27T04:43:09.222724+00:00",
-  "decision": "research_only_not_eligible",
-  "reason": "未达到上线门槛：未触碰测试样本量、未触碰测试 PF、高成本压力 PF、市场状态覆盖",
-  "active_gates": 1,
+  "version": "s0_binance_moe_v1_5",
+  "generated_at": "2026-07-27T08:38:35.652482+00:00",
+  "decision": "research_shadow_only",
+  "reason": "最新独立时间测试未证明扣费后正期望，仅上线研究影子收集后续样本。",
   "data": {
-    "source": "data/research/s0_public_1m/s0_candidates_1m.parquet",
-    "total": 2143799,
-    "train_available": 1239956,
-    "validation": 514473,
-    "untouched_test": 389081,
-    "symbols": 119,
-    "train_end": "2026-05-01T00:00:00+00:00",
-    "validation_end": "2026-06-16T00:00:00+00:00"
+    "public_rows": 720000,
+    "shadow_rows": 60129,
+    "live_rows": 107,
+    "train_rows": 759732,
+    "validation_rows": 12677,
+    "test_rows": 7827,
+    "public_weight": 0.12,
+    "shadow_weight": 1.0,
+    "live_weight": 6.0,
+    "public_train_end": "2026-07-13T00:00:00+00:00",
+    "validation_start": "2026-07-24T00:00:00+00:00",
+    "test_start": "2026-07-26T00:00:00+00:00"
   },
   "validation": {
-    "name": "s0_binance_moe_v1_4",
-    "trades": 92,
-    "symbols": 35,
-    "win_rate": 60.8696,
-    "net_pct_points": 29.025389,
-    "mean_net_pct": 0.315493,
-    "profit_factor": 1.589,
-    "max_drawdown_pct_points": 9.356158,
-    "trades_per_day": 2.0396,
-    "cost_pct_points": 11.04
+    "name": "hybrid_moe_validation",
+    "trades": 212,
+    "symbols": 85,
+    "regimes": 5,
+    "win_rate": 39.6226,
+    "net_pct_points": -19.520084,
+    "mean_net_pct": -0.092076,
+    "profit_factor": 0.7757,
+    "max_drawdown_pct_points": 26.498345,
+    "by_source": {
+      "vps_live": {
+        "trades": 1,
+        "net_pct_points": -0.741081
+      },
+      "vps_shadow": {
+        "trades": 211,
+        "net_pct_points": -18.779003
+      }
+    }
   },
   "untouched_test": {
-    "name": "s0_binance_moe_v1_4",
-    "trades": 115,
-    "symbols": 34,
-    "win_rate": 50.4348,
-    "net_pct_points": 7.449369,
-    "mean_net_pct": 0.064777,
-    "profit_factor": 1.0949,
-    "max_drawdown_pct_points": 36.01043,
-    "trades_per_day": 3.2541,
-    "cost_pct_points": 13.8
-  },
-  "cost_sensitivity": {
-    "0.08": {
-      "net_pct_points": 12.049369,
-      "profit_factor": 1.1581
-    },
-    "0.12": {
-      "net_pct_points": 7.449369,
-      "profit_factor": 1.0949
-    },
-    "0.16": {
-      "net_pct_points": 2.849369,
-      "profit_factor": 1.0353
-    },
-    "0.20": {
-      "net_pct_points": -1.750631,
-      "profit_factor": 0.9789
+    "name": "hybrid_moe_test",
+    "trades": 126,
+    "symbols": 65,
+    "regimes": 3,
+    "win_rate": 28.5714,
+    "net_pct_points": -9.165827,
+    "mean_net_pct": -0.072745,
+    "profit_factor": 0.8346,
+    "max_drawdown_pct_points": 21.422279,
+    "by_source": {
+      "vps_live": {
+        "trades": 4,
+        "net_pct_points": 3.254539
+      },
+      "vps_shadow": {
+        "trades": 122,
+        "net_pct_points": -12.420366
+      }
     }
   },
   "release_checks": {
-    "validation_pf": true,
-    "validation_net": true,
-    "untouched_trades": false,
-    "untouched_pf": false,
-    "untouched_net": true,
-    "stressed_cost_pf": false,
-    "stressed_cost_net": true,
-    "market_regimes": false,
-    "symbols": true
+    "validation_trades": true,
+    "validation_pf": false,
+    "validation_net": false,
+    "test_trades": true,
+    "test_pf": false,
+    "test_net": false,
+    "test_regimes": true,
+    "test_symbols": true
   },
-  "selected_test_regimes": 1,
+  "active_gates": 28,
   "affects_live_admission": false,
-  "label_alignment": "5分钟保护路径代理；必须再经过 V4.7.4 独立线上影子验证"
+  "online_learning": "线上只推理并记录结果；下一次在本地使用新影子和实盘重新训练。"
 }

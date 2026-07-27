@@ -13,7 +13,7 @@ from app.telemetry import connect, db_path
 from app.training_lineage import capture_minute_features
 
 
-DEFAULT_MODEL = Path(__file__).resolve().parent / "model_artifacts" / "s0_binance_moe_v1_1.joblib"
+DEFAULT_MODEL = Path(__file__).resolve().parent / "model_artifacts" / "s0_binance_moe_v1_5.joblib"
 DEFAULT_CANDIDATE_STATUS = (
     Path(__file__).resolve().parent
     / "model_artifacts"
@@ -50,18 +50,18 @@ def _candidate_status(config: dict[str, Any]) -> dict[str, Any]:
     path = Path(configured) if configured else DEFAULT_CANDIDATE_STATUS
     if not path.exists():
         return {
-            "version": "s0_binance_moe_v1_4",
+            "version": "s0_binance_moe_v1_5",
             "decision": "not_trained",
-            "reason": "尚未生成 MoE v1.4 离线候选报告",
+            "reason": "尚未生成 MoE v1.5 混合权重候选报告",
         }
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
     except (OSError, ValueError, TypeError):
         return {
-            "version": "s0_binance_moe_v1_4",
+            "version": "s0_binance_moe_v1_5",
             "decision": "status_unreadable",
-            "reason": "MoE v1.4 候选报告无法读取",
+            "reason": "MoE v1.5 候选报告无法读取",
         }
 
 
@@ -280,6 +280,8 @@ def _feature_row(candidate: dict[str, Any]) -> dict[str, Any]:
     v4 = candidate.get("opportunity_v4") or {}
     features = v4.get("features") or {}
     signal = candidate.get("signal") or {}
+    depth = candidate.get("depth") or {}
+    smart_flow = candidate.get("smart_flow") or {}
     structure = market_structure(candidate)
     direction = str(candidate.get("direction") or "").upper()
     regime = str(structure.get("market_regime") or "unknown").lower()
@@ -317,6 +319,19 @@ def _feature_row(candidate: dict[str, Any]) -> dict[str, Any]:
         "anti_chase": _float(features.get("anti_chase")),
         "regime_fit": _float(features.get("regime_fit")),
         "entry_quality": _float(features.get("entry_quality")),
+        "medium_alignment": _float(features.get("medium_alignment")),
+        "liquidity": _float(features.get("liquidity")),
+        "smart_flow_alignment": _float(
+            features.get("smart_flow_alignment")
+            if features.get("smart_flow_alignment") is not None
+            else smart_flow.get("directional_alignment")
+        ),
+        "spread_pct": _float(depth.get("spread_pct")),
+        "depth_log": (
+            math.log1p(max(_float(depth.get("depth_notional"), 0.0), 0.0))
+            if depth.get("depth_notional") is not None
+            else math.nan
+        ),
         "confirmations": _float(v4.get("confirmations") or v4.get("v44_confirmations")),
         "direction": direction,
         "market_regime": regime,
@@ -363,7 +378,7 @@ def evaluate_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dic
                 "market_regime": regime,
                 "active_gate": False,
                 "passed": False,
-                "reason": "当前形态与市场状态没有通过样本外验证",
+                "reason": "当前形态与市场状态没有可用的研究影子门槛",
             }
         row = _feature_row(candidate)
         frame = pd.DataFrame([row], columns=bundle["features"])
@@ -388,7 +403,7 @@ def evaluate_candidate(candidate: dict[str, Any], config: dict[str, Any]) -> dic
             "model_edge": round(edge, 6),
             "edge_floor": round(float(floor), 6),
             "passed": passed,
-            "reason": "模型建议记录影子机会" if passed else "模型优势未达到独立验证门槛",
+            "reason": "模型建议记录为选中影子机会" if passed else "模型优势未达到研究影子门槛",
             "affects_live_admission": False,
             "rest_requests": 0,
         }

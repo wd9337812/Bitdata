@@ -571,29 +571,29 @@ function App() {
                 tone={runtimeProtection.error ? "negative" : "positive"}
               />
               <MetricCard
-                title="S0 MoE 线上旧模型"
-                value={moe.runtime_model_enabled ? "影子对照运行" : "已退役"}
-                sub={moe.runtime_model_enabled ? `${moe.version || "未知版本"} · ${fmt(moe.active_gates, 0)} 个验证场景 · 不影响实盘准入` : "旧模型负期望，不再生成新影子建议；历史证据仍保留"}
+                title="S0 MoE 研究影子"
+                value={moe.runtime_model_enabled ? "在线记录中" : "未启用"}
+                sub={moe.runtime_model_enabled ? `${moe.version || "未知版本"} · ${fmt(moe.active_gates, 0)} 个研究门槛 · 只记录，不影响实盘` : "模型不会自动训练，也不会接管实盘"}
                 tone={moe.runtime_model_enabled ? "positive" : ""}
               />
               <MetricCard
-                title="旧模型历史证据"
+                title="线上选中影子结果"
                 value={Number(moeSelected.closed || 0) > 0
                   ? `${fmt(moeSelected.closed, 0)} 笔 · PF ${fmt(moeSelected.profit_factor, 2)}`
-                  : "暂无已结束样本"}
-                sub={`历史已评估 ${fmt(moeEvaluated.total, 0)} 笔 · 只供复盘，不参与实盘`}
+                  : "等待首批影子平仓"}
+                sub={`当前模型已评估 ${fmt(moeEvaluated.total, 0)} 笔 · 净收益 ${fmt(moeSelected.net_pnl, 4)}U`}
                 tone={Number(moeSelected.net_pnl || 0) > 0 ? "positive" : undefined}
               />
               <MetricCard
-                title="MoE v1.4 离线候选"
-                value={moeCandidate.decision === "shadow_candidate" ? "可进入独立影子" : "未达到上线门槛"}
+                title={`${moeCandidate.version || "MoE"} 本地训练`}
+                value={moeCandidate.decision === "shadow_candidate" ? "通过离线测试" : "仅研究影子"}
                 sub={`${fmt(moeCandidate.untouched_test?.trades, 0)} 笔 · PF ${fmt(moeCandidate.untouched_test?.profit_factor, 2)} · 净收益 ${fmt(moeCandidate.untouched_test?.net_pct_points, 3)}%`}
                 tone={moeCandidate.decision === "shadow_candidate" ? "positive" : "negative"}
               />
               <MetricCard
-                title="MoE 下一步"
-                value={moeCandidate.decision === "shadow_candidate" ? "等待线上独立影子验证" : "继续离线训练"}
-                sub={moeCandidate.reason || (moeRetraining.ready ? "样本量已达到候选快照要求" : "模型不会自动接管实盘")}
+                title="下一次本地训练"
+                value={moeRetraining.ready ? "样本量已就绪" : `${fmt(moeRetraining.selected_closed, 0)} / ${fmt(moeRetraining.required_selected_closes, 0)} 笔`}
+                sub={`${fmt(moeRetraining.selected_regimes, 0)} / ${fmt(moeRetraining.required_regimes, 0)} 种市场状态 · 达标后仍需人工离线回测`}
               />
             </div>
             <TargetProgressPanel target={target} />
@@ -1647,7 +1647,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {toggle("stage_s0_daily_profit_lock_enabled", "S0 当日净利润锁", "默认开启；达到目标后不强平受保护持仓，空仓后停止当天新开仓")}
             {number("stage_s0_daily_profit_target_pct", "S0 当日净利润目标%", "默认 40%；按 UTC 当日初始权益计算，次日自动恢复")}
             {number("runtime_protection_supervisor_seconds", "持仓快速保护检查秒数", "默认 5 秒；独立于完整扫描周期，WebSocket 最新价优先")}
-            {toggle("s0_moe_shadow_enabled", "保留 MoE 研究通道", "旧模型已退役；只有通过离线和独立影子验证的新候选才会重新启用")}
+            {toggle("s0_moe_shadow_enabled", "启用 MoE 研究影子", "本地训练模型在线只做推理并记录结果，不参与实盘准入、仓位或止盈止损")}
             {number("s0_moe_online_window_hours", "MoE 线上统计窗口（小时）", "默认 24 小时；同时保留当前策略版本的全量统计")}
             {number("s0_moe_retrain_min_selected_closes", "MoE 候选重训练最少闭合样本", "默认 200 笔通过模型门控且已结束的独立影子机会")}
             {number("s0_moe_retrain_min_regimes", "MoE 候选重训练最少市场状态", "默认至少覆盖 2 种市场状态，避免只学到单边行情")}
