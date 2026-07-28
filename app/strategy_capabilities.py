@@ -13,6 +13,9 @@ STRATEGY_GENERATION_ALIASES = {
     # V5.0-S30 is a direct-live S0 release. It keeps the execution primitives
     # but owns a separate evidence and permit namespace.
     "v5.0-s30": "v5.0-s30",
+    # V5.1 keeps the S0 execution boundary and replaces the all-or-nothing
+    # panic veto with setup-aware, event-deduplicated admission.
+    "v5.1": "v5.1",
 }
 
 
@@ -22,7 +25,7 @@ V4_STRATEGY_FAMILY = "extreme_v4_roll"
 
 def strategy_family_for_version(value: Any) -> str:
     version = str(value or "").strip().lower()
-    return V5_STRATEGY_FAMILY if version.startswith("v5.0-s30") else V4_STRATEGY_FAMILY
+    return V5_STRATEGY_FAMILY if version.startswith("v5.") else V4_STRATEGY_FAMILY
 
 
 def effective_strategy_version(value: Any) -> str:
@@ -35,13 +38,22 @@ def effective_strategy_version(value: Any) -> str:
 
 def strategy_supports(value: Any, capability: str) -> bool:
     raw_version = str(value or "").strip().lower()
-    if raw_version.startswith("v5.0-s30"):
-        return capability in {
+    if raw_version.startswith("v5."):
+        supported = {
             "full_bet",
             "continuous_permit",
             "direct_live",
             "v50_s30",
         }
+        if raw_version.startswith("v5.1"):
+            supported.update(
+                {
+                    "v51_candidate_regime",
+                    "v51_setup_router",
+                    "event_group_dedupe",
+                }
+            )
+        return capability in supported
     if capability == "v472_router":
         return raw_version.startswith(("v4.7.2", "v4.7.3", "v4.7.4"))
     version = effective_strategy_version(value)

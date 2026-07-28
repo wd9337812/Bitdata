@@ -23,6 +23,7 @@ V4_STRATEGY_FAMILY = "extreme_v4_roll"
 V4_CONTROL_FAMILY = "extreme_v4_control"
 V4_FEATURE_SCHEMA = "v4.7.4"
 V5_FEATURE_SCHEMA = "v5.0-s30"
+V51_FEATURE_SCHEMA = "v5.1"
 
 V462_FEATURE_WEIGHTS = {
     "cross_sectional_strength": 0.08,
@@ -65,6 +66,13 @@ V50_SETUP_ADJUSTMENTS = {
     "breakout": 0.01,
     "pullback": 0.05,
     "prebreakout": -0.02,
+}
+
+V51_SETUP_ADJUSTMENTS = {
+    "momentum": 0.01,
+    "breakout": -0.04,
+    "pullback": 0.08,
+    "prebreakout": 0.03,
 }
 
 V462_SETUP_ADJUSTMENTS = {
@@ -526,7 +534,9 @@ def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], con
     structure = market_structure(candidate)
     setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
     setup_adjustments = (
-        V50_SETUP_ADJUSTMENTS
+        V51_SETUP_ADJUSTMENTS
+        if strategy_supports(version, "v51_setup_router")
+        else V50_SETUP_ADJUSTMENTS
         if strategy_supports(version, "v50_s30")
         else
         V472_SETUP_ADJUSTMENTS
@@ -663,13 +673,67 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
     )
     trend_aligned = aligned or regime_aligned
     if regime == "panic":
+        version = str(config.get("opportunity_v4_strategy_version") or "").lower()
+        signal = candidate.get("signal") or {}
+        volume = float(signal.get("volume_acceleration") or 0.0)
+        directed_flow = float(signal.get("directed_trade_flow") or 0.0)
+        medium_path = float(structure.get("medium_path_efficiency") or 0.0)
+        extension = max(0.0, float(signal.get("breakout_extension_atr") or 0.0))
+        components = {
+            "structure": setup_type in {"pullback", "prebreakout"},
+            "phase": phase in {"RETEST", "ARMED"},
+            "trend_alignment": trend_aligned,
+            "volume": volume
+            >= float(config.get("opportunity_v51_recovery_min_volume_acceleration", 1.05)),
+            "directed_flow": directed_flow
+            >= float(config.get("opportunity_v51_recovery_min_directed_flow", 0.58)),
+            "medium_path": medium_path
+            >= float(config.get("opportunity_v51_recovery_min_medium_path", 0.30)),
+            "not_extended": extension
+            <= float(config.get("opportunity_v51_recovery_max_extension_atr", 0.35)),
+        }
+        confirmations = sum(bool(value) for value in components.values())
+        recovering = bool(
+            strategy_supports(version, "v51_candidate_regime")
+            and all(
+                components[name]
+                for name in (
+                    "structure",
+                    "phase",
+                    "trend_alignment",
+                    "volume",
+                    "directed_flow",
+                    "medium_path",
+                    "not_extended",
+                )
+            )
+        )
+        if recovering:
+            return {
+                "scope": "panic_recovery_candidate",
+                "market_phase": "panic_recovery",
+                "live_scope": True,
+                "canary_scope": True,
+                "exploration_scope": False,
+                "trend_aligned": True,
+                "recovery_components": components,
+                "recovery_confirmations": confirmations,
+                "reason": "恐慌行情已经减速，回踩或蓄势结构通过候选级恢复检查",
+            }
         return {
             "scope": "panic_shadow_only",
+            "market_phase": "panic_expansion" if confirmations < 4 else "panic_decelerating",
             "live_scope": False,
             "canary_scope": False,
             "exploration_scope": False,
             "trend_aligned": trend_aligned,
-            "reason": "恐慌行情只记录影子，不在失序盘口追价",
+            "recovery_components": components,
+            "recovery_confirmations": confirmations,
+            "reason": (
+                "恐慌仍在扩散，只记录影子"
+                if confirmations < 4
+                else "恐慌正在减速，但尚未完成候选级恢复确认"
+            ),
         }
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
     v44_active = bool(strategy_supports(version, "full_bet") and config.get("opportunity_v44_full_bet_enabled", True))
@@ -692,7 +756,11 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
         v50_active
         and regime == "mixed"
         and trend_aligned
-        and setup_type in {"momentum", "pullback", "breakout"}
+        and setup_type in (
+            {"momentum", "pullback", "breakout", "prebreakout"}
+            if strategy_supports(version, "v51_setup_router")
+            else {"momentum", "pullback", "breakout"}
+        )
         and (setup_type != "pullback" or phase == "RETEST")
     ):
         return {
@@ -1237,6 +1305,13 @@ def attach_v4_rankings(
                 "prebreakout": float(config.get("opportunity_v472_prebreakout_min_cost_ratio", 2.30)),
             }.get(setup_type, min_cost_ratio)
             candidate_min_cost_ratio = max(min_cost_ratio, setup_cost_floor)
+        if strategy_supports(version, "v51_setup_router"):
+            setup_cost_floor = {
+                "pullback": float(config.get("opportunity_v51_pullback_min_cost_ratio", 2.20)),
+                "prebreakout": float(config.get("opportunity_v51_prebreakout_min_cost_ratio", 2.30)),
+                "breakout": float(config.get("opportunity_v51_breakout_min_cost_ratio", 2.80)),
+            }.get(setup_type, v44_cost_ratio)
+            candidate_min_cost_ratio = max(candidate_min_cost_ratio, setup_cost_floor)
         medium_aligned = bool(structure.get("medium_trend_aligned"))
         alignment_ok = medium_aligned or bool(policy["trend_aligned"]) or not require_alignment
         cost_ok = model["cost_ratio"] >= candidate_min_cost_ratio
@@ -1384,6 +1459,30 @@ def attach_v4_rankings(
         effective_v44_rank = v44_rank
         effective_v44_expected = v44_expected
         effective_v44_confirmations = v44_confirmations_required
+        if strategy_supports(version, "v51_setup_router"):
+            effective_v44_rank = {
+                "pullback": float(config.get("opportunity_v51_pullback_min_rank_percentile", 0.80)),
+                "prebreakout": float(config.get("opportunity_v51_prebreakout_min_rank_percentile", 0.82)),
+                "breakout": float(config.get("opportunity_v51_breakout_min_rank_percentile", 0.88)),
+            }.get(setup_type, v44_rank)
+            if setup_type == "breakout":
+                effective_v44_confirmations = max(
+                    effective_v44_confirmations,
+                    int(config.get("opportunity_v51_breakout_min_confirmations", 3)),
+                )
+            if str(policy.get("scope") or "") == "panic_recovery_candidate":
+                effective_v44_rank = max(
+                    effective_v44_rank,
+                    float(config.get("opportunity_v51_panic_recovery_min_rank_percentile", 0.82)),
+                )
+                effective_v44_expected = max(
+                    effective_v44_expected,
+                    float(config.get("opportunity_v51_panic_recovery_min_expected_net_pct", 0.04)),
+                )
+                effective_v44_confirmations = max(
+                    effective_v44_confirmations,
+                    int(config.get("opportunity_v51_panic_recovery_min_confirmations", 3)),
+                )
         if strategy_supports(version, "global_adaptive"):
             effective_v44_rank = _clamp(
                 v44_rank + float(calibration.get("rank_threshold_delta") or 0.0),
@@ -1419,6 +1518,11 @@ def attach_v4_rankings(
             candidate_min_cost_ratio,
             v44_cost_ratio + float(calibration.get("cost_ratio_delta") or 0.0),
         )
+        if str(policy.get("scope") or "") == "panic_recovery_candidate":
+            effective_v44_cost_ratio = max(
+                effective_v44_cost_ratio,
+                float(config.get("opportunity_v51_panic_recovery_min_cost_ratio", 2.30)),
+            )
         v44_admitted = bool(
             v44_active
             and live_enabled
@@ -1568,7 +1672,13 @@ def attach_v4_rankings(
             "strategy_family": strategy_family,
             "strategy_version": version,
             "strategy_role": "active" if live_enabled else "challenger",
-            "feature_schema_version": V5_FEATURE_SCHEMA if v50_active else V4_FEATURE_SCHEMA,
+            "feature_schema_version": (
+                V51_FEATURE_SCHEMA
+                if strategy_supports(version, "v51_setup_router")
+                else V5_FEATURE_SCHEMA
+                if v50_active
+                else V4_FEATURE_SCHEMA
+            ),
             "market_structure_schema": MARKET_STRUCTURE_SCHEMA,
             "setup_type": setup_type,
             "direction": direction,

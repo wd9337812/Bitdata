@@ -176,6 +176,26 @@ def ensure_event_id(candidate: dict[str, Any], bucket_minutes: int = 45) -> str:
     return value
 
 
+def ensure_event_group_id(candidate: dict[str, Any], bucket_minutes: int = 60) -> str:
+    """Group setup variants that belong to the same symbol-direction market wave."""
+    current = str(candidate.get("event_group_id") or "").strip()
+    if current:
+        return current
+    signal = candidate.get("signal") or {}
+    timestamp_ms = int(
+        signal.get("signal_time_ms")
+        or candidate.get("signal_time_ms")
+        or datetime.now(timezone.utc).timestamp() * 1000
+    )
+    bucket_ms = max(60_000, int(bucket_minutes) * 60_000)
+    bucket = timestamp_ms // bucket_ms
+    symbol = str(candidate.get("symbol") or "UNKNOWN").upper()
+    direction = str(candidate.get("direction") or signal.get("signal") or "WAIT").upper()
+    value = f"{symbol}:{direction}:wave:{bucket}"
+    candidate["event_group_id"] = value
+    return value
+
+
 def _float(value: Any) -> float | None:
     try:
         number = float(value)
@@ -299,9 +319,10 @@ def record_decision_opportunity(decision: dict[str, Any]) -> str | None:
         return None
     opportunity_id = ensure_opportunity_id(candidate)
     event_id = ensure_event_id(candidate)
+    event_group_id = ensure_event_group_id(candidate)
     decision["opportunity_id"] = opportunity_id
     decision["event_id"] = event_id
-    decision["event_group_id"] = event_id
+    decision["event_group_id"] = event_group_id
     signal = decision.get("signal") or candidate.get("signal") or {}
     v4 = candidate.get("opportunity_v4") or {}
     structure = candidate.get("market_structure") or {}
@@ -337,7 +358,7 @@ def record_decision_opportunity(decision: dict[str, Any]) -> str | None:
             (
                 opportunity_id,
                 event_id,
-                event_id,
+                event_group_id,
                 now_iso(),
                 now_iso(),
                 str(candidate.get("symbol") or "").upper(),
@@ -375,23 +396,26 @@ def record_shadow_opportunity(conn: Any, candidate: dict[str, Any], opportunity_
     features = capture_minute_features(candidate)
     signal_time_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
     event_id = ensure_event_id(candidate)
+    event_group_id = ensure_event_group_id(candidate)
     conn.execute(
         """
         INSERT INTO opportunity_lineage (
-            opportunity_id, event_id, created_at, updated_at, symbol, direction, signal_type,
+            opportunity_id, event_id, event_group_id, created_at, updated_at, symbol, direction, signal_type,
             setup_type, market_regime, strategy_family, strategy_version, strategy_role,
             admission_lane, decision_action, decision_status, signal_time_ms,
             decision_price, stop_price, take_profit_price, risk_pct,
             feature_schema_version, minute_features, decision_payload
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SHADOW', ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SHADOW', ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(opportunity_id) DO UPDATE SET
             updated_at = excluded.updated_at,
             event_id = excluded.event_id,
+            event_group_id = excluded.event_group_id,
             minute_features = COALESCE(opportunity_lineage.minute_features, excluded.minute_features)
         """,
         (
             opportunity_id,
             event_id,
+            event_group_id,
             now_iso(),
             now_iso(),
             str(candidate.get("symbol") or "").upper(),

@@ -160,7 +160,7 @@ def active_family(config: dict[str, Any]) -> str:
     if not config.get("opportunity_v4_live_enabled", False):
         return V3_FAMILY
     version = challenger_version(config).lower()
-    return V5_FAMILY if version.startswith("v5.0-s30") else V4_FAMILY
+    return V5_FAMILY if version.startswith("v5.") else V4_FAMILY
 
 
 def active_release_version(config: dict[str, Any]) -> str:

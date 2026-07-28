@@ -621,7 +621,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v5.0-s30",
+    "opportunity_v4_strategy_version": "v5.1",
     "s0_moe_shadow_enabled": True,
     "s0_moe_runtime_model_enabled": False,
     "s0_moe_model_path": "",
@@ -872,13 +872,30 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v50_loss_2_multiplier": 0.60,
     "opportunity_v50_loss_3_multiplier": 1.0,
     "opportunity_v50_loss_3_cooldown_minutes": 20.0,
+    # V5.1 changes candidate composition, not the account safety boundary.
+    "opportunity_v51_pullback_min_rank_percentile": 0.80,
+    "opportunity_v51_prebreakout_min_rank_percentile": 0.82,
+    "opportunity_v51_breakout_min_rank_percentile": 0.88,
+    "opportunity_v51_pullback_min_cost_ratio": 2.20,
+    "opportunity_v51_prebreakout_min_cost_ratio": 2.30,
+    "opportunity_v51_breakout_min_cost_ratio": 2.80,
+    "opportunity_v51_breakout_min_confirmations": 3,
+    "opportunity_v51_panic_recovery_min_rank_percentile": 0.82,
+    "opportunity_v51_panic_recovery_min_expected_net_pct": 0.04,
+    "opportunity_v51_panic_recovery_min_cost_ratio": 2.30,
+    "opportunity_v51_panic_recovery_min_confirmations": 3,
+    "opportunity_v51_recovery_min_volume_acceleration": 1.05,
+    "opportunity_v51_recovery_min_directed_flow": 0.58,
+    "opportunity_v51_recovery_min_medium_path": 0.30,
+    "opportunity_v51_recovery_max_extension_atr": 0.35,
+    "opportunity_v51_event_group_minutes": 60,
     "opportunity_v4_evidence_lookback_hours": 168,
     "opportunity_v4_evidence_max_trades": 5000,
     "opportunity_v4_evidence_cache_seconds": 60,
     "strategy_canary_enabled": True,
     "strategy_canary_auto_issue": True,
     "strategy_canary_startup_cap_enabled": True,
-    "strategy_canary_release_id": "extreme_v5_roll@v5.0-s30",
+    "strategy_canary_release_id": "extreme_v5_roll@v5.1",
     "strategy_canary_permit_hours": 24.0,
     "strategy_canary_level_1_multiplier": 1.0,
     "strategy_canary_level_1_max_opportunities": 6,
@@ -1184,12 +1201,12 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         config["execution_max_spread_pct"] = loaded["opportunity_v3_max_spread_pct"]
     if "execution_min_depth_notional_usdt" not in loaded and "opportunity_v3_min_depth_notional_usdt" in loaded:
         config["execution_min_depth_notional_usdt"] = loaded["opportunity_v3_min_depth_notional_usdt"]
-    # V5.0-S30 is the current direct-live S0 generation. Existing V3/V4
+    # V5.1 is the current direct-live S0 generation. Existing V3/V4
     # snapshots are kept in telemetry, but the running configuration advances
     # to the new isolated family instead of inheriting their evidence.
     loaded_v4_version = str(loaded.get("opportunity_v4_strategy_version") or "").lower()
-    if loaded_v4_version.startswith(("v3.", "v4.")):
-        config["opportunity_v4_strategy_version"] = "v5.0-s30"
+    if loaded_v4_version.startswith(("v3.", "v4.")) or loaded_v4_version == "v5.0-s30":
+        config["opportunity_v4_strategy_version"] = "v5.1"
         config["opportunity_v410_seed_version"] = "v4.10"
     if not bool(loaded.get("opportunity_v462_time_exit_migrated", False)):
         if int(loaded.get("opportunity_v44_max_hold_bars", 6)) == 6:
@@ -1209,9 +1226,11 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         "extreme_v4_roll@v4.10",
         "extreme_v4_roll@v4.11",
     }:
-        config["strategy_canary_release_id"] = "extreme_v5_roll@v5.0-s30"
-    if loaded_v4_version.startswith("v5.0-s30"):
-        config["strategy_canary_release_id"] = "extreme_v5_roll@v5.0-s30"
+        config["strategy_canary_release_id"] = "extreme_v5_roll@v5.1"
+    if loaded_v4_version.startswith("v5."):
+        config["strategy_canary_release_id"] = (
+            f"extreme_v5_roll@{config['opportunity_v4_strategy_version']}"
+        )
     if not include_secret:
         config["api_secret"] = "********" if config.get("api_secret") else ""
         config["api_key"] = mask(config.get("api_key", ""))

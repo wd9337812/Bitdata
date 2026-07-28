@@ -11,12 +11,32 @@ from app.market_stream import write_snapshot
 from app.shadow_trading import ensure_shadow_tables
 from app.telemetry import connect
 from app.training_lineage import (
+    ensure_event_group_id,
+    ensure_event_id,
     finalize_trade_lineage,
     match_trade_record,
     record_decision_opportunity,
     record_execution_result,
     training_data_quality,
 )
+
+
+def test_event_group_merges_setup_variants_but_event_id_does_not():
+    first = {
+        "symbol": "SOLUSDT",
+        "direction": "LONG",
+        "entry_type": "trend_breakout",
+        "signal_time_ms": 1_800_000,
+    }
+    second = {
+        "symbol": "SOLUSDT",
+        "direction": "LONG",
+        "entry_type": "trend_pullback",
+        "signal_time_ms": 1_800_000,
+    }
+
+    assert ensure_event_id(first) != ensure_event_id(second)
+    assert ensure_event_group_id(first) == ensure_event_group_id(second)
 
 
 def _decision() -> dict:

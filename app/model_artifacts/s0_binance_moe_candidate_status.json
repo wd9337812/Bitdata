@@ -1,12 +1,13 @@
 {
-  "version": "s0_binance_moe_v1_6",
-  "generated_at": "2026-07-28T06:11:27.295219+00:00",
+  "version": "s0_binance_moe_v1_7",
+  "generated_at": "2026-07-28T16:03:51.956636+00:00",
   "decision": "research_shadow_only",
-  "reason": "精确 V5 谱系的样本外扣费后证据未达到放行标准，只保留研究影子，不接管实盘。",
+  "reason": "事件组隔离后的样本外证据未达到放行标准，只保留研究影子，不接管实盘。",
   "data": {
     "public_rows": 240000,
     "exact_v5_rows_before_dedup": 5089,
     "exact_v5_rows_after_dedup": 3965,
+    "independent_event_groups": 3960,
     "deduplicated_rows": 1124,
     "v5_sources": {
       "v5_shadow_decision": 3035,
@@ -14,17 +15,22 @@
       "v5_live": 10
     },
     "public_weight": 0.05,
-    "v5_decision_weight": 1.0,
-    "v5_exploration_weight": 0.7,
-    "v5_live_weight": 6.0,
+    "event_group_weight_capped": true,
     "stress_cost_multipliers": [
       1.0,
       1.5,
       2.0
     ],
     "split": {
-      "exact_train_end": "2026-07-28T00:33:37.102959+00:00",
-      "exact_validation_end": "2026-07-28T02:54:45.343155+00:00",
+      "event_groups": 3960,
+      "train_event_groups": 2376,
+      "validation_event_groups": 792,
+      "test_event_groups": 792,
+      "group_overlap": {
+        "train_validation": 0,
+        "train_test": 0,
+        "validation_test": 0
+      },
       "public_rows_train_only": 240000,
       "exact_rows": 3965
     }
@@ -91,192 +97,176 @@
     }
   },
   "validation": {
-    "name": "moe_v16_validation",
-    "trades": 11,
-    "symbols": 11,
+    "name": "moe_v17_validation",
+    "trades": 14,
+    "symbols": 13,
     "regimes": 1,
-    "win_rate": 63.6364,
-    "net_pct_points": 2.911291,
-    "mean_net_pct": 0.264663,
-    "profit_factor": 2.1588,
-    "max_drawdown_pct_points": 0.75045,
+    "win_rate": 57.1429,
+    "net_pct_points": 5.03622,
+    "mean_net_pct": 0.35973,
+    "profit_factor": 2.6378,
+    "max_drawdown_pct_points": 2.143121,
     "by_source": {
       "v5_shadow_decision": {
-        "trades": 9,
-        "net_pct_points": 3.732363
+        "trades": 12,
+        "net_pct_points": 4.21436
       },
       "v5_shadow_exploration": {
         "trades": 2,
-        "net_pct_points": -0.821071
+        "net_pct_points": 0.82186
       }
     }
   },
   "untouched_test": {
-    "name": "moe_v16_test",
-    "trades": 15,
-    "symbols": 14,
+    "name": "moe_v17_test",
+    "trades": 16,
+    "symbols": 16,
     "regimes": 1,
-    "win_rate": 26.6667,
-    "net_pct_points": -6.61051,
-    "mean_net_pct": -0.440701,
-    "profit_factor": 0.4235,
-    "max_drawdown_pct_points": 6.437951,
+    "win_rate": 37.5,
+    "net_pct_points": -10.19082,
+    "mean_net_pct": -0.636926,
+    "profit_factor": 0.2136,
+    "max_drawdown_pct_points": 8.410885,
     "by_source": {
       "v5_shadow_decision": {
-        "trades": 10,
-        "net_pct_points": -6.641429
-      },
-      "v5_shadow_exploration": {
-        "trades": 5,
-        "net_pct_points": 0.030919
+        "trades": 16,
+        "net_pct_points": -10.19082
       }
     }
   },
   "cost_stress": {
     "1.0x": {
       "validation": {
-        "name": "v16_validation_cost_1.0x",
-        "trades": 11,
-        "symbols": 11,
+        "name": "v17_validation_cost_1.0x",
+        "trades": 14,
+        "symbols": 13,
         "regimes": 1,
-        "win_rate": 63.6364,
-        "net_pct_points": 2.911291,
-        "mean_net_pct": 0.264663,
-        "profit_factor": 2.1588,
-        "max_drawdown_pct_points": 0.75045,
+        "win_rate": 57.1429,
+        "net_pct_points": 5.03622,
+        "mean_net_pct": 0.35973,
+        "profit_factor": 2.6378,
+        "max_drawdown_pct_points": 2.143121,
         "by_source": {
           "v5_shadow_decision": {
-            "trades": 9,
-            "net_pct_points": 3.732363
+            "trades": 12,
+            "net_pct_points": 4.21436
           },
           "v5_shadow_exploration": {
             "trades": 2,
-            "net_pct_points": -0.821071
+            "net_pct_points": 0.82186
           }
         }
       },
       "test": {
-        "name": "v16_test_cost_1.0x",
-        "trades": 15,
-        "symbols": 14,
+        "name": "v17_test_cost_1.0x",
+        "trades": 16,
+        "symbols": 16,
         "regimes": 1,
-        "win_rate": 26.6667,
-        "net_pct_points": -6.61051,
-        "mean_net_pct": -0.440701,
-        "profit_factor": 0.4235,
-        "max_drawdown_pct_points": 6.437951,
+        "win_rate": 37.5,
+        "net_pct_points": -10.19082,
+        "mean_net_pct": -0.636926,
+        "profit_factor": 0.2136,
+        "max_drawdown_pct_points": 8.410885,
         "by_source": {
           "v5_shadow_decision": {
-            "trades": 10,
-            "net_pct_points": -6.641429
-          },
-          "v5_shadow_exploration": {
-            "trades": 5,
-            "net_pct_points": 0.030919
+            "trades": 16,
+            "net_pct_points": -10.19082
           }
         }
       }
     },
     "1.5x": {
       "validation": {
-        "name": "v16_validation_cost_1.5x",
-        "trades": 11,
-        "symbols": 11,
+        "name": "v17_validation_cost_1.5x",
+        "trades": 14,
+        "symbols": 13,
         "regimes": 1,
-        "win_rate": 54.5455,
-        "net_pct_points": 2.251291,
-        "mean_net_pct": 0.204663,
-        "profit_factor": 1.804,
-        "max_drawdown_pct_points": 0.81045,
+        "win_rate": 57.1429,
+        "net_pct_points": 4.19622,
+        "mean_net_pct": 0.29973,
+        "profit_factor": 2.2216,
+        "max_drawdown_pct_points": 2.218515,
         "by_source": {
           "v5_shadow_decision": {
-            "trades": 9,
-            "net_pct_points": 3.192363
+            "trades": 12,
+            "net_pct_points": 3.49436
           },
           "v5_shadow_exploration": {
             "trades": 2,
-            "net_pct_points": -0.941071
+            "net_pct_points": 0.70186
           }
         }
       },
       "test": {
-        "name": "v16_test_cost_1.5x",
-        "trades": 15,
-        "symbols": 14,
+        "name": "v17_test_cost_1.5x",
+        "trades": 16,
+        "symbols": 16,
         "regimes": 1,
-        "win_rate": 26.6667,
-        "net_pct_points": -7.51051,
-        "mean_net_pct": -0.500701,
-        "profit_factor": 0.3806,
-        "max_drawdown_pct_points": 7.037951,
+        "win_rate": 37.5,
+        "net_pct_points": -11.15082,
+        "mean_net_pct": -0.696926,
+        "profit_factor": 0.1776,
+        "max_drawdown_pct_points": 8.950885,
         "by_source": {
           "v5_shadow_decision": {
-            "trades": 10,
-            "net_pct_points": -7.241429
-          },
-          "v5_shadow_exploration": {
-            "trades": 5,
-            "net_pct_points": -0.269081
+            "trades": 16,
+            "net_pct_points": -11.15082
           }
         }
       }
     },
     "2.0x": {
       "validation": {
-        "name": "v16_validation_cost_2.0x",
-        "trades": 11,
-        "symbols": 11,
+        "name": "v17_validation_cost_2.0x",
+        "trades": 14,
+        "symbols": 13,
         "regimes": 1,
-        "win_rate": 54.5455,
-        "net_pct_points": 1.591291,
-        "mean_net_pct": 0.144663,
-        "profit_factor": 1.5133,
-        "max_drawdown_pct_points": 0.885901,
+        "win_rate": 57.1429,
+        "net_pct_points": 3.35622,
+        "mean_net_pct": 0.23973,
+        "profit_factor": 1.8844,
+        "max_drawdown_pct_points": 2.398515,
         "by_source": {
           "v5_shadow_decision": {
-            "trades": 9,
-            "net_pct_points": 2.652363
+            "trades": 12,
+            "net_pct_points": 2.77436
           },
           "v5_shadow_exploration": {
             "trades": 2,
-            "net_pct_points": -1.061071
+            "net_pct_points": 0.58186
           }
         }
       },
       "test": {
-        "name": "v16_test_cost_2.0x",
-        "trades": 15,
-        "symbols": 14,
+        "name": "v17_test_cost_2.0x",
+        "trades": 16,
+        "symbols": 16,
         "regimes": 1,
-        "win_rate": 26.6667,
-        "net_pct_points": -8.41051,
-        "mean_net_pct": -0.560701,
-        "profit_factor": 0.3422,
-        "max_drawdown_pct_points": 7.637951,
+        "win_rate": 37.5,
+        "net_pct_points": -12.11082,
+        "mean_net_pct": -0.756926,
+        "profit_factor": 0.1446,
+        "max_drawdown_pct_points": 9.490885,
         "by_source": {
           "v5_shadow_decision": {
-            "trades": 10,
-            "net_pct_points": -7.841429
-          },
-          "v5_shadow_exploration": {
-            "trades": 5,
-            "net_pct_points": -0.569081
+            "trades": 16,
+            "net_pct_points": -12.11082
           }
         }
       }
     }
   },
   "release_checks": {
+    "event_group_split_isolated": true,
     "validation_trades": false,
     "validation_net_after_1_5x_cost": true,
-    "test_trades": true,
+    "test_trades": false,
     "test_net_after_1_5x_cost": false,
     "test_pf_after_1_5x_cost": false,
     "test_regimes": false,
-    "test_symbols": true,
-    "not_worse_than_v5_all_at_1_5x": false
+    "test_symbols": true
   },
   "active_gates": 28,
   "affects_live_admission": false,
-  "online_learning": "线上只推理并记录；下一次训练仍从隔离的 V5.0-S30 实盘与影子数据开始。"
+  "online_learning": "线上只推理并记录；下一轮训练使用隔离版本和事件组去重后的 V5 实盘与影子数据。"
 }

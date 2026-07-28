@@ -598,6 +598,45 @@ def test_v42_countertrend_and_panic_remain_shadow_only(monkeypatch, tmp_path):
     assert panic["opportunity_v4"]["regime_policy"]["scope"] == "panic_shadow_only"
 
 
+def test_v51_panic_recovery_can_enter_candidate_scope(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    clear_v4_evidence_cache()
+    candidate = _candidate("RECOVERYUSDT", 0.98, 3.2)
+    candidate["direction"] = "LONG"
+    candidate["entry_type"] = "v3_pullback"
+    candidate["signal"].update(
+        {
+            "signal": "LONG",
+            "entry_phase": "RETEST",
+            "volume_acceleration": 1.20,
+            "directed_trade_flow": 0.72,
+            "breakout_extension_atr": 0.20,
+        }
+    )
+    candidate["market_state"] = {"state": "panic"}
+    candidate["opportunity_v3"].update(
+        {
+            "market_regime": "panic",
+            "medium_trend_aligned": True,
+            "medium_path_efficiency": 0.45,
+        }
+    )
+
+    attach_v4_rankings(
+        [candidate],
+        {
+            "opportunity_v4_live_enabled": True,
+            "opportunity_v4_strategy_version": "v5.1",
+        },
+    )
+
+    policy = candidate["opportunity_v4"]["regime_policy"]
+    assert policy["scope"] == "panic_recovery_candidate"
+    assert policy["market_phase"] == "panic_recovery"
+    assert policy["live_scope"] is True
+    assert policy["recovery_confirmations"] == 7
+
+
 def test_v43_broad_down_short_pullback_stays_shadow_after_negative_replay(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     clear_v4_evidence_cache()

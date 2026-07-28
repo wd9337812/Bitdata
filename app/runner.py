@@ -43,6 +43,7 @@ from app.runtime_snapshot import market_rows_from_scan, update_runtime_snapshot
 from app.telemetry import compact_decision, maintain_telemetry, record_equity_snapshot, record_event, record_event_throttled, record_strategy_run
 from app.training_lineage import (
     ensure_event_id,
+    ensure_event_group_id,
     ensure_opportunity_id,
     record_decision_opportunity,
     record_execution_result,
@@ -683,6 +684,10 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             ensure_event_id(
                 item,
                 int(config.get("opportunity_v43_episode_dedupe_minutes", 45)),
+            )
+            ensure_event_group_id(
+                item,
+                int(config.get("opportunity_v51_event_group_minutes", 60)),
             )
             is_decision = bool(v4.get("decision_candidate")) and decision_count < decision_limit
             if not is_decision and exploration_count >= exploration_limit:

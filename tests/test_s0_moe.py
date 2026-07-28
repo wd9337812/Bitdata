@@ -151,4 +151,4 @@ def test_v15_runtime_features_include_smart_flow_and_liquidity(monkeypatch):
     assert row["smart_flow_alignment"] == 0.7
     assert row["spread_pct"] == 0.03
     assert row["depth_log"] > 9.0
-    assert s0_moe._model_path({}).name == "s0_binance_moe_v1_6.joblib"
+    assert s0_moe._model_path({}).name == "s0_binance_moe_v1_7.joblib"

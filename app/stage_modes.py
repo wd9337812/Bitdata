@@ -124,7 +124,7 @@ def _profile_values(profile: dict[str, Any], config: dict[str, Any], equity: flo
         result["strategy_family"] = strategy_family_for_version(active_version)
         result["label"] = str(result.get("label") or "").replace(
             "V3",
-            "V5" if active_version.lower().startswith("v5.0-s30") else "V4",
+            "V5" if active_version.lower().startswith("v5.") else "V4",
         )
     if result.get("max_equity") == float("inf"):
         result["max_equity"] = None

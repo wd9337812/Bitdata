@@ -27,6 +27,7 @@ from app.strategy_capabilities import V5_STRATEGY_FAMILY
 from app.telemetry import connect, now_iso
 from app.training_lineage import (
     ensure_event_id,
+    ensure_event_group_id,
     init_training_lineage_schema,
     record_shadow_opportunity,
 )
@@ -430,6 +431,10 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 event_id = ensure_event_id(
                     candidate,
                     int(config.get("opportunity_v43_episode_dedupe_minutes", 45)),
+                )
+                ensure_event_group_id(
+                    candidate,
+                    int(config.get("opportunity_v51_event_group_minutes", 60)),
                 )
                 opportunity_id = str(candidate.get("opportunity_id") or event_id)
                 candidate["opportunity_id"] = opportunity_id
