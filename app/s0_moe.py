@@ -14,7 +14,7 @@ from app.strategy_capabilities import strategy_family_for_version
 from app.training_lineage import capture_minute_features
 
 
-DEFAULT_MODEL = Path(__file__).resolve().parent / "model_artifacts" / "s0_binance_moe_v1_5.joblib"
+DEFAULT_MODEL = Path(__file__).resolve().parent / "model_artifacts" / "s0_binance_moe_v1_6.joblib"
 DEFAULT_CANDIDATE_STATUS = (
     Path(__file__).resolve().parent
     / "model_artifacts"
@@ -51,18 +51,18 @@ def _candidate_status(config: dict[str, Any]) -> dict[str, Any]:
     path = Path(configured) if configured else DEFAULT_CANDIDATE_STATUS
     if not path.exists():
         return {
-            "version": "s0_binance_moe_v1_5",
+            "version": "s0_binance_moe_v1_6",
             "decision": "not_trained",
-            "reason": "尚未生成 MoE v1.5 混合权重候选报告",
+            "reason": "尚未生成 MoE v1.6 精确 V5 候选报告",
         }
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         return payload if isinstance(payload, dict) else {}
     except (OSError, ValueError, TypeError):
         return {
-            "version": "s0_binance_moe_v1_5",
+            "version": "s0_binance_moe_v1_6",
             "decision": "status_unreadable",
-            "reason": "MoE v1.5 候选报告无法读取",
+            "reason": "MoE v1.6 候选报告无法读取",
         }
 
 

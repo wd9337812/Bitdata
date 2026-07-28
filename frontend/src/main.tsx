@@ -251,6 +251,7 @@ function App() {
   const moeEvaluated = moeOnline.evaluated || {};
   const moeRetraining = moe.retraining || {};
   const moeCandidate = moe.candidate || {};
+  const moeCandidateStress = moeCandidate.cost_stress?.["1.5x"]?.test || {};
   const dailyProfitLock = state?.s0_daily_profit_lock_status || {};
   const runtimeProtection = runtime?.runtime_protection || {};
   const runtimeProtectionActions = runtimeProtection.actions || [];
@@ -598,14 +599,14 @@ function App() {
               />
               <MetricCard
                 title={`${moeCandidate.version || "MoE"} 本地训练`}
-                value={moeCandidate.decision === "shadow_candidate" ? "通过离线测试" : "仅研究影子"}
-                sub={`${fmt(moeCandidate.untouched_test?.trades, 0)} 笔 · PF ${fmt(moeCandidate.untouched_test?.profit_factor, 2)} · 净收益 ${fmt(moeCandidate.untouched_test?.net_pct_points, 3)}%`}
+                value={moeCandidate.decision === "shadow_candidate" ? "通过离线测试" : "样本外未通过"}
+                sub={`${fmt(moeCandidate.untouched_test?.trades, 0)} 笔 · PF ${fmt(moeCandidate.untouched_test?.profit_factor, 2)} · 1.5倍成本 PF ${fmt(moeCandidateStress.profit_factor, 2)} · 不影响实盘`}
                 tone={moeCandidate.decision === "shadow_candidate" ? "positive" : "negative"}
               />
               <MetricCard
                 title="下一次本地训练"
                 value={moeRetraining.ready ? "样本量已就绪" : `${fmt(moeRetraining.selected_closed, 0)} / ${fmt(moeRetraining.required_selected_closes, 0)} 笔`}
-                sub={`${fmt(moeRetraining.selected_regimes, 0)} / ${fmt(moeRetraining.required_regimes, 0)} 种市场状态 · 达标后仍需人工离线回测`}
+                sub={`${fmt(moeRetraining.selected_regimes, 0)} / ${fmt(moeRetraining.required_regimes, 0)} 种市场状态 · 样本达标不等于模型可放行`}
               />
             </div>
             <TargetProgressPanel target={target} />
