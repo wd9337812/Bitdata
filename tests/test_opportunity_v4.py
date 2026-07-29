@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
 from app.opportunity_v4 import (
     V462_FEATURE_WEIGHTS,
     V411_FEATURE_WEIGHTS,
+    V52_FEATURE_WEIGHTS,
     _continuation_shape,
+    _load_evidence,
     _model_expectancy,
     _model_features,
     _protection_profile,
@@ -92,6 +98,92 @@ def test_v411_weights_prioritize_regime_and_anti_chase():
     assert sum(V411_FEATURE_WEIGHTS.values()) == 1.0
     assert V411_FEATURE_WEIGHTS["regime_fit"] > V411_FEATURE_WEIGHTS["directed_flow"]
     assert V411_FEATURE_WEIGHTS["anti_chase"] > V411_FEATURE_WEIGHTS["volume_persistence"]
+
+
+def test_v52_weights_prioritize_cross_sectional_strength_and_are_normalized():
+    assert sum(V52_FEATURE_WEIGHTS.values()) == pytest.approx(1.0)
+    assert V52_FEATURE_WEIGHTS["cross_sectional_strength"] == max(V52_FEATURE_WEIGHTS.values())
+    assert strategy_supports("v5.2", "episode_evidence") is True
+    assert strategy_supports("v5.2", "hard_stop_headroom") is True
+
+
+def test_v52_evidence_compresses_repeated_opportunities_into_market_episodes(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    base = datetime.now(timezone.utc) - timedelta(hours=2)
+    closes = (base, base + timedelta(minutes=10), base + timedelta(minutes=50))
+    with connect() as conn:
+        ensure_shadow_tables(conn)
+        for index, closed_at in enumerate(closes):
+            conn.execute(
+                """
+                INSERT INTO shadow_trades (
+                    dedupe_key, opened_at, closed_at, symbol, direction, signal_type, status,
+                    entry, stop, take_profit, last_price, notional, net_pnl, estimated_cost,
+                    expires_at, strategy_family, strategy_version, strategy_role,
+                    opportunity_id, market_regime, evidence_type, payload
+                ) VALUES (?, ?, ?, 'ALTUSDT', 'LONG', 'v3_breakout', 'CLOSED',
+                          100, 99, 103, 103, 20, 0.4, 0.02, ?,
+                          'extreme_v5_roll', 'v5.2', 'active', ?, 'broad_up',
+                          'decision', '{"features":{"entry_phase":"RETEST"}}')
+                """,
+                (
+                    f"v52-episode-{index}",
+                    (closed_at - timedelta(minutes=5)).isoformat(),
+                    closed_at.isoformat(),
+                    (closed_at + timedelta(hours=1)).isoformat(),
+                    f"v52-opportunity-{index}",
+                ),
+            )
+        conn.commit()
+
+    rows = _load_evidence(
+        {
+            "opportunity_v4_strategy_version": "v5.2",
+            "opportunity_v4_evidence_lookback_hours": 24,
+            "opportunity_v52_episode_minutes": 30,
+        }
+    )
+
+    assert len(rows) == 2
+    assert rows[0]["episode_raw_opportunities"] == 2
+    assert rows[1]["episode_raw_opportunities"] == 1
+
+
+def test_v52_blocks_momentum_but_admits_strong_cost_covered_breakout(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        "opportunity_v4_strategy_version": "v5.2",
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v44_full_bet_enabled": True,
+        "opportunity_v50_min_rank_percentile": 0.0,
+        "opportunity_v50_min_quality_score": 0.0,
+        "opportunity_v50_min_expected_net_pct": -10.0,
+        "opportunity_v50_min_lower_expectancy_pct": -10.0,
+        "opportunity_v50_min_cost_ratio": 0.0,
+        "opportunity_v50_min_confirmations": 1,
+        "opportunity_v51_breakout_min_rank_percentile": 0.0,
+        "opportunity_v51_breakout_min_cost_ratio": 0.0,
+        "opportunity_v51_breakout_min_confirmations": 1,
+        "opportunity_v52_min_cross_sectional_strength": 0.78,
+        "opportunity_v52_min_gross_cost_multiple": 3.5,
+        "opportunity_v48_exhaustion_enabled": False,
+        "opportunity_v48_reentry_enabled": False,
+        "opportunity_v48_local_evidence_enabled": False,
+    }
+    breakout = _candidate("BREAKUSDT", 0.99, 2.0)
+    momentum = _candidate("MOMUSDT", 0.99, 2.0)
+    momentum["entry_type"] = "v3_momentum"
+
+    attach_v4_rankings([breakout, momentum], config)
+
+    assert breakout["opportunity_v4"]["admitted"] is True
+    assert breakout["opportunity_v4"]["feature_schema_version"] == "v5.2"
+    assert breakout["opportunity_v4"]["position_confidence"]["target_initial_risk_pct"] == 30.0
+    assert momentum["opportunity_v4"]["admitted"] is False
+    assert "纯动量" in "；".join(momentum["opportunity_v4"]["blockers"])
 
 
 def test_v411_continuation_shape_penalizes_terminal_spikes():

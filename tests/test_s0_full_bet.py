@@ -152,3 +152,80 @@ def test_v50_s30_uses_isolated_risk_profile_and_thirty_percent_cap():
     assert result["hard_risk_cap_pct"] == 30.0
     assert result["stressed_risk_pct"] <= 30.0
     assert 3 <= result["leverage"] <= 10
+
+
+def test_v52_caps_actual_risk_to_equity_above_hard_stop():
+    candidate = {
+        "strategy_version": "v5.2",
+        "opportunity_v4": {
+            "strategy_version": "v5.2",
+            "full_bet_admitted": True,
+            "estimated_cost_pct": 0.14,
+        },
+    }
+    config = {
+        **_config(),
+        "opportunity_v4_strategy_version": "v5.2",
+        "opportunity_v50_margin_pct": 90.0,
+        "opportunity_v50_min_risk_pct": 12.0,
+        "opportunity_v50_max_risk_pct": 30.0,
+        "opportunity_v50_stressed_risk_cap_pct": 30.0,
+        "opportunity_v50_min_leverage": 3,
+        "opportunity_v50_max_leverage": 10,
+        "opportunity_v50_cost_stress_multiplier": 1.5,
+        "hard_stop_equity": 5.0,
+        "opportunity_v52_hard_stop_reserve_usdt": 0.15,
+    }
+
+    result = build_s0_full_bet_sizing(
+        equity=6.99,
+        available_balance=6.99,
+        entry=100.0,
+        stop=99.0,
+        requested_risk_pct=30.0,
+        candidate=candidate,
+        config=config,
+    )
+
+    expected_cap = (6.99 - 5.0 - 0.15) / 6.99 * 100
+    assert result["configured_maximum_risk_pct"] == 30.0
+    assert result["target_risk_pct"] == pytest.approx(expected_cap)
+    assert result["stressed_risk_pct"] <= expected_cap
+    assert result["hard_stop_headroom_cap_pct"] == pytest.approx(expected_cap)
+
+
+def test_v52_can_use_full_thirty_percent_when_equity_has_headroom():
+    candidate = {
+        "strategy_version": "v5.2",
+        "opportunity_v4": {
+            "strategy_version": "v5.2",
+            "full_bet_admitted": True,
+            "estimated_cost_pct": 0.14,
+        },
+    }
+    config = {
+        **_config(),
+        "opportunity_v4_strategy_version": "v5.2",
+        "opportunity_v50_margin_pct": 90.0,
+        "opportunity_v50_min_risk_pct": 12.0,
+        "opportunity_v50_max_risk_pct": 30.0,
+        "opportunity_v50_stressed_risk_cap_pct": 30.0,
+        "opportunity_v50_min_leverage": 3,
+        "opportunity_v50_max_leverage": 10,
+        "opportunity_v50_cost_stress_multiplier": 1.5,
+        "hard_stop_equity": 5.0,
+        "opportunity_v52_hard_stop_reserve_usdt": 0.15,
+    }
+
+    result = build_s0_full_bet_sizing(
+        equity=20.0,
+        available_balance=20.0,
+        entry=100.0,
+        stop=99.0,
+        requested_risk_pct=30.0,
+        candidate=candidate,
+        config=config,
+    )
+
+    assert result["target_risk_pct"] == 30.0
+    assert result["stressed_risk_pct"] <= 30.0

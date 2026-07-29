@@ -542,7 +542,11 @@ def match_trade_record(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _infer_exit_reason(row: dict[str, Any], close_price: float | None) -> str:
+def _infer_exit_reason(
+    row: dict[str, Any],
+    close_price: float | None,
+    record: dict[str, Any] | None = None,
+) -> str:
     if close_price is None:
         return "unknown"
     stop = _float(row.get("stop_price"))
@@ -556,7 +560,11 @@ def _infer_exit_reason(row: dict[str, Any], close_price: float | None) -> str:
         return "stop_loss"
     if direction == "SHORT" and stop and close_price >= stop:
         return "stop_loss"
-    return "other_or_runtime"
+    record = record or {}
+    net_pnl = _float(record.get("net_pnl"))
+    if net_pnl is None or abs(net_pnl) < 0.00000001:
+        return "runtime_flat_exit"
+    return "runtime_profit_exit" if net_pnl > 0 else "runtime_loss_exit"
 
 
 def finalize_trade_lineage(record: dict[str, Any]) -> None:
@@ -581,7 +589,7 @@ def finalize_trade_lineage(record: dict[str, Any]) -> None:
             if entry_price is not None and decision_price not in {None, 0}
             else None
         )
-        exit_reason = _infer_exit_reason(row, _float(record.get("close_price")))
+        exit_reason = _infer_exit_reason(row, _float(record.get("close_price")), record)
         conn.execute(
             """
             UPDATE opportunity_lineage

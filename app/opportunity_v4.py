@@ -24,6 +24,7 @@ V4_CONTROL_FAMILY = "extreme_v4_control"
 V4_FEATURE_SCHEMA = "v4.7.4"
 V5_FEATURE_SCHEMA = "v5.0-s30"
 V51_FEATURE_SCHEMA = "v5.1"
+V52_FEATURE_SCHEMA = "v5.2"
 
 V462_FEATURE_WEIGHTS = {
     "cross_sectional_strength": 0.08,
@@ -61,6 +62,18 @@ V50_FEATURE_WEIGHTS = {
     "liquidity": 0.01,
 }
 
+V52_FEATURE_WEIGHTS = {
+    "cross_sectional_strength": 0.25,
+    "regime_fit": 0.12,
+    "volume_persistence": 0.07,
+    "directed_flow": 0.10,
+    "medium_path": 0.07,
+    "medium_alignment": 0.06,
+    "entry_quality": 0.15,
+    "anti_chase": 0.10,
+    "liquidity": 0.08,
+}
+
 V50_SETUP_ADJUSTMENTS = {
     "momentum": 0.03,
     "breakout": 0.01,
@@ -73,6 +86,13 @@ V51_SETUP_ADJUSTMENTS = {
     "breakout": -0.04,
     "pullback": 0.08,
     "prebreakout": 0.03,
+}
+
+V52_SETUP_ADJUSTMENTS = {
+    "momentum": -0.18,
+    "breakout": 0.04,
+    "pullback": 0.06,
+    "prebreakout": 0.05,
 }
 
 V462_SETUP_ADJUSTMENTS = {
@@ -174,7 +194,41 @@ def _load_evidence(config: dict[str, Any]) -> list[dict[str, Any]]:
                 "net_pct": float(item.get("net_pnl") or 0) / notional * 100,
             }
         )
-    return result
+    if not strategy_supports(version, "episode_evidence"):
+        return result
+
+    gap = timedelta(minutes=float(config.get("opportunity_v52_episode_minutes", 30)))
+    episodes: list[dict[str, Any]] = []
+    active: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in sorted(result, key=lambda row: str(row.get("closed_at") or "")):
+        key = (
+            str(item.get("symbol") or ""),
+            str(item.get("direction") or ""),
+            normalize_setup_type(item.get("entry_type") or "unknown"),
+        )
+        try:
+            closed_at = datetime.fromisoformat(str(item.get("closed_at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            closed_at = None
+        current = active.get(key)
+        current_time = current.get("_last_time") if current else None
+        if current is None or closed_at is None or current_time is None or closed_at - current_time > gap:
+            episode = dict(item)
+            episode["episode_id"] = (
+                f"{key[0]}:{key[1]}:{key[2]}:{str(item.get('closed_at') or '')}"
+            )
+            episode["episode_raw_opportunities"] = 1
+            episode["_last_time"] = closed_at
+            active[key] = episode
+            episodes.append(episode)
+        else:
+            current["episode_raw_opportunities"] = int(
+                current.get("episode_raw_opportunities") or 1
+            ) + 1
+            current["_last_time"] = closed_at
+    for episode in episodes:
+        episode.pop("_last_time", None)
+    return episodes
 
 
 def evidence_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
@@ -206,6 +260,10 @@ def _stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
     lower = average - 1.28 * standard_error
     return {
         "trades": count,
+        "independent_episodes": count,
+        "raw_opportunities": sum(
+            int(row.get("episode_raw_opportunities") or 1) for row in rows
+        ),
         "opportunities": len({row.get("opportunity_id") for row in rows if row.get("opportunity_id")}),
         "symbols": len({row.get("symbol") for row in rows if row.get("symbol")}),
         "time_blocks": len({row.get("time_block") for row in rows if row.get("time_block")}),
@@ -534,7 +592,9 @@ def _v48_reentry_policy(
 def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], config: dict[str, Any]) -> dict[str, float]:
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
     weights = (
-        V50_FEATURE_WEIGHTS
+        V52_FEATURE_WEIGHTS
+        if strategy_supports(version, "v52_evidence_edge")
+        else V50_FEATURE_WEIGHTS
         if strategy_supports(version, "v50_s30")
         else V411_FEATURE_WEIGHTS
         if strategy_supports(version, "healthy_continuation")
@@ -544,7 +604,9 @@ def _model_expectancy(candidate: dict[str, Any], features: dict[str, float], con
     structure = market_structure(candidate)
     setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
     setup_adjustments = (
-        V51_SETUP_ADJUSTMENTS
+        V52_SETUP_ADJUSTMENTS
+        if strategy_supports(version, "v52_evidence_edge")
+        else V51_SETUP_ADJUSTMENTS
         if strategy_supports(version, "v51_setup_router")
         else V50_SETUP_ADJUSTMENTS
         if strategy_supports(version, "v50_s30")
@@ -1045,6 +1107,7 @@ def continuous_position_confidence(opportunity: dict[str, Any], config: dict[str
 def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
     version_label = str(config.get("opportunity_v4_strategy_version") or "v4.9").upper()
     v50_active = strategy_supports(version_label, "v50_s30")
+    v52_active = strategy_supports(version_label, "v52_evidence_edge")
     lane = str(opportunity.get("admission_lane") or "shadow_only")
     admitted = bool(opportunity.get("admitted"))
     if lane != "full_bet" or not admitted:
@@ -1117,15 +1180,26 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
     else:
         direction_risk_multiplier = 1.0
     stressed_cap = float(config.get(stressed_cap_key, 30.0 if v50_active else 15.0))
+    if v52_active:
+        if confidence >= 0.82:
+            quality_target = float(config.get("opportunity_v52_risk_top_pct", 30.0))
+        elif confidence >= 0.65:
+            quality_target = float(config.get("opportunity_v52_risk_strong_pct", 24.0))
+        elif confidence >= 0.45:
+            quality_target = float(config.get("opportunity_v52_risk_good_pct", 18.0))
+        else:
+            quality_target = float(config.get("opportunity_v52_risk_base_pct", 12.0))
+    else:
+        quality_target = minimum_risk + (maximum_risk - minimum_risk) * confidence
     target = min(
         maximum_risk,
         stressed_cap,
-        (minimum_risk + (maximum_risk - minimum_risk) * confidence) * direction_risk_multiplier,
+        quality_target * direction_risk_multiplier,
     )
     return {
         "enabled": True,
         "applied": True,
-        "method": "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
+        "method": "s0_full_bet_v52_edge" if v52_active else "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
         "lane": lane,
         "confidence": round(confidence, 6),
         "display_label": "全仓强机会" if confidence >= 0.65 else "全仓机会",
@@ -1138,10 +1212,15 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
             "direction_risk": round(direction_risk_multiplier, 6),
         },
         "target_initial_risk_pct": round(target, 6),
+        "quality_risk_pct": round(quality_target, 6),
         "configured_initial_range_pct": [round(minimum_risk, 6), round(maximum_risk, 6)],
         "add_on_eligible": False,
         "adaptive_calibration": calibration,
-        "reason": "按本轮相对排名、五项确认、成本效率和流动性连续计算 8%-15% 计划风险",
+        "reason": (
+            "V5.2 按机会质量映射 12%/18%/24%/30% 请求风险，下单时再按 5U 硬停止余量封顶"
+            if v52_active
+            else "按相对排名、确认项、成本效率和流动性连续计算计划风险"
+        ),
     }
 def attach_v4_rankings(
     candidates: list[dict[str, Any]],
@@ -1179,6 +1258,7 @@ def attach_v4_rankings(
     v44_cost_ratio = float(config.get("opportunity_v44_min_cost_ratio", 1.50))
     v44_confirmations_required = int(config.get("opportunity_v44_min_confirmations", 3))
     v50_active = strategy_supports(version, "v50_s30")
+    v52_active = strategy_supports(version, "v52_evidence_edge")
     if v50_active:
         v44_rank = float(config.get("opportunity_v50_min_rank_percentile", 0.85))
         v44_quality = float(config.get("opportunity_v50_min_quality_score", 52.0)) / 100
@@ -1306,6 +1386,16 @@ def attach_v4_rankings(
         )
         structure = market_structure(candidate)
         setup_type = normalize_setup_type(structure.get("setup_type") or candidate.get("entry_type"))
+        v52_cross_ok = bool(
+            not v52_active
+            or features["cross_sectional_strength"]
+            >= float(config.get("opportunity_v52_min_cross_sectional_strength", 0.78))
+        )
+        v52_setup_ok = bool(
+            not v52_active
+            or setup_type != "momentum"
+            or bool(config.get("opportunity_v52_momentum_live_enabled", False))
+        )
         candidate_min_cost_ratio = min_cost_ratio
         if strategy_supports(version, "v472_router"):
             setup_cost_floor = {
@@ -1322,6 +1412,11 @@ def attach_v4_rankings(
                 "breakout": float(config.get("opportunity_v51_breakout_min_cost_ratio", 2.80)),
             }.get(setup_type, v44_cost_ratio)
             candidate_min_cost_ratio = max(candidate_min_cost_ratio, setup_cost_floor)
+        if v52_active:
+            candidate_min_cost_ratio = max(
+                candidate_min_cost_ratio,
+                float(config.get("opportunity_v52_min_gross_cost_multiple", 3.50)),
+            )
         medium_aligned = bool(structure.get("medium_trend_aligned"))
         alignment_ok = medium_aligned or bool(policy["trend_aligned"]) or not require_alignment
         cost_ok = model["cost_ratio"] >= candidate_min_cost_ratio
@@ -1349,6 +1444,17 @@ def attach_v4_rankings(
         reentry_policy = _v48_reentry_policy(candidate, features, local_circuit, config) if v48_active else {
             "state": "legacy", "blocked": False, "risk_multiplier": 1.0, "structural_reset": False,
         }
+        v52_evidence_multiplier = 1.0
+        if v52_active:
+            episode_count = int(selected.get("independent_episodes") or selected.get("trades") or 0)
+            if (
+                episode_count >= int(config.get("opportunity_v52_evidence_min_episodes", 8))
+                and float(selected.get("profit_factor") or 0.0)
+                < float(config.get("opportunity_v52_evidence_low_pf", 0.75))
+            ):
+                v52_evidence_multiplier = float(
+                    config.get("opportunity_v52_evidence_caution_multiplier", 0.70)
+                )
         validated_liquidity = _liquidity_gate(candidate, config, validated_risk * evidence_risk_multiplier)
         provisional_liquidity = _liquidity_gate(candidate, config, provisional_risk * evidence_risk_multiplier)
         canary_liquidity = _liquidity_gate(candidate, config, bootstrap_risk * evidence_risk_multiplier)
@@ -1538,6 +1644,8 @@ def attach_v4_rankings(
             and live_enabled
             and v44_scope
             and setup_type != "unknown"
+            and v52_setup_ok
+            and v52_cross_ok
             and rank >= effective_v44_rank
             and model["quality"] >= effective_absolute_quality
             and expected >= effective_v44_expected
@@ -1602,6 +1710,7 @@ def attach_v4_rankings(
                 * float(exhaustion.get("risk_multiplier") or 1.0)
                 * float(evidence_policy.get("risk_multiplier") or 1.0)
                 * float(reentry_policy.get("risk_multiplier") or 1.0)
+                * v52_evidence_multiplier
             )
             exploring = False
             selected_liquidity = full_bet_liquidity
@@ -1634,6 +1743,13 @@ def attach_v4_rankings(
                 "逆市场方向需要更强的资金流、市场匹配和中周期路径确认"
                 if strategy_supports(version, "adaptive_calibration")
                 else "做空需要更强的方向资金流、市场匹配和中周期路径确认"
+            )
+        if v52_active and not v52_setup_ok:
+            blockers.append("V5.2 不做纯动量追涨，等待突破、预突破或回踩结构")
+        if v52_active and not v52_cross_ok:
+            blockers.append(
+                f"横截面强度 {features['cross_sectional_strength']:.3f} 低于 "
+                f"{float(config.get('opportunity_v52_min_cross_sectional_strength', 0.78)):.3f}"
             )
         if not v44_active and not exploring and not alignment_ok:
             blockers.append("中周期方向未对齐")
@@ -1683,7 +1799,9 @@ def attach_v4_rankings(
             "strategy_version": version,
             "strategy_role": "active" if live_enabled else "challenger",
             "feature_schema_version": (
-                V51_FEATURE_SCHEMA
+                V52_FEATURE_SCHEMA
+                if v52_active
+                else V51_FEATURE_SCHEMA
                 if strategy_supports(version, "v51_setup_router")
                 else V5_FEATURE_SCHEMA
                 if v50_active
@@ -1710,7 +1828,9 @@ def attach_v4_rankings(
                 ),
             },
             "feature_weights": dict(
-                V50_FEATURE_WEIGHTS
+                V52_FEATURE_WEIGHTS
+                if v52_active
+                else V50_FEATURE_WEIGHTS
                 if v50_active
                 else V411_FEATURE_WEIGHTS
                 if strategy_supports(version, "healthy_continuation")
@@ -1721,6 +1841,24 @@ def attach_v4_rankings(
             "model_expected_net_pct": round(model["expected_net_pct"], 6),
             "expected_net_pct": round(expected, 6),
             "lower_expected_net_pct": round(lower, 6),
+            "gross_cost_multiple": round(float(model["cost_ratio"]), 6),
+            "v52_edge": {
+                "enabled": v52_active,
+                "cross_sectional_strength": round(features["cross_sectional_strength"], 6),
+                "cross_sectional_floor": float(
+                    config.get("opportunity_v52_min_cross_sectional_strength", 0.78)
+                ),
+                "setup_allowed": v52_setup_ok,
+                "gross_cost_multiple": round(float(model["cost_ratio"]), 6),
+                "gross_cost_floor": float(
+                    config.get("opportunity_v52_min_gross_cost_multiple", 3.50)
+                ),
+                "evidence_risk_multiplier": round(v52_evidence_multiplier, 6),
+                "raw_opportunities": int(selected.get("raw_opportunities") or 0),
+                "independent_episodes": int(
+                    selected.get("independent_episodes") or selected.get("trades") or 0
+                ),
+            },
             "uncertainty_pct": round(model["uncertainty_pct"] * (1.0 - empirical_weight), 6),
             "model_win_probability": round(model["win_probability"], 6),
             "estimated_cost_pct": round(model["cost_pct"], 6),

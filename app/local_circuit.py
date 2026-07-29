@@ -7,7 +7,7 @@ from typing import Any
 
 from app.market_structure import market_structure, normalize_setup_type
 from app.state_store import load_state, save_state
-from app.strategy_capabilities import strategy_family_for_version
+from app.strategy_capabilities import strategy_family_for_version, strategy_supports
 from app.telemetry import record_event
 from app.v4_evidence import is_live_eligible_v4_shadow
 
@@ -345,7 +345,7 @@ def candidate_local_circuit_status(
     stored = dict((state.get("cohorts") or {}).get(key) or {})
     episode = dict((state.get("symbol_episodes") or {}).get(episode_key(candidate)) or {})
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    incident_guard = str(version).lower().startswith("v5.1.1")
+    incident_guard = strategy_supports(version, "v511_incident_guard")
     dedupe_minutes = int(
         config.get("opportunity_v511_same_direction_dedupe_minutes", 120)
         if incident_guard

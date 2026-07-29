@@ -177,7 +177,7 @@ def s0_continuous_permit_status(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(timezone.utc)
-    version = str(config.get("opportunity_v4_strategy_version") or "v5.1")
+    version = str(config.get("opportunity_v4_strategy_version") or "v5.2")
     family = strategy_family_for_version(version)
     release_id = f"{family}@{version}"
     persisted = load_state()

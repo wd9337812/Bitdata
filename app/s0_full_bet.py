@@ -84,9 +84,25 @@ def build_s0_full_bet_sizing(
 
     default_cap = 30.0 if prefix == "opportunity_v50" else 15.0
     hard_risk_cap = max(0.01, float(config.get(f"{prefix}_stressed_risk_cap_pct", default_cap)))
-    maximum_risk = min(
+    configured_maximum_risk = min(
         hard_risk_cap,
         max(0.01, float(config.get(f"{prefix}_max_risk_pct", default_cap))),
+    )
+    hard_stop_equity = max(0.0, float(config.get("hard_stop_equity", 0.0)))
+    hard_stop_reserve = (
+        max(0.0, float(config.get("opportunity_v52_hard_stop_reserve_usdt", 0.15)))
+        if strategy_supports(config.get("opportunity_v4_strategy_version"), "hard_stop_headroom")
+        else 0.0
+    )
+    hard_stop_headroom_pct = (
+        max(0.0, equity - hard_stop_equity - hard_stop_reserve) / equity * 100
+        if equity > 0
+        else 0.0
+    )
+    maximum_risk = (
+        min(configured_maximum_risk, hard_stop_headroom_pct)
+        if strategy_supports(config.get("opportunity_v4_strategy_version"), "hard_stop_headroom")
+        else configured_maximum_risk
     )
     minimum_risk = min(
         maximum_risk,
@@ -152,6 +168,10 @@ def build_s0_full_bet_sizing(
         "target_risk_pct": round(target_risk, 6),
         "stressed_risk_pct": round(stressed_risk_pct, 6),
         "hard_risk_cap_pct": round(hard_risk_cap, 6),
+        "configured_maximum_risk_pct": round(configured_maximum_risk, 6),
+        "hard_stop_headroom_cap_pct": round(hard_stop_headroom_pct, 6),
+        "hard_stop_equity": round(hard_stop_equity, 8),
+        "hard_stop_reserve_usdt": round(hard_stop_reserve, 8),
         "stop_distance_pct": round(stop_distance_pct, 6),
         "observed_cost_pct": round(observed_cost_pct, 6),
         "stressed_cost_pct": round(stressed_cost_pct, 6),
