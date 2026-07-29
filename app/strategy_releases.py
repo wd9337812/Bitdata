@@ -147,6 +147,23 @@ _CHALLENGER_FINGERPRINT_KEYS = _ACTIVE_FINGERPRINT_KEYS + (
     "opportunity_v50_loss_3_cooldown_minutes",
 )
 
+_V53_FINGERPRINT_KEYS = (
+    "opportunity_v53_min_rank_percentile",
+    "opportunity_v53_quiet_min_rank_percentile",
+    "opportunity_v53_panic_min_rank_percentile",
+    "opportunity_v53_min_cross_sectional_strength",
+    "opportunity_v53_min_gross_cost_multiple",
+    "opportunity_v53_min_confirmations",
+    "opportunity_v53_smart_flow_max_points",
+    "opportunity_v53_adaptive_enabled",
+    "opportunity_v53_adaptive_min_episodes",
+    "opportunity_v53_adaptive_min_symbols",
+    "opportunity_v53_adaptive_min_regimes",
+    "opportunity_v53_adaptive_rank_step",
+    "opportunity_v53_adaptive_expectancy_step_pct",
+    "opportunity_v53_adaptive_risk_step",
+)
+
 
 def active_version(config: dict[str, Any]) -> str:
     return str(config.get("opportunity_v3_strategy_version") or "v3.2")
@@ -181,6 +198,8 @@ def parameter_fingerprint(
     family: str | None = None,
 ) -> str:
     keys = _CHALLENGER_FINGERPRINT_KEYS if role == CHALLENGER_ROLE or family in {V4_FAMILY, V5_FAMILY} else _ACTIVE_FINGERPRINT_KEYS
+    if challenger_version(config).lower().startswith("v5.3"):
+        keys += _V53_FINGERPRINT_KEYS
     payload = {key: config.get(key) for key in keys if key in config}
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:16]

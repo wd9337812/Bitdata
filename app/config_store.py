@@ -909,6 +909,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v52_risk_strong_pct": 24.0,
     "opportunity_v52_risk_top_pct": 30.0,
     "opportunity_v52_hard_stop_reserve_usdt": 0.15,
+    "opportunity_v53_min_rank_percentile": 0.85,
+    "opportunity_v53_quiet_min_rank_percentile": 0.90,
+    "opportunity_v53_panic_min_rank_percentile": 0.95,
+    "opportunity_v53_min_cross_sectional_strength": 0.72,
+    "opportunity_v53_min_gross_cost_multiple": 3.50,
+    "opportunity_v53_min_confirmations": 2,
+    "opportunity_v53_smart_flow_max_points": 5.0,
+    "opportunity_v53_adaptive_enabled": True,
+    "opportunity_v53_adaptive_min_episodes": 8,
+    "opportunity_v53_adaptive_min_symbols": 3,
+    "opportunity_v53_adaptive_min_regimes": 2,
+    "opportunity_v53_adaptive_rank_step": 0.05,
+    "opportunity_v53_adaptive_expectancy_step_pct": 0.002,
+    "opportunity_v53_adaptive_risk_step": 0.10,
     "opportunity_v4_evidence_lookback_hours": 168,
     "opportunity_v4_evidence_max_trades": 5000,
     "opportunity_v4_evidence_cache_seconds": 60,
@@ -1221,9 +1235,8 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         config["execution_max_spread_pct"] = loaded["opportunity_v3_max_spread_pct"]
     if "execution_min_depth_notional_usdt" not in loaded and "opportunity_v3_min_depth_notional_usdt" in loaded:
         config["execution_min_depth_notional_usdt"] = loaded["opportunity_v3_min_depth_notional_usdt"]
-    # V5.2 is the current direct-live S0 generation. Existing generations
-    # snapshots are kept in telemetry, but the running configuration advances
-    # to the new isolated family instead of inheriting their evidence.
+    # V5.2 remains the direct-live generation. V5.3 is available as an
+    # isolated candidate, but must not auto-promote before out-of-sample proof.
     loaded_v4_version = str(loaded.get("opportunity_v4_strategy_version") or "").lower()
     if loaded_v4_version.startswith(("v3.", "v4.")) or loaded_v4_version in {
         "v5.0-s30", "v5.1", "v5.1.1"

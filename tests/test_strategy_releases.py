@@ -8,6 +8,7 @@ from app.shadow_trading import ensure_shadow_tables
 from app.strategy_releases import (
     CHALLENGER_ROLE,
     V4_FAMILY,
+    V5_FAMILY,
     list_strategy_releases,
     migrate_shadow_release_metadata,
     parameter_fingerprint,
@@ -108,6 +109,38 @@ def test_v431_local_circuit_and_reissue_settings_are_version_fingerprinted():
 
     assert first != second
     assert first != third
+
+
+def test_v53_settings_do_not_rotate_v52_release_fingerprint():
+    base = {
+        "opportunity_v4_strategy_version": "v5.2",
+        "opportunity_v50_min_rank_percentile": 0.85,
+        "opportunity_v53_min_rank_percentile": 0.85,
+    }
+
+    first = parameter_fingerprint(base, CHALLENGER_ROLE, V5_FAMILY)
+    second = parameter_fingerprint(
+        {**base, "opportunity_v53_min_rank_percentile": 0.90},
+        CHALLENGER_ROLE,
+        V5_FAMILY,
+    )
+    v53_first = parameter_fingerprint(
+        {**base, "opportunity_v4_strategy_version": "v5.3"},
+        CHALLENGER_ROLE,
+        V5_FAMILY,
+    )
+    v53_second = parameter_fingerprint(
+        {
+            **base,
+            "opportunity_v4_strategy_version": "v5.3",
+            "opportunity_v53_min_rank_percentile": 0.90,
+        },
+        CHALLENGER_ROLE,
+        V5_FAMILY,
+    )
+
+    assert first == second
+    assert v53_first != v53_second
 
 
 def test_live_legacy_placeholder_is_backfilled_from_exact_open_decision(monkeypatch, tmp_path):

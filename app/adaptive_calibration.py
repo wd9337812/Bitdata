@@ -10,7 +10,11 @@ from pathlib import Path
 from typing import Any
 
 from app.market_structure import market_structure, normalize_setup_type
-from app.strategy_capabilities import effective_strategy_version, strategy_supports
+from app.strategy_capabilities import (
+    effective_strategy_version,
+    strategy_family_for_version,
+    strategy_supports,
+)
 from app.telemetry import connect, db_path
 
 
@@ -57,6 +61,7 @@ def _payload_metadata(payload_text: Any) -> tuple[str, str, float]:
 
 def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
     current_version = str(config.get("opportunity_v4_strategy_version") or "v4.9")
+    strategy_family = strategy_family_for_version(current_version)
     effective_version = effective_strategy_version(current_version)
     if effective_version.startswith("v4.11"):
         seed_version = ""
@@ -89,7 +94,7 @@ def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
                 f"opportunity_id, payload, strategy_version, {evidence_expr} AS evidence_type "
                 f"FROM shadow_trades WHERE status = 'CLOSED' AND strategy_family = ? "
                 f"AND strategy_version IN ({placeholders}) AND closed_at >= ? ORDER BY id DESC LIMIT ?",
-                ("extreme_v4_roll", *versions, cutoff_iso, limit),
+                (strategy_family, *versions, cutoff_iso, limit),
             ).fetchall()
         except sqlite3.OperationalError:
             shadow_rows = []
@@ -98,7 +103,7 @@ def _load_rows(config: dict[str, Any]) -> list[dict[str, Any]]:
                 f"SELECT id, close_time, symbol, direction, open_notional, net_pnl, payload, strategy_version "
                 f"FROM live_trade_records WHERE strategy_family = ? AND strategy_version IN ({placeholders}) "
                 f"AND close_time >= ? ORDER BY id DESC LIMIT ?",
-                ("extreme_v4_roll", *versions, cutoff_ms, limit),
+                (strategy_family, *versions, cutoff_ms, limit),
             ).fetchall()
         except sqlite3.OperationalError:
             live_rows = []
@@ -302,8 +307,9 @@ def _global_stats(rows: list[dict[str, Any]], hours: float) -> dict[str, Any]:
 
 
 def _global_v49_calibration(config: dict[str, Any]) -> dict[str, Any]:
-    """Calibrate one global V4.9 gate set from current-version evidence only."""
+    """Calibrate one bounded global gate set from current-version evidence only."""
     version = str(config.get("opportunity_v4_strategy_version") or "v4.9")
+    v53_active = strategy_supports(version, "v53_fusion")
     key = f"{db_path()}:{version}:global"
     now = time.monotonic()
     cached = _GLOBAL_CACHE.get(key)
@@ -313,12 +319,19 @@ def _global_v49_calibration(config: dict[str, Any]) -> dict[str, Any]:
     stats_12h = _global_stats(rows, 12.0)
     stats_24h = _global_stats(rows, float(config.get("opportunity_v49_global_window_hours", 24.0)))
     stats_72h = _global_stats(rows, 72.0)
-    enough = bool(
-        stats_24h["shadow_trades"] >= int(config.get("opportunity_v49_global_min_shadow_trades", 20))
-        and stats_24h["live_trades"] >= int(config.get("opportunity_v49_global_min_live_trades", 8))
-        and stats_24h["symbols"] >= int(config.get("opportunity_v49_global_min_symbols", 3))
-        and stats_24h["regimes"] >= int(config.get("opportunity_v49_global_min_regimes", 2))
-    )
+    if v53_active:
+        enough = bool(
+            stats_24h["opportunities"] >= int(config.get("opportunity_v53_adaptive_min_episodes", 8))
+            and stats_24h["symbols"] >= int(config.get("opportunity_v53_adaptive_min_symbols", 3))
+            and stats_24h["regimes"] >= int(config.get("opportunity_v53_adaptive_min_regimes", 2))
+        )
+    else:
+        enough = bool(
+            stats_24h["shadow_trades"] >= int(config.get("opportunity_v49_global_min_shadow_trades", 20))
+            and stats_24h["live_trades"] >= int(config.get("opportunity_v49_global_min_live_trades", 8))
+            and stats_24h["symbols"] >= int(config.get("opportunity_v49_global_min_symbols", 3))
+            and stats_24h["regimes"] >= int(config.get("opportunity_v49_global_min_regimes", 2))
+        )
     pf = float(stats_24h.get("profit_factor") or 0)
     net = float(stats_24h.get("net_pct") or 0)
     positive = enough and pf >= float(config.get("opportunity_v49_global_min_profit_factor", 1.15)) and net > float(config.get("opportunity_v49_global_min_net_pct", 0.0))
@@ -331,17 +344,29 @@ def _global_v49_calibration(config: dict[str, Any]) -> dict[str, Any]:
     action = "观察中，样本不足以调整全局门槛"
     target_live_trades = int(config.get("opportunity_v49_global_target_live_trades", 12))
     if positive and stats_24h["live_trades"] < target_live_trades:
-        rank_delta = -float(config.get("opportunity_v49_global_positive_relaxation_step", 0.03))
+        rank_delta = -float(
+            config.get("opportunity_v53_adaptive_rank_step", 0.05)
+            if v53_active
+            else config.get("opportunity_v49_global_positive_relaxation_step", 0.03)
+        )
         action = "扣费后正期望但机会偏少，降低全局排名门槛"
     elif positive:
         risk_multiplier = min(
             float(config.get("opportunity_v49_global_max_multiplier", 1.10)),
-            1.0 + float(config.get("opportunity_v49_global_positive_relaxation_step", 0.03)),
+            1.0 + float(
+                config.get("opportunity_v53_adaptive_risk_step", 0.10)
+                if v53_active
+                else config.get("opportunity_v49_global_positive_relaxation_step", 0.03)
+            ),
         )
         action = "当前版本扣费后正期望，允许全局仓位倍率小步恢复"
     elif negative:
-        cost_ratio_delta = float(config.get("opportunity_v49_global_negative_tightening_step", 0.05))
-        action = "当前版本扣费后负期望，提高全局成本收益门槛"
+        expectancy_delta = float(
+            config.get("opportunity_v53_adaptive_expectancy_step_pct", 0.002)
+            if v53_active
+            else config.get("opportunity_v49_global_negative_tightening_step", 0.05)
+        )
+        action = "当前版本扣费后负期望，小步提高全局净期望门槛"
     context_rows = [row for row in rows if float(row.get("age_hours") or 0) <= 72.0]
     direction_net: dict[str, float] = {"LONG": 0.0, "SHORT": 0.0}
     direction_counts: dict[str, int] = {"LONG": 0, "SHORT": 0}
@@ -365,8 +390,12 @@ def _global_v49_calibration(config: dict[str, Any]) -> dict[str, Any]:
     smart_average = sum(smart_values) / len(smart_values) if smart_values else 0.0
 
     result = {
-        "enabled": bool(config.get("opportunity_v49_global_adaptive_enabled", True)),
-        "schema": "adaptive_v49_global",
+        "enabled": bool(
+            config.get("opportunity_v53_adaptive_enabled", True)
+            if v53_active
+            else config.get("opportunity_v49_global_adaptive_enabled", True)
+        ),
+        "schema": "adaptive_v53_global" if v53_active else "adaptive_v49_global",
         "scope": "current_version_global_24h",
         "version": version,
         "ready": enough,
@@ -396,13 +425,46 @@ def _global_v49_calibration(config: dict[str, Any]) -> dict[str, Any]:
         "adjustment_action": action,
         "adjustment_interval_hours": float(config.get("opportunity_v49_global_update_hours", 2.0)),
         "target_live_trades": target_live_trades,
-        "effective_thresholds": {
-            "rank_percentile": round(_clamp(float(config.get("opportunity_v44_min_rank_percentile", 0.80)) + rank_delta, float(config.get("opportunity_v49_global_min_rank_percentile", 0.65)), float(config.get("opportunity_v49_global_max_rank_percentile", 0.90))), 4),
-            "expected_net_pct": round(_clamp(float(config.get("opportunity_v48_min_expected_net_pct", 0.03)) + expectancy_delta, float(config.get("opportunity_v49_global_min_expectancy_pct", 0.0)), float(config.get("opportunity_v49_global_max_expectancy_pct", 0.20))), 4),
-            "cost_ratio": round(_clamp(float(config.get("opportunity_v48_min_cost_ratio", 1.70)) + cost_ratio_delta, float(config.get("opportunity_v49_global_min_cost_ratio", 1.35)), float(config.get("opportunity_v49_global_max_cost_ratio", 2.50))), 4),
-            "confirmations": int(_clamp(float(config.get("opportunity_v44_min_confirmations", 3)) + confirmation_delta, float(config.get("opportunity_v49_global_min_confirmations", 3)), float(config.get("opportunity_v49_global_max_confirmations", 5)))),
-        },
-        "reason": f"全局 V4.9 24h：{stats_24h['trades']} 笔，PF {pf:.2f}，净收益 {net:.4f}%",
+        "effective_thresholds": (
+            {
+                "rank_percentile": round(
+                    _clamp(
+                        float(config.get("opportunity_v53_min_rank_percentile", 0.85)) + rank_delta,
+                        float(config.get("opportunity_v53_min_rank_percentile", 0.85))
+                        - float(config.get("opportunity_v53_adaptive_rank_step", 0.05)),
+                        float(config.get("opportunity_v53_min_rank_percentile", 0.85))
+                        + float(config.get("opportunity_v53_adaptive_rank_step", 0.05)),
+                    ),
+                    4,
+                ),
+                "expected_net_pct": round(
+                    float(config.get("opportunity_v50_min_expected_net_pct", 0.02))
+                    + expectancy_delta,
+                    4,
+                ),
+                "cost_ratio": round(
+                    float(config.get("opportunity_v53_min_gross_cost_multiple", 3.50))
+                    + cost_ratio_delta,
+                    4,
+                ),
+                "confirmations": int(
+                    _clamp(
+                        float(config.get("opportunity_v53_min_confirmations", 2))
+                        + confirmation_delta,
+                        2,
+                        3,
+                    )
+                ),
+            }
+            if v53_active
+            else {
+                "rank_percentile": round(_clamp(float(config.get("opportunity_v44_min_rank_percentile", 0.80)) + rank_delta, float(config.get("opportunity_v49_global_min_rank_percentile", 0.65)), float(config.get("opportunity_v49_global_max_rank_percentile", 0.90))), 4),
+                "expected_net_pct": round(_clamp(float(config.get("opportunity_v48_min_expected_net_pct", 0.03)) + expectancy_delta, float(config.get("opportunity_v49_global_min_expectancy_pct", 0.0)), float(config.get("opportunity_v49_global_max_expectancy_pct", 0.20))), 4),
+                "cost_ratio": round(_clamp(float(config.get("opportunity_v48_min_cost_ratio", 1.70)) + cost_ratio_delta, float(config.get("opportunity_v49_global_min_cost_ratio", 1.35)), float(config.get("opportunity_v49_global_max_cost_ratio", 2.50))), 4),
+                "confirmations": int(_clamp(float(config.get("opportunity_v44_min_confirmations", 3)) + confirmation_delta, float(config.get("opportunity_v49_global_min_confirmations", 3)), float(config.get("opportunity_v49_global_max_confirmations", 5)))),
+            }
+        ),
+        "reason": f"全局 {version.upper()} 24h：{stats_24h['trades']} 笔，PF {pf:.2f}，净收益 {net:.4f}%",
     }
     _persist_global_result(result)
     _GLOBAL_CACHE[key] = (now, result)
@@ -426,7 +488,7 @@ def adaptive_calibration(candidate: dict[str, Any], config: dict[str, Any]) -> d
                 )
         return {
             **global_result,
-            "schema": "adaptive_v411_global" if effective_version.startswith("v4.11") else "adaptive_v410_global" if effective_version.startswith("v4.10") else "adaptive_v49_global",
+            "schema": "adaptive_v53_global" if strategy_supports(version, "v53_fusion") else "adaptive_v411_global" if effective_version.startswith("v4.11") else "adaptive_v410_global" if effective_version.startswith("v4.10") else "adaptive_v49_global",
             "relation": "global",
             "direction": "GLOBAL",
             "market_regime": "global",

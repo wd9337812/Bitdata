@@ -8,6 +8,7 @@ from app.opportunity_v4 import (
     V462_FEATURE_WEIGHTS,
     V411_FEATURE_WEIGHTS,
     V52_FEATURE_WEIGHTS,
+    V53_FEATURE_WEIGHTS,
     _continuation_shape,
     _load_evidence,
     _model_expectancy,
@@ -105,6 +106,67 @@ def test_v52_weights_prioritize_cross_sectional_strength_and_are_normalized():
     assert V52_FEATURE_WEIGHTS["cross_sectional_strength"] == max(V52_FEATURE_WEIGHTS.values())
     assert strategy_supports("v5.2", "episode_evidence") is True
     assert strategy_supports("v5.2", "hard_stop_headroom") is True
+
+
+def test_v53_fusion_weights_and_capabilities_are_isolated():
+    assert sum(V53_FEATURE_WEIGHTS.values()) == pytest.approx(1.0)
+    assert V53_FEATURE_WEIGHTS["cross_sectional_strength"] == 0.25
+    assert V53_FEATURE_WEIGHTS["medium_path"] == 0.20
+    assert V53_FEATURE_WEIGHTS["entry_quality"] == 0.20
+    assert strategy_supports("v5.3", "v53_fusion") is True
+    assert strategy_supports("v5.3", "episode_evidence") is True
+    assert strategy_supports("v5.3", "hard_stop_headroom") is True
+    assert strategy_supports("v5.2", "v53_fusion") is False
+
+
+def test_v53_routes_direction_with_market_regime():
+    long_candidate = _candidate("LONGUSDT", 0.95, 2.0)
+    short_candidate = _candidate("SHORTUSDT", 0.95, 2.0)
+    short_candidate["direction"] = "SHORT"
+    short_candidate["signal"]["signal"] = "SHORT"
+    short_candidate["market_state"]["state"] = "broad_down"
+    short_candidate["opportunity_v3"]["market_regime"] = "broad_down"
+
+    config = {
+        "opportunity_v4_strategy_version": "v5.3",
+        "opportunity_v44_full_bet_enabled": True,
+    }
+
+    assert _regime_policy(long_candidate, config)["scope"] == "v53_broad_up_trend_route"
+    assert _regime_policy(short_candidate, config)["scope"] == "v53_broad_down_trend_route"
+
+
+def test_v53_uses_quieter_market_rank_floor_and_current_schema(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        "opportunity_v4_strategy_version": "v5.3",
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v44_full_bet_enabled": True,
+        "opportunity_v50_min_quality_score": 0.0,
+        "opportunity_v50_min_expected_net_pct": -10.0,
+        "opportunity_v50_min_lower_expectancy_pct": -10.0,
+        "opportunity_v53_min_rank_percentile": 0.0,
+        "opportunity_v53_quiet_min_rank_percentile": 0.90,
+        "opportunity_v53_min_cross_sectional_strength": 0.0,
+        "opportunity_v53_min_gross_cost_multiple": 1.0,
+        "opportunity_v53_min_confirmations": 2,
+        "opportunity_v48_exhaustion_enabled": False,
+        "opportunity_v48_reentry_enabled": False,
+        "opportunity_v48_local_evidence_enabled": False,
+        "opportunity_v53_adaptive_enabled": False,
+    }
+    candidate = _candidate("QUIETUSDT", 0.99, 2.0)
+    candidate["market_state"]["state"] = "quiet"
+    candidate["opportunity_v3"]["market_regime"] = "quiet"
+    candidate["entry_type"] = "v3_pullback"
+
+    attach_v4_rankings([candidate], config)
+    opportunity = candidate["opportunity_v4"]
+
+    assert opportunity["feature_schema_version"] == "v5.3"
+    assert opportunity["v53_fusion"]["enabled"] is True
+    assert opportunity["v53_fusion"]["rank_floor"] == pytest.approx(0.90)
+    assert opportunity["admitted"] is True
 
 
 def test_v52_evidence_compresses_repeated_opportunities_into_market_episodes(
