@@ -163,3 +163,29 @@ def test_v511_tracks_v5_losses_across_setup_names(monkeypatch, tmp_path):
     assert status["episode"]["loss_streak"] == 2
     assert status["episode"]["within_dedupe_window"] is True
     assert status["release_id"] == release_id
+
+
+def test_reconcile_recovers_v5_loss_when_open_context_is_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    release_id = "extreme_v5_roll@v5.1.1"
+    closed_at = datetime(2026, 7, 29, 3, 9, tzinfo=timezone.utc)
+
+    state = reconcile_v4_local_circuit(
+        {"opportunity_v431_local_live_loss_streak": 2},
+        release_id=release_id,
+        live_rows=[
+            {
+                "symbol": "KAITOUSDT",
+                "direction": "LONG",
+                "entry_type": "breakout",
+                "market_regime": "mixed",
+                "entry_phase": "TRIGGERED",
+                "close_time": int(closed_at.timestamp() * 1000),
+                "net_pnl": -0.53,
+            }
+        ],
+        now=closed_at,
+    )
+
+    assert state["cohorts"]["mixed:LONG:breakout:TRIGGERED"]["live_loss_streak"] == 1
+    assert state["symbol_episodes"]["KAITOUSDT:LONG"]["loss_streak"] == 1

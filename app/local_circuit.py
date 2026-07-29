@@ -169,8 +169,15 @@ def reconcile_v4_local_circuit(
             continue
         position_key = f"{symbol}:{direction}"
         probe = positions.pop(position_key, None)
-        key = str((probe or {}).get("cohort_key") or row.get("cohort_key") or "")
-        symbol_episode_key = str((probe or {}).get("episode_key") or "")
+        key = str(
+            (probe or {}).get("cohort_key")
+            or row.get("cohort_key")
+            or evidence_cohort_key(row)
+        )
+        symbol_episode_key = str(
+            (probe or {}).get("episode_key")
+            or episode_key(row)
+        )
         processed.append(token)
         processed_set.add(token)
         changed = True
@@ -183,7 +190,11 @@ def reconcile_v4_local_circuit(
         cohort.update(
             {
                 "cohort_key": key,
-                "parts": (probe or {}).get("parts") or cohort.get("parts") or {},
+                "parts": (
+                    (probe or {}).get("parts")
+                    or cohort.get("parts")
+                    or _cohort_parts(row)
+                ),
                 "live_loss_streak": live_loss_streak,
                 "last_live_net_pnl": round(net_pnl, 8),
                 "last_live_close_time": close_time,
