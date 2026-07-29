@@ -166,5 +166,6 @@ def test_v511_starts_at_half_risk_and_penalizes_first_two_losses(monkeypatch, tm
     )
 
     assert initial["risk_multiplier"] == 0.5
+    assert initial["status"] == "initial_exploration"
     assert first_loss["risk_multiplier"] == 0.4
     assert second_loss["risk_multiplier"] == 0.25

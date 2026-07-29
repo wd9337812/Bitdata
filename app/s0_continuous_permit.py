@@ -259,11 +259,21 @@ def s0_continuous_permit_status(
         status = (
             "baseline_recovery"
             if baseline_risk_cap is not None
+            else "initial_exploration"
+            if (
+                not state.get("processed_trade_ids")
+                and strategy_supports(version, "v511_incident_guard")
+            )
             else "normal"
             if multiplier >= 0.999
             else "position_penalty"
         )
-        if status == "normal":
+        if status == "initial_exploration":
+            reason = (
+                f"{version.upper()} 新版本首轮受限试探，风险倍率 {multiplier:.2f}x；"
+                "建立扣费后盈利证据后自动恢复进攻仓位"
+            )
+        elif status == "normal":
             reason = "连续准入正常；候选仍需通过触发、扣费后期望和流动性硬门"
         elif status == "baseline_recovery":
             reason = f"短冷却已结束，自动恢复开仓；下一笔压力风险暂时上限 {baseline_risk_cap:.2f}%"
