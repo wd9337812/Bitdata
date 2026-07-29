@@ -604,7 +604,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v5.1"
+    opportunity_v4_strategy_version: str = "v5.1.1"
     s0_moe_shadow_enabled: bool = True
     s0_moe_runtime_model_enabled: bool = False
     s0_moe_model_path: str = ""
@@ -869,16 +869,24 @@ class TradingConfig(BaseModel):
     opportunity_v51_recovery_min_medium_path: float = Field(default=0.30, ge=0, le=1)
     opportunity_v51_recovery_max_extension_atr: float = Field(default=0.35, ge=0, le=20)
     opportunity_v51_event_group_minutes: int = Field(default=60, ge=1, le=1440)
+    opportunity_v511_initial_multiplier: float = Field(default=0.50, ge=0, le=1)
+    opportunity_v511_loss_1_multiplier: float = Field(default=0.40, ge=0, le=1)
+    opportunity_v511_loss_2_multiplier: float = Field(default=0.25, ge=0, le=1)
+    opportunity_v511_same_direction_dedupe_minutes: int = Field(default=120, ge=1, le=1440)
+    opportunity_v511_same_direction_window_hours: float = Field(default=6.0, ge=0.25, le=168)
+    opportunity_v511_same_direction_max_events: int = Field(default=2, ge=1, le=100)
+    opportunity_v511_same_direction_hard_losses: int = Field(default=2, ge=1, le=20)
+    opportunity_v511_reentry_caution_multiplier: float = Field(default=0.50, ge=0, le=1)
     opportunity_v4_evidence_lookback_hours: float = Field(default=168, ge=1, le=8760)
     opportunity_v4_evidence_max_trades: int = Field(default=5000, ge=100, le=100000)
     opportunity_v4_evidence_cache_seconds: int = Field(default=60, ge=1, le=3600)
     strategy_canary_enabled: bool = True
     strategy_canary_auto_issue: bool = True
     strategy_canary_startup_cap_enabled: bool = True
-    strategy_canary_release_id: str = "extreme_v5_roll@v5.1"
+    strategy_canary_release_id: str = "extreme_v5_roll@v5.1.1"
     strategy_canary_permit_hours: float = Field(default=24.0, ge=0.25, le=168)
-    strategy_canary_level_1_multiplier: float = Field(default=1.0, ge=0, le=1)
-    strategy_canary_level_1_max_opportunities: int = Field(default=6, ge=1, le=100)
+    strategy_canary_level_1_multiplier: float = Field(default=0.50, ge=0, le=1)
+    strategy_canary_level_1_max_opportunities: int = Field(default=4, ge=1, le=100)
     strategy_canary_level_2_min_trades: int = Field(default=3, ge=1, le=100)
     strategy_canary_level_2_min_profit_factor: float = Field(default=1.05, ge=0, le=100)
     strategy_canary_level_2_multiplier: float = Field(default=1.0, ge=0, le=1)

@@ -235,7 +235,7 @@ function App() {
   const activeStrategyVersion = String(
     performanceGuard.active_strategy_version
       || config.opportunity_v4_strategy_version
-      || "v5.1",
+      || "v5.1.1",
   );
   const activeStrategyFamily = String(
     performanceGuard.active_strategy_family
@@ -809,8 +809,8 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>当前结论</span><strong>{best.passed ? "允许执行" : "继续等待"}</strong></div>
         <div><span>MoE 影子建议</span><strong>{!moe.enabled ? "未评估" : !moe.active_gate ? "当前场景未验证" : moe.passed ? "模型建议记录机会" : "模型优势不足"}</strong></div>
         <div><span>MoE 预测/门槛</span><strong>{moe.active_gate ? `${fmt(moe.model_edge, 3)} / ${fmt(moe.edge_floor, 3)}` : "不参与实盘准入"}</strong></div>
-        <div><span>{`${String(v4.strategy_version || "v5.1").toUpperCase()} 本轮排名`}</span><strong>{v4.enabled ? `前 ${fmt((1 - Number(v4.rank_percentile || 0)) * 100, 0)}%` : "-"}</strong></div>
-        <div><span>{`${String(v4.strategy_version || "v5.1").toUpperCase()} 准入通道`}</span><strong>{v4.admission_lane === "full_bet" ? "全仓短打" : "仅影子"}</strong></div>
+        <div><span>{`${String(v4.strategy_version || "v5.1.1").toUpperCase()} 本轮排名`}</span><strong>{v4.enabled ? `前 ${fmt((1 - Number(v4.rank_percentile || 0)) * 100, 0)}%` : "-"}</strong></div>
+        <div><span>{`${String(v4.strategy_version || "v5.1.1").toUpperCase()} 准入通道`}</span><strong>{v4.admission_lane === "full_bet" ? "全仓短打" : "仅影子"}</strong></div>
         <div><span>{isGlobalCalibration ? "校准范围" : "方向关系"}</span><strong>{isGlobalCalibration ? "全局 · 不按币种" : adaptive.relation === "aligned" ? "顺势" : adaptive.relation === "countertrend" ? "逆势" : adaptive.relation === "neutral" ? "中性" : "等待校准"}</strong></div>
         <div><span>{isGlobalCalibration ? "全局风险倍率" : "动态仓位倍率"}</span><strong>{adaptive.enabled ? `${fmt(adaptive.risk_multiplier, 2)}x` : "未启用"}</strong></div>
         <div><span>12 / 24小时样本</span><strong>{adaptive.enabled ? `${fmt(adaptive.stats_12h?.shadow_trades ?? adaptive.stats_12h?.current_trades, 0)} 影子 / ${fmt(adaptive.stats_24h?.live_trades ?? adaptive.stats_24h?.current_trades, 0)} 实盘` : "-"}</strong></div>
@@ -908,7 +908,7 @@ function V4OpportunityPanel({ funnel, performanceGuard }: { funnel: any; perform
   const v4 = funnel?.opportunity_v4 || {};
   const smartFlow = funnel?.smart_flow || {};
   if (!v4.enabled) return null;
-  const strategyLabel = String(v4.strategy_version || "v5.1").toUpperCase();
+  const strategyLabel = String(v4.strategy_version || "v5.1.1").toUpperCase();
   const v5Active = String(v4.strategy_version || "").toLowerCase().startsWith("v5.");
   const topBlockers = Object.entries(v4.blocked_categories || v4.blocked_reasons || {})
     .sort((left: any, right: any) => Number(right[1]) - Number(left[1]))
@@ -1288,7 +1288,7 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
   const candidate = challenger.all || {};
   const validation = challenger.validation || {};
   const hasChallenger = Boolean(challenger.strategy_version);
-  const activeStrategyLabel = String(active.strategy_version || "v5.1").toUpperCase();
+  const activeStrategyLabel = String(active.strategy_version || "v5.1.1").toUpperCase();
   const evidenceTypes = data.by_evidence_type || [];
   const admissionLanes = data.by_admission_lane || [];
   const checks = [
@@ -1947,7 +1947,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("yolo_scalp_min_order_lift_min_net_profit_usdt", "补齐订单最低净利润U", "默认 0.03U；太小的毛利不强行成交")}
           {toggle("opportunity_v4_enabled", "启用 V4 机会引擎", "推荐开启：计算扣费后净期望并记录公平影子证据，不增加 Binance 下单请求")}
           {toggle("opportunity_v4_live_enabled", "V5.1 作为当前实盘排序器", "默认开启；旧策略实验已退出实盘和日常界面")}
-          {text("opportunity_v4_strategy_version", "当前策略版本号", "默认 v5.1；不同版本实盘和影子证据严格隔离")}
+          {text("opportunity_v4_strategy_version", "当前策略版本号", "默认 v5.1.1；不同版本实盘和影子证据严格隔离")}
           {toggle("opportunity_v44_full_bet_enabled", "V5.1 S0 单仓全进全出", "只持有一个币种和一个方向；一次建仓、一次全平，禁止盈利追加和分批止盈")}
           {toggle("opportunity_v49_global_adaptive_enabled", "V5.0-S30 全局动态校准", "只读取当前版本本地实盘与影子数据库，不增加 Binance API 请求，也不按单币种调参")}
           {number("opportunity_v49_global_window_hours", "全局统计窗口小时", "默认 24 小时")}
@@ -2070,7 +2070,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("strategy_canary_startup_cap_enabled", "归档：旧版首日许可证", "当前版本已由连续准入替代，不参与当前开仓")}
           {text("strategy_canary_release_id", "当前版本许可证", "按策略版本独立签发；旧版本状态不会参与当前准入")}
           {number("strategy_canary_permit_hours", "许可证有效小时", "默认 24 小时")}
-          {number("strategy_canary_level_1_max_opportunities", "一级最多机会", "默认 6 次，倍率 1.00x；风险仍受 15% 压力硬上限约束")}
+          {number("strategy_canary_level_1_max_opportunities", "一级最多机会", "默认 4 次，倍率 0.50x；首轮风险约 15%，建立盈利证据后再恢复进攻仓位")}
           {number("strategy_canary_level_2_min_trades", "升二级所需实盘", "默认 3 笔且净收益为正、PF≥1.05")}
           {number("strategy_canary_level_3_min_trades", "升标准所需实盘", "默认 8 笔且净收益为正、PF≥1.15")}
           {number("strategy_canary_max_losses", "试运行最大亏损笔数", "默认 3 笔；达到后进入 60 分钟观察，不是永久停用")}

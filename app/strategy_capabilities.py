@@ -16,6 +16,7 @@ STRATEGY_GENERATION_ALIASES = {
     # V5.1 keeps the S0 execution boundary and replaces the all-or-nothing
     # panic veto with setup-aware, event-deduplicated admission.
     "v5.1": "v5.1",
+    "v5.1.1": "v5.1.1",
 }
 
 
@@ -53,6 +54,8 @@ def strategy_supports(value: Any, capability: str) -> bool:
                     "event_group_dedupe",
                 }
             )
+        if raw_version.startswith("v5.1.1"):
+            supported.update({"exhaustion_reentry", "v511_incident_guard"})
         return capability in supported
     if capability == "v472_router":
         return raw_version.startswith(("v4.7.2", "v4.7.3", "v4.7.4"))

@@ -102,3 +102,64 @@ def test_local_shadow_circuit_restores_after_fresh_positive_cross_symbol_evidenc
     assert status["blocked"] is False
     assert status["restored"] is True
     assert status["shadow"]["restored_at"]
+
+
+def test_v511_tracks_v5_losses_across_setup_names(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    release_id = "extreme_v5_roll@v5.1.1"
+    now = datetime.now(timezone.utc) - timedelta(minutes=20)
+    protected = {"mode": "live", "stop_order": {"id": 1}, "take_profit_order": {"id": 2}}
+
+    for index, setup in enumerate(("prebreakout", "pullback")):
+        candidate = _candidate("ZILUSDT")
+        candidate.update(
+            {
+                "entry_type": setup,
+                "strategy_family": "extreme_v5_roll",
+                "strategy_version": "v5.1.1",
+            }
+        )
+        candidate["market_structure"]["setup_type"] = setup
+        opened_at = now + timedelta(minutes=index * 10)
+        record_v4_live_open(
+            {"symbol": "ZILUSDT", "direction": "LONG", "candidate": candidate},
+            protected,
+            now=opened_at,
+        )
+        reconcile_v4_local_circuit(
+            {"opportunity_v431_local_live_loss_streak": 2},
+            release_id=release_id,
+            live_rows=[
+                {
+                    "symbol": "ZILUSDT",
+                    "direction": "LONG",
+                    "close_time": int((opened_at + timedelta(minutes=2)).timestamp() * 1000),
+                    "net_pnl": -0.2,
+                }
+            ],
+            now=opened_at + timedelta(minutes=2),
+        )
+
+    candidate = _candidate("ZILUSDT")
+    candidate.update(
+        {
+            "entry_type": "breakout",
+            "strategy_family": "extreme_v5_roll",
+            "strategy_version": "v5.1.1",
+        }
+    )
+    candidate["market_structure"]["setup_type"] = "breakout"
+    status = candidate_local_circuit_status(
+        candidate,
+        [],
+        {
+            "opportunity_v4_strategy_version": "v5.1.1",
+            "opportunity_v511_same_direction_dedupe_minutes": 120,
+            "opportunity_v511_same_direction_hard_losses": 2,
+        },
+        state=local_circuit_state(release_id),
+    )
+
+    assert status["episode"]["loss_streak"] == 2
+    assert status["episode"]["within_dedupe_window"] is True
+    assert status["release_id"] == release_id

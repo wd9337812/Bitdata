@@ -92,8 +92,8 @@ def test_v50_migrates_legacy_live_version_and_canary(tmp_path, monkeypatch):
     importlib.reload(config_store)
     loaded = config_store.load_config(include_secret=True)
 
-    assert loaded["opportunity_v4_strategy_version"] == "v5.1"
-    assert loaded["strategy_canary_release_id"] == "extreme_v5_roll@v5.1"
+    assert loaded["opportunity_v4_strategy_version"] == "v5.1.1"
+    assert loaded["strategy_canary_release_id"] == "extreme_v5_roll@v5.1.1"
     assert loaded["opportunity_v44_max_hold_bars"] == 2
     assert loaded["opportunity_v462_time_exit_migrated"] is True
 
@@ -115,8 +115,34 @@ def test_v51_migrates_v50_runtime_route_and_canary(tmp_path, monkeypatch):
     importlib.reload(config_store)
     loaded = config_store.load_config(include_secret=True)
 
-    assert loaded["opportunity_v4_strategy_version"] == "v5.1"
-    assert loaded["strategy_canary_release_id"] == "extreme_v5_roll@v5.1"
+    assert loaded["opportunity_v4_strategy_version"] == "v5.1.1"
+    assert loaded["strategy_canary_release_id"] == "extreme_v5_roll@v5.1.1"
+    assert loaded["strategy_canary_level_1_multiplier"] == 0.5
+    assert loaded["strategy_canary_level_1_max_opportunities"] == 4
+
+
+def test_v511_migrates_v51_runtime_with_guarded_first_release(tmp_path, monkeypatch):
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "opportunity_v4_strategy_version": "v5.1",
+                "strategy_canary_release_id": "extreme_v5_roll@v5.1",
+                "strategy_canary_level_1_multiplier": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("APP_CONFIG_PATH", str(path))
+    import app.config_store as config_store
+
+    importlib.reload(config_store)
+    loaded = config_store.load_config(include_secret=True)
+
+    assert loaded["opportunity_v4_strategy_version"] == "v5.1.1"
+    assert loaded["strategy_canary_release_id"] == "extreme_v5_roll@v5.1.1"
+    assert loaded["opportunity_v511_initial_multiplier"] == 0.5
+    assert loaded["strategy_canary_level_1_multiplier"] == 0.5
 
 
 def test_v462_time_exit_migration_repairs_partially_persisted_upgrade_once(tmp_path, monkeypatch):

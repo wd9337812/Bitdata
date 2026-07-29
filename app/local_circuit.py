@@ -7,6 +7,7 @@ from typing import Any
 
 from app.market_structure import market_structure, normalize_setup_type
 from app.state_store import load_state, save_state
+from app.strategy_capabilities import strategy_family_for_version
 from app.telemetry import record_event
 from app.v4_evidence import is_live_eligible_v4_shadow
 
@@ -71,14 +72,7 @@ def cohort_key(candidate: dict[str, Any]) -> str:
 def episode_key(candidate: dict[str, Any]) -> str:
     parts = _cohort_parts(candidate)
     symbol = str(candidate.get("symbol") or "").upper()
-    return ":".join(
-        (
-            symbol,
-            parts["direction"],
-            parts["setup_type"],
-            parts["market_regime"],
-        )
-    )
+    return ":".join((symbol, parts["direction"]))
 
 
 def evidence_cohort_key(row: dict[str, Any]) -> str:
@@ -124,7 +118,7 @@ def record_v4_live_open(
     candidate = decision.get("candidate") or decision
     family = str(candidate.get("strategy_family") or decision.get("strategy_family") or "")
     version = str(candidate.get("strategy_version") or decision.get("strategy_version") or "")
-    if family != "extreme_v4_roll" or not version:
+    if family not in {"extreme_v4_roll", "extreme_v5_roll"} or not version:
         return None
     symbol = str(decision.get("symbol") or candidate.get("symbol") or "").upper()
     direction = str(decision.get("direction") or candidate.get("direction") or "").upper()
@@ -331,7 +325,7 @@ def candidate_local_circuit_status(
     state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     version = str(config.get("opportunity_v4_strategy_version") or "v4.3.2")
-    release_id = f"extreme_v4_roll@{version}"
+    release_id = f"{strategy_family_for_version(version)}@{version}"
     state = state or local_circuit_state(release_id)
     key = cohort_key(candidate)
     parts = _cohort_parts(candidate)
@@ -340,10 +334,19 @@ def candidate_local_circuit_status(
     stored = dict((state.get("cohorts") or {}).get(key) or {})
     episode = dict((state.get("symbol_episodes") or {}).get(episode_key(candidate)) or {})
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-    dedupe_minutes = int(config.get("opportunity_v472_episode_dedupe_minutes", 45))
+    incident_guard = str(version).lower().startswith("v5.1.1")
+    dedupe_minutes = int(
+        config.get("opportunity_v511_same_direction_dedupe_minutes", 120)
+        if incident_guard
+        else config.get("opportunity_v472_episode_dedupe_minutes", 45)
+    )
     last_close_time = int(episode.get("last_close_time") or 0)
     recent_cutoff = now_ms - int(
-        float(config.get("opportunity_v472_symbol_event_window_hours", 6.0))
+        float(
+            config.get("opportunity_v511_same_direction_window_hours", 6.0)
+            if incident_guard
+            else config.get("opportunity_v472_symbol_event_window_hours", 6.0)
+        )
         * 60
         * 60
         * 1000
@@ -360,7 +363,9 @@ def candidate_local_circuit_status(
             ),
             "recent_event_count": recent_event_count,
             "recent_event_limit": int(
-                config.get("opportunity_v472_symbol_max_events_per_window", 3)
+                config.get("opportunity_v511_same_direction_max_events", 2)
+                if incident_guard
+                else config.get("opportunity_v472_symbol_max_events_per_window", 3)
             ),
             "dedupe_minutes": dedupe_minutes,
         }

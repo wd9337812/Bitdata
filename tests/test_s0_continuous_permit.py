@@ -138,3 +138,33 @@ def test_v50_three_losses_cool_down_then_restore_at_twelve_percent(monkeypatch, 
     assert restored["status"] == "baseline_recovery"
     assert restored["risk_cap_pct"] == 12.0
     assert restored["risk_multiplier"] == 1.0
+
+
+def test_v511_starts_at_half_risk_and_penalizes_first_two_losses(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        **_config(),
+        "opportunity_v4_strategy_version": "v5.1.1",
+        "opportunity_v511_initial_multiplier": 0.50,
+        "opportunity_v511_loss_1_multiplier": 0.40,
+        "opportunity_v511_loss_2_multiplier": 0.25,
+    }
+    now = datetime(2026, 7, 29, tzinfo=timezone.utc)
+
+    initial = s0_continuous_permit_status(config, equity=10.0, live_rows=[], now=now)
+    first_loss = s0_continuous_permit_status(
+        config,
+        equity=9.5,
+        live_rows=[_row(1, -0.5)],
+        now=now + timedelta(minutes=1),
+    )
+    second_loss = s0_continuous_permit_status(
+        config,
+        equity=9.0,
+        live_rows=[_row(1, -0.5), _row(2, -0.5)],
+        now=now + timedelta(minutes=2),
+    )
+
+    assert initial["risk_multiplier"] == 0.5
+    assert first_loss["risk_multiplier"] == 0.4
+    assert second_loss["risk_multiplier"] == 0.25

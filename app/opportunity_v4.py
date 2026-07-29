@@ -480,7 +480,13 @@ def _v48_reentry_policy(
         and volume >= float(config.get("opportunity_v48_reentry_reset_volume", 1.05))
         and extension <= float(config.get("opportunity_v48_reentry_reset_extension_atr", 0.35))
     )
-    hard_losses = int(config.get("opportunity_v48_reentry_hard_losses", 2))
+    version = str(config.get("opportunity_v4_strategy_version") or "").lower()
+    incident_guard = strategy_supports(version, "v511_incident_guard")
+    hard_losses = int(
+        config.get("opportunity_v511_same_direction_hard_losses", 2)
+        if incident_guard
+        else config.get("opportunity_v48_reentry_hard_losses", 2)
+    )
     duplicate_event = bool(episode.get("within_dedupe_window"))
     event_limit_reached = bool(
         int(episode.get("recent_event_count") or 0)
@@ -501,7 +507,11 @@ def _v48_reentry_policy(
         "risk_multiplier": (
             0.0
             if blocked
-            else float(config.get("opportunity_v48_reentry_caution_multiplier", 0.70))
+            else float(
+                config.get("opportunity_v511_reentry_caution_multiplier", 0.50)
+                if incident_guard
+                else config.get("opportunity_v48_reentry_caution_multiplier", 0.70)
+            )
             if caution
             else 1.0
         ),

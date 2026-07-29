@@ -281,6 +281,37 @@ def test_v472_reentry_blocks_duplicate_episode_without_two_losses():
     assert result["duplicate_event"] is True
 
 
+def test_v511_reentry_uses_same_direction_incident_guard():
+    candidate = _candidate("ZILUSDT", 0.95, 1.0)
+    candidate["signal"]["entry_phase"] = "TRIGGERED"
+    local = {
+        "live_loss_streak": 0,
+        "episode": {
+            "loss_streak": 1,
+            "within_dedupe_window": True,
+            "recent_event_count": 1,
+            "recent_event_limit": 2,
+            "dedupe_minutes": 120,
+        },
+    }
+    config = {
+        "opportunity_v4_strategy_version": "v5.1.1",
+        "opportunity_v48_reentry_enabled": True,
+        "opportunity_v511_reentry_caution_multiplier": 0.50,
+    }
+
+    result = _v48_reentry_policy(
+        candidate,
+        _model_features(candidate, config),
+        local,
+        config,
+    )
+
+    assert result["blocked"] is True
+    assert result["duplicate_event"] is True
+    assert result["dedupe_minutes"] == 120
+
+
 def test_v462_rewards_momentum_and_penalizes_pullback_before_smart_flow():
     momentum = _candidate("MOMENTUMUSDT", 0.90, 2.0)
     momentum["entry_type"] = "v3_momentum"

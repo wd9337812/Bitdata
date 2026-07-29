@@ -32,6 +32,15 @@ def _loss_level(consecutive_losses: int) -> int:
 
 
 def _level_multiplier(level: int, config: dict[str, Any], *, v50_active: bool = False) -> float:
+    version = str(config.get("opportunity_v4_strategy_version") or "").lower()
+    if strategy_supports(version, "v511_incident_guard"):
+        values = (
+            float(config.get("opportunity_v50_loss_3_multiplier", 1.0)),
+            float(config.get("opportunity_v511_loss_2_multiplier", 0.25)),
+            float(config.get("opportunity_v511_loss_1_multiplier", 0.40)),
+            1.0,
+        )
+        return max(0.0, min(1.0, values[max(0, min(3, int(level)))]))
     prefix = "opportunity_v50_" if v50_active else "s0_continuous_"
     values = (
         float(config.get(f"{prefix}loss_3_multiplier", 1.0 if v50_active else 0.25)),
@@ -43,8 +52,11 @@ def _level_multiplier(level: int, config: dict[str, Any], *, v50_active: bool = 
 
 
 def _base_state(release_id: str, config: dict[str, Any], *, v50_active: bool = False) -> dict[str, Any]:
+    version = str(config.get("opportunity_v4_strategy_version") or "").lower()
     initial_multiplier = (
-        float(config.get("opportunity_v50_initial_multiplier", 1.0))
+        float(config.get("opportunity_v511_initial_multiplier", 0.50))
+        if strategy_supports(version, "v511_incident_guard")
+        else float(config.get("opportunity_v50_initial_multiplier", 1.0))
         if v50_active
         else float(config.get("s0_continuous_initial_multiplier", 0.75))
     )
@@ -204,7 +216,9 @@ def s0_continuous_permit_status(
         result_multiplier = min(
             result_multiplier,
             (
-                float(config.get("opportunity_v50_initial_multiplier", 1.0))
+                float(config.get("opportunity_v511_initial_multiplier", 0.50))
+                if strategy_supports(version, "v511_incident_guard")
+                else float(config.get("opportunity_v50_initial_multiplier", 1.0))
                 if v50_active
                 else float(config.get("s0_continuous_initial_multiplier", 0.75))
             ),
