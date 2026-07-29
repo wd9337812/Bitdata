@@ -1208,6 +1208,7 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
     if loaded_v4_version.startswith(("v3.", "v4.")) or loaded_v4_version == "v5.0-s30":
         config["opportunity_v4_strategy_version"] = "v5.1"
         config["opportunity_v410_seed_version"] = "v4.10"
+        config["strategy_canary_release_id"] = "extreme_v5_roll@v5.1"
     if not bool(loaded.get("opportunity_v462_time_exit_migrated", False)):
         if int(loaded.get("opportunity_v44_max_hold_bars", 6)) == 6:
             config["opportunity_v44_max_hold_bars"] = 2

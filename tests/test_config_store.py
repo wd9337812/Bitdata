@@ -79,9 +79,9 @@ def test_v50_migrates_legacy_live_version_and_canary(tmp_path, monkeypatch):
     path.write_text(
         json.dumps(
             {
-                "opportunity_v4_strategy_version": "v4.6.1",
+                "opportunity_v4_strategy_version": "v4.7.4",
                 "opportunity_v44_max_hold_bars": 6,
-                "strategy_canary_release_id": "extreme_v4_roll@v4.6.1",
+                "strategy_canary_release_id": "extreme_v4_roll@v4.7.4",
             }
         ),
         encoding="utf-8",
