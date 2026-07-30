@@ -17,6 +17,15 @@ MINUTE_MS = 60_000
 SIGNAL_MINUTES = 5
 ROUND_TRIP_COST_PCT = 0.12
 SOURCE_STOP_ATR = 0.85
+V49_THRESHOLDS = {
+    "rank_percentile": 0.80,
+    "quality": 0.56,
+    "expected_net_pct": 0.03,
+    "lower_expected_net_pct": -0.03,
+    "cost_ratio": 1.70,
+    "confirmations": 3,
+    "exhaustion_block_score": 0.62,
+}
 
 PROFILES = {
     "current_fast": {"stop_atr": 0.85, "take_profit_r": 1.05, "hold_minutes": 10},
@@ -115,14 +124,20 @@ def _prepare_candidates(path: Path) -> pd.DataFrame:
         "quality",
         "expected_net_pct",
         "lower_expected_net_pct",
+        "cost_ratio",
         "confirmations",
         "baseline_passed",
         "medium_alignment",
+        "medium_path",
         "regime_fit",
         "directed_flow",
         "volume_persistence",
         "anti_chase",
         "entry_quality",
+        "extension_atr",
+        "impulse_atr",
+        "volume_acceleration",
+        "micro_adverse_wick",
     ]
     frame = pd.read_parquet(path, columns=columns)
     numeric = [
@@ -130,13 +145,19 @@ def _prepare_candidates(path: Path) -> pd.DataFrame:
         "quality",
         "expected_net_pct",
         "lower_expected_net_pct",
+        "cost_ratio",
         "confirmations",
         "medium_alignment",
+        "medium_path",
         "regime_fit",
         "directed_flow",
         "volume_persistence",
         "anti_chase",
         "entry_quality",
+        "extension_atr",
+        "impulse_atr",
+        "volume_acceleration",
+        "micro_adverse_wick",
     ]
     for column in numeric:
         frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
@@ -153,6 +174,19 @@ def _prepare_candidates(path: Path) -> pd.DataFrame:
         + frame.anti_chase * 0.08
         + frame.entry_quality * 0.12
     )
+    frame = attach_research_gates(frame)
+    useful = (
+        frame.baseline_passed.fillna(False)
+        | frame.v49_static_proxy
+        | frame.v53_proxy
+        | frame.rank95
+    )
+    return frame[useful].reset_index(drop=True).copy()
+
+
+def attach_research_gates(frame: pd.DataFrame) -> pd.DataFrame:
+    """Attach reproducible historical gates without calling the live engine."""
+    frame = frame.copy()
     aligned = (
         (frame.market_regime.eq("broad_up") & frame.direction.eq("LONG"))
         | (frame.market_regime.eq("broad_down") & frame.direction.eq("SHORT"))
@@ -167,12 +201,33 @@ def _prepare_candidates(path: Path) -> pd.DataFrame:
         & frame.confirmations.ge(2)
     )
     frame["rank95"] = frame.rank_percentile.ge(0.95)
-    useful = (
-        frame.baseline_passed.fillna(False)
-        | frame.v53_proxy
-        | frame.rank95
+    frame["v49_confirmations"] = (
+        frame.volume_persistence.ge(0.55).astype("int8")
+        + frame.directed_flow.ge(0.70).astype("int8")
+        + frame.regime_fit.ge(0.80).astype("int8")
+        + (frame.medium_path.ge(0.45) | aligned).astype("int8")
+        + frame.anti_chase.ge(0.60).astype("int8")
     )
-    return frame[useful].reset_index(drop=True).copy()
+    frame["v49_exhaustion_score"] = (
+        np.clip(frame.extension_atr / 0.85, 0.0, 1.0) * 0.25
+        + np.clip(frame.impulse_atr / 1.60, 0.0, 1.0) * 0.15
+        + np.clip(frame.micro_adverse_wick / 2.50, 0.0, 1.0) * 0.20
+        + np.clip((1.05 - frame.volume_acceleration) / 0.45, 0.0, 1.0) * 0.15
+        + np.clip((0.18 - frame.medium_path) / 0.18, 0.0, 1.0) * 0.15
+    )
+    frame["v49_static_proxy"] = (
+        aligned
+        & frame.market_regime.isin(["quiet", "broad_up", "broad_down", "rotation"])
+        & frame.setup_type.isin(["pullback", "momentum", "prebreakout"])
+        & frame.rank_percentile.ge(V49_THRESHOLDS["rank_percentile"])
+        & frame.quality.ge(V49_THRESHOLDS["quality"])
+        & frame.expected_net_pct.ge(V49_THRESHOLDS["expected_net_pct"])
+        & frame.lower_expected_net_pct.ge(V49_THRESHOLDS["lower_expected_net_pct"])
+        & frame.cost_ratio.ge(V49_THRESHOLDS["cost_ratio"])
+        & frame.v49_confirmations.ge(V49_THRESHOLDS["confirmations"])
+        & frame.v49_exhaustion_score.lt(V49_THRESHOLDS["exhaustion_block_score"])
+    )
+    return frame
 
 
 def _schedule(frame: pd.DataFrame) -> pd.DataFrame:
@@ -249,9 +304,22 @@ def benchmark(args: argparse.Namespace) -> dict[str, Any]:
         "round_trip_cost_pct": ROUND_TRIP_COST_PCT,
         "validation_start": validation_start.isoformat(),
         "test_start": test_start.isoformat(),
+        "gate_notes": {
+            "v49_static_proxy": {
+                "source_commit": "5ce2358",
+                "thresholds": V49_THRESHOLDS,
+                "limitations": [
+                    "Uses the public candidate feature schema on a common Binance one-minute sample.",
+                    "Does not replay V4.9 rolling local evidence, account state, or order-book liquidity.",
+                    "Smart-flow divergence is omitted from exhaustion because the public source has no identical V4.9 field.",
+                ],
+            },
+            "v52_proxy": "Uses baseline_passed from the common public candidate build.",
+        },
         "profiles": {},
     }
     gates = {
+        "v49_static_proxy": lambda frame: frame.v49_static_proxy,
         "v52_proxy": lambda frame: frame.baseline_passed.fillna(False),
         "v53_proxy": lambda frame: frame.v53_proxy,
         "rank95_proxy": lambda frame: frame.rank95,
