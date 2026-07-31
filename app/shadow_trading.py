@@ -116,6 +116,9 @@ def _candidate_signal_type(candidate: dict[str, Any]) -> str:
 
 
 def _dedupe_key(candidate: dict[str, Any], bucket_minutes: int) -> str:
+    explicit = str(candidate.get("shadow_dedupe_key") or "").strip()
+    if explicit:
+        return explicit
     current = datetime.now(timezone.utc)
     bucket = int(current.timestamp() // max(60, bucket_minutes * 60))
     return ":".join(
@@ -384,8 +387,9 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
             entry = _candidate_price(candidate)
             stop = float(signal.get("stop") or 0)
             take = float(signal.get("take_profit") or 0)
+            force_eligible = bool(candidate.get("shadow_force_eligible"))
             if (
-                (not (is_v4 or is_v4_control) and float(candidate.get("score") or 0)
+                (not force_eligible and not (is_v4 or is_v4_control) and float(candidate.get("score") or 0)
                 < (
                     float(config.get("opportunity_v33_min_score", 68.0))
                     if is_v33
@@ -402,7 +406,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                     and not v4.get("shadow_eligible")
                     and not bool((v4.get("moe") or {}).get("passed"))
                 )
-                or (is_v4_control and not candidate.get("shadow_force_eligible"))
+                or (is_v4_control and not force_eligible)
                 or (is_v31 and signal.get("signal") != direction)
                 or (is_v31 and not v31.get("eligible"))
                 or entry <= 0
@@ -421,6 +425,12 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 str(candidate.get("direction") or "LONG").upper(),
                 _candidate_signal_type(candidate),
             )
+            if candidate.get("shadow_single_position") and any(
+                str(row["strategy_family"] or "") == str(candidate.get("strategy_family") or "")
+                and str(row["strategy_version"] or "") == strategy_version
+                for row in active_rows
+            ):
+                continue
             if active_key in active_keys:
                 continue
             if _same_v4_episode(conn, candidate, config, now):
@@ -441,25 +451,29 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                 structure = market_structure(candidate)
                 signal_type = _candidate_signal_type(candidate)
                 market_regime = str(structure.get("market_regime") or (candidate.get("market_state") or {}).get("state") or "unknown")
-                candidate_hold_minutes = hold_minutes
-                protection: dict[str, Any] = {}
+                candidate_hold_minutes = int(candidate.get("shadow_max_hold_minutes") or hold_minutes)
+                protection: dict[str, Any] = (
+                    signal.get("protection_profile")
+                    if isinstance(signal.get("protection_profile"), dict)
+                    else {}
+                )
                 if strategy_family in {
                     V3_FAMILY,
                     V4_STRATEGY_FAMILY,
                     V5_STRATEGY_FAMILY,
                     V4_CONTROL_FAMILY,
                     "extreme_v31_challenger",
-                }:
+                } or protection:
                     protection = (
                         v4.get("protection_profile")
                         if strategy_family in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY}
-                        else signal.get("protection_profile")
+                        else protection
                     ) or {}
                     max_hold_seconds = int(protection.get("max_hold_seconds") or 0)
                     candidate_hold_minutes = (
-                        min(hold_minutes, max(1.0, max_hold_seconds / 60))
+                        min(candidate_hold_minutes, max(1.0, max_hold_seconds / 60))
                         if max_hold_seconds > 0
-                        else min(hold_minutes, max(5, int(protection.get("max_hold_bars") or 12) * 5))
+                        else min(candidate_hold_minutes, max(5, int(protection.get("max_hold_bars") or 12) * 5))
                     )
                 fingerprint_role = strategy_role
                 conn.execute(
@@ -550,6 +564,7 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                                 "lower_expected_net_pct": v4.get("lower_expected_net_pct"),
                                 "model_features": v4.get("features"),
                                 "moe": v4.get("moe"),
+                                "research_context": candidate.get("research_context"),
                                 "features": {
                                     "spread_pct": (candidate.get("depth") or {}).get("spread_pct"),
                                     "depth_notional": (candidate.get("depth") or {}).get("depth_notional"),

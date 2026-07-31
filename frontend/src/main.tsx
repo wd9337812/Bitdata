@@ -33,7 +33,7 @@ type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
 type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[]; v4_scores?: any[]; v5_scores?: any[]; active_opportunity_scores?: any[] };
 type LiveReactionData = { reactions: any[]; recent_trades: any[] };
-type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; by_release?: any[]; by_evidence_type?: any[]; by_admission_lane?: any[]; active_release?: Record<string, any>; challenger_release?: Record<string, any>; trades: any[] };
+type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; by_release?: any[]; by_evidence_type?: any[]; by_admission_lane?: any[]; active_release?: Record<string, any>; challenger_release?: Record<string, any>; xmom_runtime?: Record<string, any>; trades: any[] };
 type SimulationData = Record<string, any>;
 type ReportData = Record<string, any>;
 type TrainingQualityData = {
@@ -1268,6 +1268,7 @@ function strategyFamilyLabel(value?: string) {
     extreme_v4_roll: "机会引擎 V4 滚仓",
     extreme_v4_control: "V4 简单突破对照",
     extreme_v31_challenger: "V3.1 历史归档",
+    cross_sectional_momentum: "横截面动量研究",
     extreme_v2_roll: "Extreme V2 滚仓",
     orderbook_scalp: "盘口剥头皮",
     grid_stable: "稳定网格",
@@ -1297,6 +1298,11 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
   const recovery = active.recovery || {};
   const candidate = challenger.all || {};
   const validation = challenger.validation || {};
+  const xmom = data.xmom_runtime || {};
+  const xmomRelease = (data.by_release || []).find(
+    (row: any) => row.strategy_family === "cross_sectional_momentum"
+      && row.strategy_version === "s0_xmom_24h_v1",
+  ) || {};
   const hasChallenger = Boolean(challenger.strategy_version);
   const activeStrategyLabel = String(active.strategy_version || "v5.2").toUpperCase();
   const evidenceTypes = data.by_evidence_type || [];
@@ -1320,6 +1326,21 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
           <MetricCard title={`${active.strategy_version || "V4"} 近期基线`} value={`${fmt(activeRecent.closed, 0)} 笔`} sub={`${pfLabel(activeRecent.profit_factor, activeRecent.closed)} · 净收益 ${fmt(activeRecent.net_pnl, 4)} U`} tone={Number(activeRecent.net_pnl || 0) >= 0 ? "positive" : "negative"} />
           <MetricCard title="当前安全观察窗" value={`${fmt(recovery.closed, 0)} / 20 笔`} sub={`${pfLabel(recovery.profit_factor, recovery.closed)} · 只对应当前 V4`} tone={Number(recovery.net_pnl || 0) >= 0 ? "positive" : "negative"} />
           <MetricCard title={`${activeStrategyLabel} 运行方式`} value="全仓短打" sub="当前版本独立排序；合格后单仓全进全出；快速保护独立 5 秒监督" />
+        </div>
+      </div>
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>横截面动量独立研究</h2>
+            <p>每小时比较实时监控币种的 24 小时强弱，只在 BTC 与山寨币整体同向时选择最强端。该通道只做影子交易，不参与 V5.2 实盘准入、恢复许可证、信用或仓位。</p>
+          </div>
+          <span className="pill">仅研究影子</span>
+        </div>
+        <div className="metrics">
+          <MetricCard title="运行状态" value={xmom.status === "candidate_ready" ? "本小时已选出候选" : xmom.status === "mixed_market" ? "市场方向混合" : xmom.enabled === false ? "已关闭" : "等待下次整点评估"} sub={xmom.reason || "整点后 1-2 分钟执行，避免使用未完成小时数据"} tone={xmom.status === "error" ? "negative" : ""} />
+          <MetricCard title="实时覆盖" value={`${fmt(xmom.universe_size, 0)} 个币`} sub={`BTC 24h ${fmt(xmom.btc_momentum_24h_pct, 2)}% · 山寨中位数 ${fmt(xmom.breadth_median_24h_pct, 2)}%`} />
+          <MetricCard title="本小时选择" value={xmom.symbol || "-"} sub={xmom.direction ? `${xmom.direction === "LONG" ? "做多" : "做空"} · 24h ${fmt(xmom.momentum_24h_pct, 2)}% · 延迟 ${fmt(xmom.execution_delay_seconds, 0)} 秒` : "不同向或数据不足时不会硬做"} />
+          <MetricCard title="实时影子证据" value={`${fmt(xmomRelease.closed, 0)} 笔`} sub={`${pfLabel(xmomRelease.profit_factor, xmomRelease.closed)} · 净收益 ${fmt(xmomRelease.net_pnl, 4)} U · 成本 ${fmt(xmomRelease.cost, 4)} U`} tone={Number(xmomRelease.net_pnl || 0) > 0 ? "positive" : Number(xmomRelease.net_pnl || 0) < 0 ? "negative" : ""} />
         </div>
       </div>
       {hasChallenger && <div className="panel table-wrap">
@@ -1824,6 +1845,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("adaptive_firecracker_move_floor_pct", "火药桶异动下限%", "默认 4%，安静市场也不会低于此值")}
           {number("adaptive_firecracker_move_ceiling_pct", "火药桶异动上限%", "默认 14%，高波动市场提高要求")}
           {toggle("shadow_trading_enabled", "影子交易", "只是假装开仓并跟踪结果，不会调用 Binance 下单接口")}
+          {toggle("xmom_shadow_enabled", "横截面动量研究影子", "每小时从实时币种池选择动量最强端做独立纸面验证；不参与当前实盘准入、许可证、信用或仓位")}
           {number("shadow_min_candidate_score", "影子交易最低候选分", "默认 70；只记录值得研究的机会")}
           {number("shadow_dedupe_minutes", "影子信号去重分钟", "同币、同方向、同信号在窗口内只算一笔")}
           {number("shadow_max_hold_minutes", "影子交易最长观察分钟", "到时仍未止盈止损则按当时价格模拟退出")}

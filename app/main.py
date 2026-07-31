@@ -33,6 +33,7 @@ from app.runtime_protection import manage_runtime_protection
 from app.runtime_snapshot import read_runtime_snapshot
 from app.scanner import mode_config
 from app.shadow_trading import shadow_summary
+from app.cross_sectional_momentum import cross_sectional_momentum_status
 from app.strategy_releases import list_strategy_releases
 from app.stage_modes import all_stage_profiles, stage_profile_for_equity
 from app.stage_simulation import simulate_stage_path
@@ -274,7 +275,9 @@ def strategy_runs(limit: int = 200) -> dict[str, Any]:
 
 @app.get("/api/shadow-trades", dependencies=[Depends(require_auth)])
 def shadow_trades(limit: int = 100) -> dict[str, Any]:
-    return shadow_summary(limit, load_config())
+    result = shadow_summary(limit, load_config())
+    result["xmom_runtime"] = cross_sectional_momentum_status()
+    return result
 
 
 @app.get("/api/strategy-releases", dependencies=[Depends(require_auth)])

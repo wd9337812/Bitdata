@@ -11,6 +11,7 @@ from app.account_projection import canonical_account_projection
 from app.binance_client import BinanceFuturesClient
 from app.binance_rate import BinanceRateLimitError, rate_status, request_priority
 from app.config_store import load_config
+from app.cross_sectional_momentum import start_cross_sectional_momentum_thread
 from app.learning_report import save_daily_learning_report
 from app.live_learning import sync_live_learning_from_binance
 from app.live_reaction import sync_live_reaction_from_binance
@@ -909,6 +910,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
 def main() -> None:
     load_dotenv()
     start_market_stream_thread(load_config)
+    start_cross_sectional_momentum_thread(load_config)
     interval_seconds = int(os.getenv("BOT_LOOP_SECONDS", "300"))
     while True:
         try:
@@ -1176,6 +1178,7 @@ def _event_signature(events: list[dict]) -> str:
 def coordinator_main() -> None:
     load_dotenv()
     start_market_stream_thread(load_config)
+    start_cross_sectional_momentum_thread(load_config)
     start_user_stream_thread(load_config)
     threading.Thread(target=_account_supervisor_loop, name="account-supervisor", daemon=True).start()
     scan_thread = threading.Thread(target=_background_scan_loop, name="background-scan", daemon=True)

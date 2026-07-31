@@ -41,6 +41,55 @@ def test_shadow_trade_is_deduplicated_and_settled_without_exchange(monkeypatch, 
     assert summary["trades"][0]["outcome"] == "TAKE_PROFIT"
 
 
+def test_independent_research_shadow_can_force_eligibility_and_stay_single_position(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    candidate = {
+        **_candidate(100),
+        "symbol": "ALTUSDT",
+        "score": 0,
+        "strategy_family": "cross_sectional_momentum",
+        "strategy_version": "s0_xmom_24h_v1",
+        "strategy_role": "challenger",
+        "evidence_type": "independent_realtime",
+        "shadow_force_eligible": True,
+        "shadow_single_position": True,
+        "shadow_max_hold_minutes": 12 * 60,
+        "shadow_dedupe_key": "s0_xmom_24h_v1:2026-07-31T08:00:00Z",
+        "signal": {
+            "signal": "LONG",
+            "last_price": 100,
+            "stop": 95,
+            "take_profit": 109,
+            "protection_profile": {"max_hold_seconds": 12 * 3600},
+        },
+    }
+    config = {
+        "shadow_trading_enabled": True,
+        "shadow_min_candidate_score": 70,
+        "shadow_max_hold_minutes": 120,
+        "shadow_reference_notional_usdt": 20,
+        "shadow_round_trip_cost_pct": 0.12,
+    }
+
+    first = update_shadow_trades([candidate], config)
+    second = update_shadow_trades(
+        [
+            {
+                **candidate,
+                "symbol": "OTHERUSDT",
+                "shadow_dedupe_key": "s0_xmom_24h_v1:2026-07-31T09:00:00Z",
+            }
+        ],
+        config,
+    )
+    with connect() as conn:
+        expires_at = conn.execute("SELECT expires_at FROM shadow_trades").fetchone()[0]
+
+    assert first["opened"] == 1
+    assert second["opened"] == 0
+    assert datetime.fromisoformat(expires_at) > datetime.now(timezone.utc) + timedelta(hours=11)
+
+
 def test_v473_shadow_uses_candidate_protection_for_stagnation_exit(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     candidate = {

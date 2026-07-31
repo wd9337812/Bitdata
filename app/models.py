@@ -330,6 +330,17 @@ class TradingConfig(BaseModel):
     shadow_round_trip_cost_pct: float = Field(default=0.12, ge=0, le=10)
     shadow_stream_max_age_seconds: int = Field(default=20, ge=1, le=300)
     shadow_stream_symbols_limit: int = Field(default=100, ge=1, le=500)
+    xmom_shadow_enabled: bool = True
+    xmom_shadow_min_delay_seconds: int = Field(default=60, ge=0, le=600)
+    xmom_shadow_max_delay_seconds: int = Field(default=150, ge=1, le=900)
+    xmom_shadow_stream_max_age_seconds: int = Field(default=20, ge=1, le=300)
+    xmom_shadow_min_universe: int = Field(default=60, ge=10, le=250)
+    xmom_shadow_min_24h_volume_usdt: float = Field(default=5_000_000, ge=0)
+    xmom_shadow_atr_period: int = Field(default=24, ge=5, le=100)
+    xmom_shadow_stop_atr: float = Field(default=1.2, ge=0.1, le=10)
+    xmom_shadow_reward_r: float = Field(default=1.8, ge=0.1, le=10)
+    xmom_shadow_max_stop_pct: float = Field(default=15.0, ge=0.1, le=30)
+    xmom_shadow_max_hold_hours: int = Field(default=12, ge=1, le=168)
     auto_risk_by_equity: bool = True
     stage_routing_enabled: bool = True
     stage_manual_mode: str = "auto"
