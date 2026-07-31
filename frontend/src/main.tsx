@@ -1332,7 +1332,7 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
         <div className="panel-head">
           <div>
             <h2>横截面动量独立研究</h2>
-            <p>每小时比较实时监控币种的 24 小时强弱，只在 BTC 与山寨币整体同向时选择最强端。该通道只做影子交易，不参与 V5.2 实盘准入、恢复许可证、信用或仓位。</p>
+            <p>每小时比较实时监控币种的 24 小时强弱，只在 BTC 与山寨币整体同向时选择最强端。该通道只做影子交易，不参与当前实盘版本的准入、恢复许可证、信用或仓位。</p>
           </div>
           <span className="pill">仅研究影子</span>
         </div>

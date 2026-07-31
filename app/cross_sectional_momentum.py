@@ -237,6 +237,16 @@ def build_cross_sectional_shadow_candidate(
 
 def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
     evaluated_hour = ""
+    _write_status(
+        {
+            "enabled": True,
+            "strategy_family": STRATEGY_FAMILY,
+            "strategy_version": STRATEGY_VERSION,
+            "status": "waiting_window",
+            "reason": "研究线程已启动，等待整点后 60-150 秒评估",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
     while True:
         try:
             config = config_provider()
