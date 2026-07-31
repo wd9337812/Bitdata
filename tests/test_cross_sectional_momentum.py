@@ -49,6 +49,17 @@ def _bars() -> list[list[object]]:
 
 
 class FakeClient:
+    def exchange_info(self) -> dict:
+        return {
+            "symbols": [
+                {
+                    "symbol": f"ALT{index}USDT",
+                    "onboardDate": 1_700_000_000_000,
+                }
+                for index in range(70)
+            ]
+        }
+
     def klines(self, symbol: str, interval: str, limit: int) -> list[list[object]]:
         assert interval == "1h"
         assert limit == 72
@@ -115,3 +126,34 @@ def test_builds_isolated_single_position_shadow_with_capped_stop():
     assert candidate["signal"]["stop"] < candidate["signal"]["last_price"]
     assert candidate["signal"]["take_profit"] > candidate["signal"]["last_price"]
     assert candidate["signal"]["protection_profile"]["max_hold_seconds"] == 12 * 3600
+    assert candidate["research_context"]["symbol_age_days"] > 30
+
+
+def test_skips_selected_symbol_that_is_too_new_without_substitution():
+    now = datetime(2026, 7, 31, 8, 1, 30, tzinfo=timezone.utc)
+    snapshot = _snapshot(now)
+    for ticker in snapshot["tickers"].values():
+        if ticker is not snapshot["tickers"]["BTCUSDT"]:
+            ticker["priceChangePercent"] = str(float(ticker["priceChangePercent"]) + 3)
+
+    class NewListingClient(FakeClient):
+        def exchange_info(self) -> dict:
+            payload = super().exchange_info()
+            for item in payload["symbols"]:
+                if item["symbol"] == "ALT69USDT":
+                    item["onboardDate"] = int(
+                        (now - timedelta(days=5)).timestamp() * 1000
+                    )
+            return payload
+
+    candidate, status = build_cross_sectional_shadow_candidate(
+        NewListingClient(),
+        snapshot,
+        {"xmom_shadow_min_onboard_age_days": 30},
+        now,
+    )
+
+    assert candidate is None
+    assert status["status"] == "listing_too_new"
+    assert status["symbol"] == "ALT69USDT"
+    assert status["symbol_age_days"] == 5.0

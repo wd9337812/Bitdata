@@ -1301,7 +1301,7 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
   const xmom = data.xmom_runtime || {};
   const xmomRelease = (data.by_release || []).find(
     (row: any) => row.strategy_family === "cross_sectional_momentum"
-      && row.strategy_version === "s0_xmom_24h_v1",
+      && row.strategy_version === "s0_xmom_24h_v2",
   ) || {};
   const hasChallenger = Boolean(challenger.strategy_version);
   const activeStrategyLabel = String(active.strategy_version || "v5.2").toUpperCase();
@@ -1337,9 +1337,9 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
           <span className="pill">仅研究影子</span>
         </div>
         <div className="metrics">
-          <MetricCard title="运行状态" value={xmom.status === "candidate_ready" ? "本小时已选出候选" : xmom.status === "mixed_market" ? "市场方向混合" : xmom.enabled === false ? "已关闭" : "等待下次整点评估"} sub={xmom.reason || "整点后 1-2 分钟执行，避免使用未完成小时数据"} tone={xmom.status === "error" ? "negative" : ""} />
+          <MetricCard title="运行状态" value={xmom.status === "candidate_ready" ? "本小时已选出候选" : xmom.status === "mixed_market" ? "市场方向混合" : xmom.status === "listing_too_new" ? "最强币币龄不足" : xmom.status === "missing_onboard_date" ? "缺少上线时间" : xmom.enabled === false ? "已关闭" : "等待下次整点评估"} sub={xmom.reason || "整点后 1-2 分钟执行，避免使用未完成小时数据"} tone={xmom.status === "error" ? "negative" : ""} />
           <MetricCard title="实时覆盖" value={`${fmt(xmom.universe_size, 0)} 个币`} sub={`BTC 24h ${fmt(xmom.btc_momentum_24h_pct, 2)}% · 山寨中位数 ${fmt(xmom.breadth_median_24h_pct, 2)}%`} />
-          <MetricCard title="本小时选择" value={xmom.symbol || "-"} sub={xmom.direction ? `${xmom.direction === "LONG" ? "做多" : "做空"} · 24h ${fmt(xmom.momentum_24h_pct, 2)}% · 延迟 ${fmt(xmom.execution_delay_seconds, 0)} 秒` : "不同向或数据不足时不会硬做"} />
+          <MetricCard title="本小时选择" value={xmom.symbol || "-"} sub={xmom.direction ? `${xmom.direction === "LONG" ? "做多" : "做空"} · 24h ${fmt(xmom.momentum_24h_pct, 2)}% · 币龄 ${fmt(xmom.symbol_age_days, 1)} 天 · 延迟 ${fmt(xmom.execution_delay_seconds, 0)} 秒` : "不同向、币龄不足或数据不足时不会硬做"} />
           <MetricCard title="实时影子证据" value={`${fmt(xmomRelease.closed, 0)} 笔`} sub={`${pfLabel(xmomRelease.profit_factor, xmomRelease.closed)} · 净收益 ${fmt(xmomRelease.net_pnl, 4)} U · 成本 ${fmt(xmomRelease.cost, 4)} U`} tone={Number(xmomRelease.net_pnl || 0) > 0 ? "positive" : Number(xmomRelease.net_pnl || 0) < 0 ? "negative" : ""} />
         </div>
       </div>
@@ -1846,6 +1846,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("adaptive_firecracker_move_ceiling_pct", "火药桶异动上限%", "默认 14%，高波动市场提高要求")}
           {toggle("shadow_trading_enabled", "影子交易", "只是假装开仓并跟踪结果，不会调用 Binance 下单接口")}
           {toggle("xmom_shadow_enabled", "横截面动量研究影子", "每小时从实时币种池选择动量最强端做独立纸面验证；不参与当前实盘准入、许可证、信用或仓位")}
+          {number("xmom_shadow_min_onboard_age_days", "动量研究最低币龄", "默认 30 天；历史审计显示刚上市币种拖累结果，仅影响独立研究影子")}
           {number("shadow_min_candidate_score", "影子交易最低候选分", "默认 70；只记录值得研究的机会")}
           {number("shadow_dedupe_minutes", "影子信号去重分钟", "同币、同方向、同信号在窗口内只算一笔")}
           {number("shadow_max_hold_minutes", "影子交易最长观察分钟", "到时仍未止盈止损则按当时价格模拟退出")}

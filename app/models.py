@@ -336,6 +336,7 @@ class TradingConfig(BaseModel):
     xmom_shadow_stream_max_age_seconds: int = Field(default=20, ge=1, le=300)
     xmom_shadow_min_universe: int = Field(default=60, ge=10, le=250)
     xmom_shadow_min_24h_volume_usdt: float = Field(default=5_000_000, ge=0)
+    xmom_shadow_min_onboard_age_days: int = Field(default=30, ge=0, le=3650)
     xmom_shadow_atr_period: int = Field(default=24, ge=5, le=100)
     xmom_shadow_stop_atr: float = Field(default=1.2, ge=0.1, le=10)
     xmom_shadow_reward_r: float = Field(default=1.8, ge=0.1, le=10)

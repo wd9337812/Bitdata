@@ -353,6 +353,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "xmom_shadow_stream_max_age_seconds": 20,
     "xmom_shadow_min_universe": 60,
     "xmom_shadow_min_24h_volume_usdt": 5_000_000,
+    "xmom_shadow_min_onboard_age_days": 30,
     "xmom_shadow_atr_period": 24,
     "xmom_shadow_stop_atr": 1.2,
     "xmom_shadow_reward_r": 1.8,

@@ -15,7 +15,7 @@ from app.telemetry import record_event_throttled
 
 
 STRATEGY_FAMILY = "cross_sectional_momentum"
-STRATEGY_VERSION = "s0_xmom_24h_v1"
+STRATEGY_VERSION = "s0_xmom_24h_v2"
 _THREAD: threading.Thread | None = None
 _LOCK = threading.Lock()
 
@@ -176,6 +176,38 @@ def build_cross_sectional_shadow_candidate(
     selection = select_cross_sectional_signal(snapshot, config, now)
     if selection.get("status") != "selected":
         return None, selection
+    exchange_info = client.exchange_info()
+    selected_symbol = str(selection["symbol"])
+    symbol_info = next(
+        (
+            item
+            for item in exchange_info.get("symbols", [])
+            if str(item.get("symbol") or "") == selected_symbol
+        ),
+        None,
+    )
+    onboard_ms = int((symbol_info or {}).get("onboardDate") or 0)
+    if onboard_ms <= 0:
+        return None, {
+            **selection,
+            "status": "missing_onboard_date",
+            "reason": "Binance 未返回该币种上线时间，本小时研究影子跳过",
+        }
+    symbol_age_days = (now.timestamp() * 1000 - onboard_ms) / 86_400_000
+    minimum_age_days = int(config.get("xmom_shadow_min_onboard_age_days", 30))
+    if symbol_age_days < minimum_age_days:
+        return None, {
+            **selection,
+            "status": "listing_too_new",
+            "reason": (
+                f"最强动量币上市仅 {symbol_age_days:.1f} 天，"
+                f"低于研究门槛 {minimum_age_days} 天，本小时不递补追逐次强币"
+            ),
+            "symbol_age_days": round(symbol_age_days, 4),
+            "minimum_onboard_age_days": minimum_age_days,
+        }
+    selection["symbol_age_days"] = round(symbol_age_days, 4)
+    selection["minimum_onboard_age_days"] = minimum_age_days
     bars = client.klines(str(selection["symbol"]), "1h", 72)
     current_hour_ms = int(now.replace(minute=0, second=0, microsecond=0).timestamp() * 1000)
     bars = [row for row in bars if row and int(row[0]) < current_hour_ms]
