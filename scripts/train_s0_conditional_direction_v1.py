@@ -496,6 +496,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     active = {
         lane: detail for lane, detail in calibrated.items() if detail.get("active")
     }
+    validation_active_lanes: dict[str, dict[str, Any]] = {}
     validation_candidates: list[tuple[float, str, pd.DataFrame, dict[str, Any]]] = []
     for lane, detail in active.items():
         selected = schedule(
@@ -503,6 +504,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
             float(detail["threshold"]),
         )
         summary = metrics(selected)
+        validation_active_lanes[lane] = summary
         if (
             summary["trades"] >= 40
             and summary["net_pct_points"] > 0
@@ -574,6 +576,7 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
         "fit": fit_report,
         "calibrated_lanes": calibrated,
         "active_calibration_lanes": sorted(active),
+        "validation_active_lanes": validation_active_lanes,
         "selected_lane": selected_lane,
         "selected_threshold": selected_threshold,
         "validation": validation_summary,
