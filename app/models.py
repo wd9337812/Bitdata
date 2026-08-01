@@ -342,6 +342,21 @@ class TradingConfig(BaseModel):
     xmom_shadow_reward_r: float = Field(default=1.8, ge=0.1, le=10)
     xmom_shadow_max_stop_pct: float = Field(default=15.0, ge=0.1, le=30)
     xmom_shadow_max_hold_hours: int = Field(default=12, ge=1, le=168)
+    adaptive_30d_shadow_enabled: bool = True
+    adaptive_30d_shadow_utc_hour: int = Field(default=0, ge=0, le=23)
+    adaptive_30d_shadow_minute_start: int = Field(default=2, ge=0, le=59)
+    adaptive_30d_shadow_minute_end: int = Field(default=45, ge=0, le=59)
+    adaptive_30d_shadow_stream_max_age_seconds: int = Field(default=30, ge=1, le=300)
+    adaptive_30d_shadow_symbol_limit: int = Field(default=150, ge=60, le=250)
+    adaptive_30d_shadow_min_universe: int = Field(default=60, ge=10, le=250)
+    adaptive_30d_shadow_min_24h_volume_usdt: float = Field(default=20_000_000, ge=0)
+    adaptive_30d_shadow_min_onboard_age_days: int = Field(default=45, ge=0, le=3650)
+    adaptive_30d_shadow_min_abs_breadth_pct: float = Field(default=2.0, ge=0, le=100)
+    adaptive_30d_shadow_max_abs_breadth_pct: float = Field(default=10.0, ge=0, le=100)
+    adaptive_30d_shadow_stop_atr: float = Field(default=2.5, ge=0.1, le=10)
+    adaptive_30d_shadow_reward_r: float = Field(default=2.5, ge=0.1, le=10)
+    adaptive_30d_shadow_max_stop_pct: float = Field(default=12.0, ge=0.1, le=30)
+    adaptive_30d_shadow_max_hold_hours: int = Field(default=120, ge=1, le=720)
     auto_risk_by_equity: bool = True
     stage_routing_enabled: bool = True
     stage_manual_mode: str = "auto"

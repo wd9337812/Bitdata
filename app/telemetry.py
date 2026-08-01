@@ -323,7 +323,10 @@ def maintain_telemetry(
             try:
                 before_shadow = conn.total_changes
                 conn.execute(
-                    "DELETE FROM shadow_trades WHERE id IN (SELECT id FROM shadow_trades WHERE status = 'CLOSED' AND closed_at < ? ORDER BY id LIMIT ?)",
+                    "DELETE FROM shadow_trades WHERE id IN (SELECT id FROM shadow_trades "
+                    "WHERE status = 'CLOSED' AND closed_at < ? "
+                    "AND COALESCE(strategy_family, '') != 'adaptive_30d_momentum' "
+                    "ORDER BY id LIMIT ?)",
                     (shadow_cutoff.isoformat(), max(100, batch_size)),
                 )
                 shadow_trades = max(0, conn.total_changes - before_shadow)

@@ -33,7 +33,7 @@ type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
 type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[]; v4_scores?: any[]; v5_scores?: any[]; active_opportunity_scores?: any[] };
 type LiveReactionData = { reactions: any[]; recent_trades: any[] };
-type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; by_release?: any[]; by_evidence_type?: any[]; by_admission_lane?: any[]; active_release?: Record<string, any>; challenger_release?: Record<string, any>; xmom_runtime?: Record<string, any>; trades: any[] };
+type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; by_release?: any[]; by_evidence_type?: any[]; by_admission_lane?: any[]; active_release?: Record<string, any>; challenger_release?: Record<string, any>; xmom_runtime?: Record<string, any>; adaptive_30d_runtime?: Record<string, any>; trades: any[] };
 type SimulationData = Record<string, any>;
 type ReportData = Record<string, any>;
 type TrainingQualityData = {
@@ -1269,6 +1269,7 @@ function strategyFamilyLabel(value?: string) {
     extreme_v4_control: "V4 简单突破对照",
     extreme_v31_challenger: "V3.1 历史归档",
     cross_sectional_momentum: "横截面动量研究",
+    adaptive_30d_momentum: "30日动量未来研究",
     extreme_v2_roll: "Extreme V2 滚仓",
     orderbook_scalp: "盘口剥头皮",
     grid_stable: "稳定网格",
@@ -1299,9 +1300,14 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
   const candidate = challenger.all || {};
   const validation = challenger.validation || {};
   const xmom = data.xmom_runtime || {};
+  const adaptive30d = data.adaptive_30d_runtime || {};
   const xmomRelease = (data.by_release || []).find(
     (row: any) => row.strategy_family === "cross_sectional_momentum"
       && row.strategy_version === "s0_xmom_24h_v2",
+  ) || {};
+  const adaptive30dRelease = (data.by_release || []).find(
+    (row: any) => row.strategy_family === "adaptive_30d_momentum"
+      && row.strategy_version === "s0_xmom_30d_paper_v1",
   ) || {};
   const hasChallenger = Boolean(challenger.strategy_version);
   const activeStrategyLabel = String(active.strategy_version || "v5.2").toUpperCase();
@@ -1341,6 +1347,21 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
           <MetricCard title="实时覆盖" value={`${fmt(xmom.universe_size, 0)} 个币`} sub={`BTC 24h ${fmt(xmom.btc_momentum_24h_pct, 2)}% · 山寨中位数 ${fmt(xmom.breadth_median_24h_pct, 2)}%`} />
           <MetricCard title="本小时选择" value={xmom.symbol || "-"} sub={xmom.direction ? `${xmom.direction === "LONG" ? "做多" : "做空"} · 24h ${fmt(xmom.momentum_24h_pct, 2)}% · 币龄 ${fmt(xmom.symbol_age_days, 1)} 天 · 延迟 ${fmt(xmom.execution_delay_seconds, 0)} 秒` : "不同向、币龄不足或数据不足时不会硬做"} />
           <MetricCard title="实时影子证据" value={`${fmt(xmomRelease.closed, 0)} 笔`} sub={`${pfLabel(xmomRelease.profit_factor, xmomRelease.closed)} · 净收益 ${fmt(xmomRelease.net_pnl, 4)} U · 成本 ${fmt(xmomRelease.cost, 4)} U`} tone={Number(xmomRelease.net_pnl || 0) > 0 ? "positive" : Number(xmomRelease.net_pnl || 0) < 0 ? "negative" : ""} />
+        </div>
+      </div>
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>30 日动量未来验证</h2>
+            <p>每天一次，用连续 30 日小时数据在高流动性永续币中选择最强或最弱端，并用真实后续行情模拟持有最多 5 天。它只验证未知未来，不会接管实盘、许可证、信用或仓位。</p>
+          </div>
+          <span className="pill">严格隔离</span>
+        </div>
+        <div className="metrics">
+          <MetricCard title="今日评估" value={adaptive30d.status === "candidate_ready" ? "已建立研究影子" : adaptive30d.status === "breadth_outside_band" ? "市场广度不合适" : adaptive30d.status === "mixed_market" ? "BTC 与山寨不同向" : adaptive30d.status === "insufficient_history" ? "连续历史不足" : adaptive30d.status === "error" ? "研究线程异常" : adaptive30d.enabled === false ? "已关闭" : "等待每日窗口"} sub={adaptive30d.reason || "UTC 00:02-00:45 评估；REST 仅使用后台预算"} tone={adaptive30d.status === "error" ? "negative" : ""} />
+          <MetricCard title="未来数据覆盖" value={`${fmt(adaptive30d.usable_universe_size || adaptive30d.universe_size, 0)} 个币`} sub={`30日广度 ${fmt(adaptive30d.breadth_30d_pct, 2)}% · BTC ${fmt(adaptive30d.btc_return_30d_pct, 2)}% · 限流让路 ${fmt(adaptive30d.rate_limit_retries, 0)} 次`} />
+          <MetricCard title="今日选择" value={adaptive30d.symbol || "-"} sub={adaptive30d.direction ? `${adaptive30d.direction === "LONG" ? "做多" : "做空"} · 30日强弱 ${fmt(adaptive30d.selected_return_30d_pct, 2)}% · 入场延迟 ${fmt(adaptive30d.entry_delay_seconds, 0)} 秒` : "没有符合冻结规则的市场时保持空白"} />
+          <MetricCard title="独立未来结果" value={`${fmt(adaptive30dRelease.closed, 0)} 笔`} sub={`${pfLabel(adaptive30dRelease.profit_factor, adaptive30dRelease.closed)} · 净收益 ${fmt(adaptive30dRelease.net_pnl, 4)} U · 至少 30 笔后才讨论资格`} tone={Number(adaptive30dRelease.net_pnl || 0) > 0 ? "positive" : Number(adaptive30dRelease.net_pnl || 0) < 0 ? "negative" : ""} />
         </div>
       </div>
       {hasChallenger && <div className="panel table-wrap">
@@ -1847,6 +1868,8 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("shadow_trading_enabled", "影子交易", "只是假装开仓并跟踪结果，不会调用 Binance 下单接口")}
           {toggle("xmom_shadow_enabled", "横截面动量研究影子", "每小时从实时币种池选择动量最强端做独立纸面验证；不参与当前实盘准入、许可证、信用或仓位")}
           {number("xmom_shadow_min_onboard_age_days", "动量研究最低币龄", "默认 30 天；历史审计显示刚上市币种拖累结果，仅影响独立研究影子")}
+          {toggle("adaptive_30d_shadow_enabled", "30 日动量未来研究", "每天一次抓取最多 150 个高流动性币的连续小时数据；只做独立未来影子，不影响实盘")}
+          {number("adaptive_30d_shadow_symbol_limit", "30 日研究币种上限", "默认 150；REST 请求只走后台预算，交易与保护请求始终优先")}
           {number("shadow_min_candidate_score", "影子交易最低候选分", "默认 70；只记录值得研究的机会")}
           {number("shadow_dedupe_minutes", "影子信号去重分钟", "同币、同方向、同信号在窗口内只算一笔")}
           {number("shadow_max_hold_minutes", "影子交易最长观察分钟", "到时仍未止盈止损则按当时价格模拟退出")}

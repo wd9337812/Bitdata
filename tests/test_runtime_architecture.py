@@ -102,6 +102,16 @@ def test_telemetry_maintenance_prunes_only_old_scan_and_closed_shadow_rows(monke
             """
             INSERT INTO shadow_trades (
                 dedupe_key, opened_at, closed_at, symbol, direction, status, entry, stop,
+                take_profit, last_price, notional, estimated_cost, expires_at, strategy_family
+            ) VALUES ('slow-research', '2020-01-01T00:00:00+00:00', '2020-01-06T00:00:00+00:00',
+                      'SLOWUSDT', 'LONG', 'CLOSED', 1, 0.9, 1.1, 1, 20, 0.02,
+                      '2020-01-06T00:00:00+00:00', 'adaptive_30d_momentum')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO shadow_trades (
+                dedupe_key, opened_at, closed_at, symbol, direction, status, entry, stop,
                 take_profit, last_price, notional, estimated_cost, expires_at
             ) VALUES ('old', '2020-01-01T00:00:00+00:00', '2020-01-01T01:00:00+00:00',
                       'OLDUSDT', 'LONG', 'CLOSED', 1, 0.9, 1.1, 1, 20, 0.02,
@@ -125,6 +135,9 @@ def test_telemetry_maintenance_prunes_only_old_scan_and_closed_shadow_rows(monke
     assert result["shadow_trades_deleted"] == 1
     with connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM shadow_trades WHERE status = 'OPEN'").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM shadow_trades WHERE strategy_family = 'adaptive_30d_momentum'"
+        ).fetchone()[0] == 1
 
 
 def test_wait_strategy_run_throttle_keeps_first_row_only(monkeypatch, tmp_path):

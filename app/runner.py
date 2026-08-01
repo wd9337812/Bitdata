@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 from app.account_projection import canonical_account_projection
+from app.adaptive_30d_momentum_shadow import start_adaptive_30d_momentum_thread
 from app.binance_client import BinanceFuturesClient
 from app.binance_rate import BinanceRateLimitError, rate_status, request_priority
 from app.config_store import load_config
@@ -911,6 +912,7 @@ def main() -> None:
     load_dotenv()
     start_market_stream_thread(load_config)
     start_cross_sectional_momentum_thread(load_config)
+    start_adaptive_30d_momentum_thread(load_config)
     interval_seconds = int(os.getenv("BOT_LOOP_SECONDS", "300"))
     while True:
         try:
@@ -1179,6 +1181,7 @@ def coordinator_main() -> None:
     load_dotenv()
     start_market_stream_thread(load_config)
     start_cross_sectional_momentum_thread(load_config)
+    start_adaptive_30d_momentum_thread(load_config)
     start_user_stream_thread(load_config)
     threading.Thread(target=_account_supervisor_loop, name="account-supervisor", daemon=True).start()
     scan_thread = threading.Thread(target=_background_scan_loop, name="background-scan", daemon=True)
