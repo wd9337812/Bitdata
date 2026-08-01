@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import gc
 import hashlib
+import heapq
 import json
 import sys
 from pathlib import Path
@@ -96,6 +97,58 @@ def apply_direction_gate(
     return ordered.loc[selected].reset_index(drop=True)
 
 
+def apply_event_time_gate(
+    trades: pd.DataFrame,
+    initial_history: dict[str, list[float]] | None = None,
+    symbol_embargo_hours: int = 0,
+) -> pd.DataFrame:
+    """Allocate one funded position while independent paper outcomes mature.
+
+    Rejected paper candidates never occupy the funded account. Their outcomes
+    enter direction history only after their hypothetical exits. The optional
+    symbol embargo keeps one trend episode from becoming several funded bets.
+    """
+    if trades.empty:
+        return trades.copy()
+    history = {
+        direction: list((initial_history or {}).get(direction, []))
+        for direction in ("LONG", "SHORT")
+    }
+    ordered = trades.sort_values(
+        ["entry_ms", "strength"], ascending=[True, False]
+    ).reset_index(drop=True)
+    pending: list[tuple[int, int, str, float]] = []
+    selected: list[int] = []
+    funded_exit_ms = -1
+    embargo_until: dict[str, int] = {}
+    embargo_ms = max(0, int(symbol_embargo_hours)) * 3_600_000
+
+    for sequence, row in enumerate(ordered.itertuples()):
+        entry_ms = int(row.entry_ms)
+        while pending and pending[0][0] <= entry_ms:
+            _, _, direction, net_pct = heapq.heappop(pending)
+            history[direction].append(net_pct)
+
+        direction = str(row.direction)
+        recent = history[direction][-HISTORY_SIZE:]
+        direction_allowed = (
+            len(recent) < MIN_HISTORY or profit_factor(recent) >= MIN_HISTORY_PF
+        )
+        account_available = entry_ms >= funded_exit_ms
+        symbol_available = entry_ms >= embargo_until.get(str(row.symbol), -1)
+        if direction_allowed and account_available and symbol_available:
+            selected.append(int(row.Index))
+            funded_exit_ms = int(row.exit_ms)
+            embargo_until[str(row.symbol)] = funded_exit_ms + embargo_ms
+
+        heapq.heappush(
+            pending,
+            (int(row.exit_ms), sequence, direction, float(row.net_pct)),
+        )
+
+    return ordered.loc[selected].reset_index(drop=True)
+
+
 def cohort(symbol: str) -> str:
     bucket = int(hashlib.sha256(symbol.encode("utf-8")).hexdigest()[:8], 16) % 10
     return "blind" if bucket >= 8 else "other"
@@ -161,7 +214,7 @@ def qualifies(base: dict[str, Any], stress: dict[str, Any]) -> bool:
 def build_source_trades(data_dirs: tuple[Path, ...]) -> tuple[pd.DataFrame, pd.DataFrame]:
     candidate = next(item for item in CANDIDATES if item.name == "momentum_30d_hold_7d")
     parts: list[pd.DataFrame] = []
-    latest_signals = pd.DataFrame()
+    signal_parts: list[pd.DataFrame] = []
     for data_dir in data_dirs:
         starts, _ = load_manifest(data_dir)
         panel = add_slow_returns(build_panel(data_dir, starts))
@@ -169,13 +222,18 @@ def build_source_trades(data_dirs: tuple[Path, ...]) -> tuple[pd.DataFrame, pd.D
         signals = signals.loc[
             signals.market_breadth.abs().between(BREADTH_LOW, BREADTH_HIGH)
         ]
+        signal_parts.append(signals.copy())
         parts.append(simulate(signals, panel, adaptive_profile(), cost_pct=BASE_COST_PCT))
-        if data_dir == data_dirs[-1]:
-            latest_signals = signals.copy()
         del panel, signals
         gc.collect()
     trades = pd.concat(parts, ignore_index=True).sort_values("entry_ms").reset_index(drop=True)
-    return trades, latest_signals
+    all_signals = (
+        pd.concat(signal_parts, ignore_index=True)
+        .sort_values(["available_ms", "symbol"])
+        .drop_duplicates(["available_ms", "symbol", "direction"], keep="last")
+        .reset_index(drop=True)
+    )
+    return trades, all_signals
 
 
 def main() -> None:
@@ -185,9 +243,15 @@ def main() -> None:
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     source_path = args.output / "all_trades.parquet"
-    if args.rebuild or not source_path.exists():
-        source, latest_signals = build_source_trades(DEFAULT_DATA)
-        latest_signals.to_parquet(args.output / "signals_2026.parquet", index=False)
+    signals_path = args.output / "signals_all.parquet"
+    if args.rebuild or not source_path.exists() or not signals_path.exists():
+        source, all_signals = build_source_trades(DEFAULT_DATA)
+        all_signals.to_parquet(signals_path, index=False)
+        signal_years = pd.to_datetime(all_signals.available_ms, unit="ms", utc=True).dt.year
+        all_signals.loc[signal_years.eq(2026)].to_parquet(
+            args.output / "signals_2026.parquet",
+            index=False,
+        )
     else:
         source = pd.read_parquet(source_path)
     source.to_parquet(source_path, index=False)

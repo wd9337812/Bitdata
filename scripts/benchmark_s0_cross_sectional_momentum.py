@@ -157,6 +157,7 @@ def simulate(
     profile: Profile,
     cost_pct: float = COST_PCT,
     execution_delay_hours: int = 0,
+    enforce_single_position: bool = True,
 ) -> pd.DataFrame:
     bars = {
         symbol: scoped.sort_values("available_ms").set_index("available_ms")
@@ -165,7 +166,7 @@ def simulate(
     trades: list[dict[str, Any]] = []
     next_available_ms = -1
     for signal in signals.itertuples(index=False):
-        if signal.available_ms < next_available_ms:
+        if enforce_single_position and signal.available_ms < next_available_ms:
             continue
         scoped = bars.get(signal.symbol)
         entry_bar_available_ms = int(signal.available_ms) + (
@@ -244,7 +245,8 @@ def simulate(
                 "net_pct": net_pct,
             }
         )
-        next_available_ms = exit_ms
+        if enforce_single_position:
+            next_available_ms = exit_ms
     return pd.DataFrame(trades)
 
 
@@ -254,12 +256,13 @@ def simulate_minute(
     profile: Profile,
     execution_delay_minutes: int,
     cost_pct: float = COST_PCT,
+    enforce_single_position: bool = True,
 ) -> pd.DataFrame:
     cache: dict[str, pd.DataFrame] = {}
     trades: list[dict[str, Any]] = []
     next_available_ms = -1
     for signal in signals.itertuples(index=False):
-        if signal.available_ms < next_available_ms:
+        if enforce_single_position and signal.available_ms < next_available_ms:
             continue
         if signal.symbol not in cache:
             path = minute_dir / f"{signal.symbol}.parquet"
@@ -331,7 +334,8 @@ def simulate_minute(
                 "net_pct": gross_pct - cost_pct,
             }
         )
-        next_available_ms = exit_ms
+        if enforce_single_position:
+            next_available_ms = exit_ms
     return pd.DataFrame(trades)
 
 

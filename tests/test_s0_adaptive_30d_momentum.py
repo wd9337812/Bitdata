@@ -3,6 +3,7 @@ import pytest
 
 from scripts.benchmark_s0_adaptive_30d_momentum import (
     apply_direction_gate,
+    apply_event_time_gate,
     profit_factor,
     qualifies,
 )
@@ -15,6 +16,23 @@ def _trade(index: int, direction: str, net: float) -> dict:
         "exit_ms": index * 10 + 5,
         "direction": direction,
         "net_pct": net,
+    }
+
+
+def _event_trade(
+    symbol: str,
+    direction: str,
+    entry_ms: int,
+    exit_ms: int,
+    net_pct: float,
+) -> dict:
+    return {
+        "symbol": symbol,
+        "direction": direction,
+        "entry_ms": entry_ms,
+        "exit_ms": exit_ms,
+        "net_pct": net_pct,
+        "strength": 1.0,
     }
 
 
@@ -62,6 +80,38 @@ def test_direction_gate_is_independent_of_dataframe_index_labels():
     assert list(selected.entry_ms) == [0, 10, 20]
 
 
+def test_event_time_gate_does_not_let_rejected_trade_occupy_account():
+    frame = pd.DataFrame(
+        [
+            _event_trade("A", "LONG", 0, 10, -1.0),
+            _event_trade("B", "LONG", 11, 20, -1.0),
+            _event_trade("C", "LONG", 21, 30, -1.0),
+            _event_trade("D", "LONG", 31, 100, -1.0),
+            _event_trade("E", "SHORT", 40, 50, 2.0),
+        ]
+    )
+
+    selected = apply_event_time_gate(frame)
+
+    assert selected.symbol.tolist() == ["A", "B", "C", "E"]
+
+
+def test_event_time_gate_applies_symbol_embargo_after_funded_exit():
+    hour = 3_600_000
+    frame = pd.DataFrame(
+        [
+            _event_trade("A", "LONG", 0, 1, 2.0),
+            _event_trade("A", "LONG", 2, 3, 2.0),
+            _event_trade("B", "LONG", 4, 5, 2.0),
+            _event_trade("A", "LONG", hour + 2, hour + 3, 2.0),
+        ]
+    )
+
+    selected = apply_event_time_gate(frame, symbol_embargo_hours=1)
+
+    assert selected.symbol.tolist() == ["A", "B", "A"]
+
+
 def _metrics(trades=20, pf=1.5, net=1.0):
     return {"trades": trades, "profit_factor": pf, "net_pct_points": net}
 
@@ -87,14 +137,13 @@ def test_qualification_requires_every_year_and_concentration_gates():
 
 
 def _minute_scenario():
-    return {
-        "funded": {
-            "overall": {**_metrics(30), "symbols": 10},
-            "cohorts": {"blind": _metrics(10)},
-            "without_top_3_symbols": _metrics(20),
-            "bootstrap": {"positive_probability": 0.97},
-        }
+    funded = {
+        "overall": {**_metrics(30), "symbols": 10},
+        "cohorts": {"blind": _metrics(10)},
+        "without_top_3_symbols": _metrics(20),
+        "bootstrap": {"positive_probability": 0.97},
     }
+    return {"funded": funded, "funded_7d_symbol_embargo": dict(funded)}
 
 
 def test_minute_qualification_rejects_winner_concentration_and_weak_blind_cohort():
@@ -111,4 +160,11 @@ def test_minute_qualification_rejects_winner_concentration_and_weak_blind_cohort
 
     scenario = _minute_scenario()
     scenario["funded"]["overall"]["symbols"] = 5
+    assert not minute_scenario_passes(scenario)
+
+    scenario = _minute_scenario()
+    scenario["funded_7d_symbol_embargo"] = {
+        **scenario["funded"],
+        "overall": {**scenario["funded"]["overall"], "profit_factor": 0.9},
+    }
     assert not minute_scenario_passes(scenario)

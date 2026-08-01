@@ -105,6 +105,46 @@ def test_simulation_can_stress_one_hour_execution_delay() -> None:
     assert result.loc[0, "entry_ms"] == 7_200_000
 
 
+def test_simulation_can_return_independent_overlapping_paths() -> None:
+    profile = Profile("test", ("ret_24h",), 0.1, 1.0, 1.0, 2)
+    signals = pd.DataFrame(
+        {
+            "available_ms": [0, 3_600_000],
+            "symbol": ["AUSDT", "BUSDT"],
+            "direction": ["LONG", "LONG"],
+            "market_direction": ["LONG", "LONG"],
+            "strength": [1.0, 0.9],
+            "atr_24h": [1.0, 1.0],
+        }
+    )
+    rows = []
+    for symbol in ("AUSDT", "BUSDT"):
+        for available_ms in (0, 3_600_000, 7_200_000, 10_800_000):
+            rows.append(
+                {
+                    "available_ms": available_ms,
+                    "symbol": symbol,
+                    "open": 100.0,
+                    "high": 100.5,
+                    "low": 99.5,
+                    "close": 100.0,
+                }
+            )
+    panel = pd.DataFrame(rows)
+
+    serialized = simulate(signals, panel, profile, cost_pct=0.0)
+    independent = simulate(
+        signals,
+        panel,
+        profile,
+        cost_pct=0.0,
+        enforce_single_position=False,
+    )
+
+    assert len(serialized) == 1
+    assert len(independent) == 2
+
+
 def test_minute_simulation_enters_after_configured_delay(tmp_path) -> None:
     profile = Profile("test", ("ret_24h",), 0.1, 1.0, 1.0, 1)
     signals = pd.DataFrame(
