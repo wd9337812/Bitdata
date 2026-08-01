@@ -279,6 +279,7 @@ def build_adaptive_30d_shadow_candidate(
 
 def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
     evaluated_day = ""
+    reported_waiting_day = ""
     while True:
         try:
             config = config_provider()
@@ -305,8 +306,13 @@ def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
                     config,
                     now,
                 )
-                if status.get("status") != "outside_daily_window":
+                if status.get("status") == "outside_daily_window":
+                    if reported_waiting_day != day:
+                        _write_status({**base, **status})
+                        reported_waiting_day = day
+                else:
                     evaluated_day = day
+                    reported_waiting_day = day
                     result = update_shadow_trades([candidate], config) if candidate else None
                     _write_status({**base, **status, "shadow_result": result})
         except Exception as exc:
