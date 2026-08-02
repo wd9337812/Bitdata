@@ -374,6 +374,51 @@ def _replace_dynamic_stop(
     }
 
 
+def tighten_position_stop_to_price(
+    client: BinanceFuturesClient,
+    position: dict[str, Any],
+    desired_stop: float,
+    config: dict[str, Any],
+) -> dict[str, Any]:
+    """Use the atomic stop replacement path for a strategy-supplied absolute stop."""
+    symbol = _position_symbol(position)
+    entry = _entry_price(position)
+    mark = _mark_price(position)
+    amount = _position_amount(position)
+    direction = "LONG" if amount > 0 else "SHORT"
+    desired = float(desired_stop or 0)
+    valid = desired < mark if direction == "LONG" else desired > mark
+    if not symbol or entry <= 0 or mark <= 0 or desired <= 0 or not valid:
+        return {
+            "action": "trail_stop",
+            "executed": False,
+            "management_status": "strategy_stop_invalid",
+            "desired_stop": desired,
+            "mark": mark,
+        }
+    synthetic_atr = abs(mark - desired)
+    action = {
+        "action": "trail_stop",
+        "symbol": symbol,
+        "direction": direction,
+        "entry": entry,
+        "mark": mark,
+        "atr_pct": synthetic_atr / mark * 100,
+    }
+    tracked_item = {
+        "trailing_distance_atr": 1.0,
+        "last_stop_adjustment_at": None,
+    }
+    return _replace_dynamic_stop(
+        client,
+        ExchangeFilters(client.exchange_info()),
+        position,
+        action,
+        tracked_item,
+        config,
+    )
+
+
 def build_v432_add_on_plan(
     position: dict[str, Any],
     action: dict[str, Any],
@@ -685,6 +730,10 @@ def build_runtime_protection_action(
     tracked = _tracked_positions(state)
     key = _position_key(symbol, direction)
     tracked_item = tracked.get(key) or {}
+    daily_strategy_managed = (
+        tracked_item.get("protection_version") == "market_tsmom_daily_v2"
+        and tracked_item.get("runtime_intraday_trailing_enabled") is False
+    )
     opened_at_raw = (tracked.get(key) or {}).get("opened_at")
     opened_at = _now()
     if opened_at_raw:
@@ -725,6 +774,24 @@ def build_runtime_protection_action(
     action = "observe"
     reason = "holding"
     orderbook_exit = {"enabled": False}
+    if daily_strategy_managed:
+        return {
+            "symbol": symbol,
+            "direction": direction,
+            "quantity": abs(amount),
+            "entry": entry,
+            "mark": mark,
+            "pnl_pct": round(pnl_pct, 6),
+            "age_seconds": round(age_seconds, 3),
+            "atr_pct": round(atr_pct, 6),
+            "atr_source": atr_source,
+            "price_source": position.get("mark_price_source") or "account",
+            "max_hold_seconds": max_hold_seconds,
+            "trailing_distance_pct": 0.0,
+            "orderbook_exit": orderbook_exit,
+            "action": "observe",
+            "reason": "daily_strategy_managed",
+        }
     if (
         config.get("yolo_scalp_orderbook_runtime_exit_enabled", True)
         and tracked_item.get("entry_type") in {"orderbook_impact", "volume_scalp", "imbalance_probe"}

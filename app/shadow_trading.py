@@ -230,6 +230,73 @@ def active_shadow_symbols(limit: int = 100) -> list[str]:
     return [str(row[0]).upper() for row in rows if row[0]]
 
 
+def manage_shadow_strategy_positions(
+    strategy_family: str,
+    strategy_version: str,
+    symbol: str,
+    *,
+    trailing_stop: float | None = None,
+    exit_price: float | None = None,
+    outcome: str = "STRATEGY_EXIT",
+) -> dict[str, int]:
+    """Tighten or close matching paper positions without calling an exchange API."""
+    family = str(strategy_family or "").strip()
+    version = str(strategy_version or "").strip()
+    upper_symbol = str(symbol or "").upper().strip()
+    if not family or not version or not upper_symbol:
+        return {"updated": 0, "closed": 0}
+    updated = 0
+    closed = 0
+    with connect() as conn:
+        ensure_shadow_tables(conn)
+        rows = conn.execute(
+            "SELECT * FROM shadow_trades WHERE status = 'OPEN' "
+            "AND strategy_family = ? AND strategy_version = ? AND symbol = ?",
+            (family, version, upper_symbol),
+        ).fetchall()
+        for raw in rows:
+            item = dict(raw)
+            direction = str(item.get("direction") or "LONG").upper()
+            if exit_price is not None and float(exit_price) > 0:
+                price = float(exit_price)
+                move = (price - float(item["entry"])) / float(item["entry"])
+                if direction == "SHORT":
+                    move = -move
+                gross = float(item["notional"]) * move
+                cost = float(item["estimated_cost"] or 0)
+                conn.execute(
+                    "UPDATE shadow_trades SET status = 'CLOSED', closed_at = ?, "
+                    "last_price = ?, high_price = MAX(COALESCE(high_price, entry), ?), "
+                    "low_price = MIN(COALESCE(low_price, entry), ?), gross_pnl = ?, "
+                    "net_pnl = ?, outcome = ? WHERE id = ?",
+                    (
+                        now_iso(),
+                        price,
+                        price,
+                        price,
+                        gross,
+                        gross - cost,
+                        str(outcome or "STRATEGY_EXIT"),
+                        item["id"],
+                    ),
+                )
+                closed += 1
+                continue
+            if trailing_stop is None or float(trailing_stop) <= 0:
+                continue
+            current = float(item["stop"])
+            proposed = float(trailing_stop)
+            tightened = max(current, proposed) if direction == "LONG" else min(current, proposed)
+            if abs(tightened - current) > max(1e-12, abs(current) * 1e-12):
+                conn.execute(
+                    "UPDATE shadow_trades SET stop = ? WHERE id = ?",
+                    (tightened, item["id"]),
+                )
+                updated += 1
+        conn.commit()
+    return {"updated": updated, "closed": closed}
+
+
 def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, int]:
     init_training_lineage_schema()
     """Maintain paper-only trades from scan data. This function never calls Binance."""

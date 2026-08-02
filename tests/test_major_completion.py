@@ -211,6 +211,28 @@ def test_runtime_protection_closes_v473_stagnation_after_cost():
     assert action["reason"] == "stagnation_after_cost"
 
 
+def test_runtime_protection_leaves_daily_trend_position_to_daily_manager():
+    state = {
+        "runtime_protection_positions": {
+            "BTCUSDT:LONG": {
+                "opened_at": (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
+                "max_hold_seconds": 480 * 3600,
+                "protection_version": "market_tsmom_daily_v2",
+                "runtime_intraday_trailing_enabled": False,
+            }
+        }
+    }
+    action = build_runtime_protection_action(
+        {"symbol": "BTCUSDT", "positionAmt": "0.01", "entryPrice": "100", "markPrice": "120"},
+        config={"protection_fast_invalid_seconds": 90},
+        state=state,
+        client=None,
+    )
+
+    assert action["action"] == "observe"
+    assert action["reason"] == "daily_strategy_managed"
+
+
 def test_stage_simulation_returns_path_metrics():
     result = simulate_stage_path(
         {"growth_mode": "extreme_sprint", "extreme_sprint_risk_per_trade_pct": 28},

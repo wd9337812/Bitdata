@@ -18,7 +18,14 @@ from app.live_learning import sync_live_learning_from_binance
 from app.live_reaction import sync_live_reaction_from_binance
 from app.local_circuit import record_v4_live_open
 from app.market_stream import start_market_stream_thread
-from app.market_tsmom_consensus_shadow import start_market_tsmom_consensus_thread
+from app.market_tsmom_consensus_shadow import (
+    STRATEGY_FAMILY as MARKET_TSMOM_FAMILY,
+    STRATEGY_VERSION as MARKET_TSMOM_VERSION,
+    build_market_tsmom_live_decision,
+    current_market_tsmom_candidate,
+    market_tsmom_consensus_status,
+    start_market_tsmom_consensus_thread,
+)
 from app.opportunity_queue import read_opportunities
 from app.opportunity_v4 import V4_CONTROL_FAMILY
 from app.performance_guard import global_performance_guard, update_release_equity_guard
@@ -26,7 +33,7 @@ from app.protection_audit import audit_account_protection
 from app.recovery_controller import consume_recovery_permit, revoke_recovery_permit
 from app.strategy_canary import consume_strategy_canary, revoke_strategy_canary
 from app.risk import direction_cooldown_key, live_trading_allowed
-from app.runtime_protection import manage_runtime_protection
+from app.runtime_protection import manage_runtime_protection, tighten_position_stop_to_price
 from app.s0_daily_profit_lock import s0_daily_profit_lock_status
 from app.shadow_trading import update_shadow_trades
 from app.stage_modes import apply_stage_route
@@ -288,6 +295,10 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
         "break_even_atr": protection_profile.get("break_even_atr"),
         "trailing_trigger_atr": protection_profile.get("trailing_trigger_atr"),
         "trailing_distance_atr": protection_profile.get("trailing_distance_atr"),
+        "runtime_intraday_trailing_enabled": protection_profile.get(
+            "runtime_intraday_trailing_enabled",
+            True,
+        ),
         "initial_quantity": initial_quantity,
         "initial_risk_pct": float(effective_risk.get("final_risk_pct") or decision.get("risk_pct") or 0.0),
         "leverage": float(decision.get("leverage") or 1.0),
@@ -300,7 +311,10 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
         "add_on_attempted": False,
         "add_on_executed": False,
     }
-    save_state({"runtime_protection_positions": tracked})
+    updates = {"runtime_protection_positions": tracked}
+    if strategy_family == MARKET_TSMOM_FAMILY:
+        updates["market_tsmom_live_entry_day"] = datetime.now(timezone.utc).date().isoformat()
+    save_state(updates)
 
 
 def synthetic_account(equity: float = 50.0) -> dict:
@@ -458,6 +472,101 @@ def execute_with_freshness_guard(client: BinanceFuturesClient, decision: dict, c
         return execute_stage1_market_order(client, decision, config)
 
 
+def manage_market_tsmom_live_position(
+    client: BinanceFuturesClient,
+    config: dict,
+    state: dict,
+    account: dict,
+) -> dict:
+    if not config.get("market_tsmom_live_enabled", False):
+        return {"managed": False, "reason": "takeover_disabled"}
+    tracked = dict(state.get("runtime_protection_positions") or {})
+    tracked_item = tracked.get("BTCUSDT:LONG") or {}
+    if (
+        str(tracked_item.get("strategy_family") or "") != MARKET_TSMOM_FAMILY
+        or str(tracked_item.get("strategy_version") or "") != MARKET_TSMOM_VERSION
+    ):
+        return {"managed": False, "reason": "no_tracked_market_tsmom_position"}
+    position = next(
+        (
+            item
+            for item in account.get("positions", []) or []
+            if str(item.get("symbol") or "").upper() == "BTCUSDT"
+            and float(item.get("positionAmt") or item.get("amount") or 0) > 0
+        ),
+        None,
+    )
+    if not position:
+        tracked.pop("BTCUSDT:LONG", None)
+        save_state({"runtime_protection_positions": tracked})
+        return {"managed": False, "reason": "tracked_position_already_flat"}
+    opened_at = tracked_item.get("opened_at")
+    max_hold_seconds = int(
+        tracked_item.get("max_hold_seconds")
+        or int(config.get("market_tsmom_shadow_max_hold_hours", 480)) * 3600
+    )
+    try:
+        opened_at_dt = datetime.fromisoformat(str(opened_at).replace("Z", "+00:00"))
+        if opened_at_dt.tzinfo is None:
+            opened_at_dt = opened_at_dt.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        opened_at_dt = datetime.now(timezone.utc)
+    if (
+        max_hold_seconds > 0
+        and (datetime.now(timezone.utc) - opened_at_dt).total_seconds() >= max_hold_seconds
+    ):
+        with _EXECUTION_LOCK, request_priority("critical"):
+            result = close_rotation_position(client, position)
+        tracked.pop("BTCUSDT:LONG", None)
+        save_state({"runtime_protection_positions": tracked})
+        record_event(
+            "info",
+            "market_tsmom_live_exit",
+            "28/56 日市场趋势仓达到最长持仓时间，已退出 BTC 趋势仓位。",
+            {"strategy_version": MARKET_TSMOM_VERSION, "result": result},
+        )
+        return {"managed": True, "closed": True, "reason": "max_hold", "result": result}
+    status = market_tsmom_consensus_status()
+    try:
+        boundary = datetime.fromisoformat(
+            str(status.get("signal_boundary") or "").replace("Z", "+00:00")
+        )
+        if boundary.tzinfo is None:
+            boundary = boundary.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return {"managed": False, "reason": "daily_signal_not_current"}
+    today = datetime.now(timezone.utc).date()
+    if boundary.date() != today:
+        return {"managed": False, "reason": "daily_signal_not_current"}
+    if status.get("status") == "no_signal":
+        with _EXECUTION_LOCK, request_priority("critical"):
+            result = close_rotation_position(client, position)
+        tracked.pop("BTCUSDT:LONG", None)
+        save_state({"runtime_protection_positions": tracked})
+        record_event(
+            "info",
+            "market_tsmom_live_exit",
+            "28/56 日市场趋势共振关闭，已退出对应 BTC 趋势仓位。",
+            {"strategy_version": MARKET_TSMOM_VERSION, "result": result},
+        )
+        return {"managed": True, "closed": True, "reason": "market_signal_off", "result": result}
+    candidate = current_market_tsmom_candidate()
+    desired_stop = float(((candidate or {}).get("signal") or {}).get("stop") or 0)
+    management_day = str(state.get("market_tsmom_live_management_day") or "")
+    if not candidate or desired_stop <= 0 or management_day == today.isoformat():
+        return {"managed": False, "reason": "no_new_daily_stop"}
+    with _EXECUTION_LOCK, _PROTECTION_LOCK, request_priority("critical"):
+        result = tighten_position_stop_to_price(client, position, desired_stop, config)
+    save_state({"market_tsmom_live_management_day": today.isoformat()})
+    record_event(
+        "info",
+        "market_tsmom_live_stop",
+        "28/56 日市场趋势共振完成每日 ATR 止损审计。",
+        {"strategy_version": MARKET_TSMOM_VERSION, "result": result},
+    )
+    return {"managed": True, "closed": False, "reason": "daily_stop_audit", "result": result}
+
+
 def stage4_scalp_overlay_config(config: dict, state: dict) -> dict | None:
     route = state.get("stage_route") or {}
     if route.get("stage") != "S4" or not config.get("stage_s4_scalp_overlay_enabled", True):
@@ -604,14 +713,35 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             if fast_lane and not symbols_override:
                 return {"status": "grid_event_ignored", "results": grid_results, "loop_seconds": int(config.get("grid_loop_seconds", 300))}
 
-    decision = build_best_growth_decision(
-        client,
-        config,
-        state,
-        account,
-        symbols_override=symbols_override,
-        fast_lane=fast_lane,
+    market_tsmom_management = manage_market_tsmom_live_position(
+        client, config, state, account
     )
+    if market_tsmom_management.get("closed"):
+        return {
+            "status": "market_tsmom_position_closed",
+            "management": market_tsmom_management,
+            "loop_seconds": loop_seconds_for(config, config.get("growth_mode")),
+        }
+    market_tsmom_takeover = bool(config.get("market_tsmom_live_enabled", False)) and str(
+        (state.get("stage_route") or {}).get("stage") or ""
+    ).upper() == "S0"
+    if market_tsmom_takeover:
+        decision = build_market_tsmom_live_decision(config, state, account)
+        decision["scan"] = {
+            "mode": {"mode": "market_tsmom", "strategy": "market_tsmom_consensus"},
+            "candidates": [decision["candidate"]] if decision.get("candidate") else [],
+            "v4_candidates": [],
+            "funnel": {"takeover": "market_tsmom_consensus"},
+        }
+    else:
+        decision = build_best_growth_decision(
+            client,
+            config,
+            state,
+            account,
+            symbols_override=symbols_override,
+            fast_lane=fast_lane,
+        )
     resolve_runtime_protection_profile(decision)
     scan = decision.get("scan") or {}
     shadow_candidates = [item for item in scan.get("candidates", []) if not item.get("passed")]

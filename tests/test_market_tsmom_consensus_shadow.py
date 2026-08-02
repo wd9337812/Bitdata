@@ -1,14 +1,16 @@
 from datetime import datetime, timedelta, timezone
 
+import app.market_tsmom_consensus_shadow as market_tsmom_module
 from app.market_tsmom_consensus_shadow import (
     STRATEGY_FAMILY,
     STRATEGY_VERSION,
+    build_market_tsmom_live_decision,
     build_market_tsmom_shadow_candidate,
     completed_daily_series,
     market_consensus_metrics,
 )
 from app.models import TradingConfig
-from app.shadow_trading import update_shadow_trades
+from app.shadow_trading import manage_shadow_strategy_positions, update_shadow_trades
 from app.telemetry import connect
 
 
@@ -120,8 +122,11 @@ def test_builds_isolated_btc_long_shadow() -> None:
     assert candidate["passed"] is False
     assert candidate["evidence_type"] == "independent_realtime"
     assert candidate["shadow_disable_take_profit"] is True
-    assert candidate["research_context"]["reference_risk_pct"] == 15.0
+    assert candidate["research_context"]["reference_risk_pct"] == 10.0
     assert candidate["research_context"]["max_risk_cap_pct"] == 30.0
+    assert candidate["signal"]["protection_profile"]["atr_days"] == 10
+    assert candidate["signal"]["protection_profile"]["atr_multiple"] == 3.0
+    assert candidate["shadow_max_hold_minutes"] == 20 * 24 * 60
 
 
 def test_no_candidate_when_fast_momentum_is_below_threshold() -> None:
@@ -179,15 +184,120 @@ def test_candidate_opens_only_as_isolated_shadow_without_fixed_take_profit(
     assert settled["closed"] == 0
 
 
+def test_strategy_management_tightens_stop_and_closes_on_signal_off(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
+    candidate, _ = build_market_tsmom_shadow_candidate(
+        FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None
+    )
+    assert candidate is not None
+    update_shadow_trades(
+        [candidate],
+        {
+            "shadow_trading_enabled": True,
+            "shadow_reference_notional_usdt": 20,
+            "shadow_round_trip_cost_pct": 0.12,
+        },
+    )
+    initial_stop = float(candidate["signal"]["stop"])
+    tightened = manage_shadow_strategy_positions(
+        STRATEGY_FAMILY,
+        STRATEGY_VERSION,
+        "BTCUSDT",
+        trailing_stop=initial_stop * 1.01,
+    )
+    assert tightened == {"updated": 1, "closed": 0}
+    ignored = manage_shadow_strategy_positions(
+        STRATEGY_FAMILY,
+        STRATEGY_VERSION,
+        "BTCUSDT",
+        trailing_stop=initial_stop * 0.99,
+    )
+    assert ignored == {"updated": 0, "closed": 0}
+    closed = manage_shadow_strategy_positions(
+        STRATEGY_FAMILY,
+        STRATEGY_VERSION,
+        "BTCUSDT",
+        exit_price=50_500,
+        outcome="MARKET_SIGNAL_OFF",
+    )
+    assert closed == {"updated": 0, "closed": 1}
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT status, outcome, net_pnl FROM shadow_trades"
+        ).fetchone()
+    assert row[0] == "CLOSED"
+    assert row[1] == "MARKET_SIGNAL_OFF"
+    assert float(row[2]) > 0
+
+
 def test_market_tsmom_settings_are_accepted_by_app_config() -> None:
     config = TradingConfig(
         market_tsmom_shadow_enabled=False,
         market_tsmom_shadow_prefetch_symbols=60,
         market_tsmom_shadow_top_third_threshold_pct=11.25,
         market_tsmom_shadow_reference_risk_pct=12.0,
+        market_tsmom_shadow_atr_multiple=2.5,
     )
 
     assert config.market_tsmom_shadow_enabled is False
     assert config.market_tsmom_shadow_prefetch_symbols == 60
     assert config.market_tsmom_shadow_top_third_threshold_pct == 11.25
     assert config.market_tsmom_shadow_reference_risk_pct == 12.0
+    assert config.market_tsmom_shadow_atr_multiple == 2.5
+
+
+def test_live_takeover_decision_requires_headroom_and_preserves_daily_profile(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
+    candidate, _ = build_market_tsmom_shadow_candidate(
+        FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None
+    )
+    assert candidate is not None
+    monkeypatch.setattr(
+        market_tsmom_module,
+        "current_market_tsmom_candidate",
+        lambda _now=None: candidate,
+    )
+    blocked = build_market_tsmom_live_decision(
+        {"hard_stop_equity": 5.0, "market_tsmom_live_min_equity_usdt": 10.0},
+        {},
+        {"equity": 5.4, "available_balance": 5.4, "positions": []},
+        now,
+    )
+    assert blocked["action"] == "WAIT"
+    assert blocked["reason"] == "market_tsmom_insufficient_hard_stop_headroom"
+
+    decision = build_market_tsmom_live_decision(
+        {
+            "hard_stop_equity": 5.0,
+            "market_tsmom_live_min_equity_usdt": 10.0,
+            "market_tsmom_live_risk_pct": 10.0,
+            "market_tsmom_live_leverage": 1,
+            "market_tsmom_live_margin_pct": 90.0,
+            "effective_min_order_notional_usdt": 10.0,
+        },
+        {},
+        {"equity": 20.0, "available_balance": 20.0, "positions": []},
+        now,
+    )
+    assert decision["action"] == "OPEN_LONG"
+    assert decision["strategy_version"] == STRATEGY_VERSION
+    assert decision["risk_pct"] <= 10.0
+    assert decision["estimated_notional"] >= 10.0
+    assert decision["signal"]["protection_profile"]["runtime_intraday_trailing_enabled"] is False
+
+    duplicate = build_market_tsmom_live_decision(
+        {
+            "hard_stop_equity": 5.0,
+            "market_tsmom_live_min_equity_usdt": 10.0,
+        },
+        {"market_tsmom_live_entry_day": now.date().isoformat()},
+        {"equity": 20.0, "available_balance": 20.0, "positions": []},
+        now,
+    )
+    assert duplicate["action"] == "WAIT"
+    assert duplicate["reason"] == "market_tsmom_signal_already_traded_today"
