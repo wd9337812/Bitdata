@@ -33,7 +33,7 @@ type SnapshotData = { snapshots: any[] };
 type LogsData = { events: any[] };
 type LiveLearningData = { scores: any[]; strategy_scores?: any[]; scalp_scores?: any[]; extreme_scores?: any[]; v4_scores?: any[]; v5_scores?: any[]; active_opportunity_scores?: any[] };
 type LiveReactionData = { reactions: any[]; recent_trades: any[] };
-type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; by_release?: any[]; by_evidence_type?: any[]; by_admission_lane?: any[]; active_release?: Record<string, any>; challenger_release?: Record<string, any>; xmom_runtime?: Record<string, any>; adaptive_30d_runtime?: Record<string, any>; trades: any[] };
+type ShadowData = { stats: Record<string, any>; by_strategy?: any[]; by_release?: any[]; by_evidence_type?: any[]; by_admission_lane?: any[]; active_release?: Record<string, any>; challenger_release?: Record<string, any>; xmom_runtime?: Record<string, any>; adaptive_30d_runtime?: Record<string, any>; market_tsmom_runtime?: Record<string, any>; trades: any[] };
 type SimulationData = Record<string, any>;
 type ReportData = Record<string, any>;
 type TrainingQualityData = {
@@ -1301,6 +1301,7 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
   const validation = challenger.validation || {};
   const xmom = data.xmom_runtime || {};
   const adaptive30d = data.adaptive_30d_runtime || {};
+  const marketTsmom = data.market_tsmom_runtime || {};
   const xmomRelease = (data.by_release || []).find(
     (row: any) => row.strategy_family === "cross_sectional_momentum"
       && row.strategy_version === "s0_xmom_24h_v2",
@@ -1308,6 +1309,10 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
   const adaptive30dRelease = (data.by_release || []).find(
     (row: any) => row.strategy_family === "adaptive_30d_momentum"
       && row.strategy_version === "s0_xmom_30d_paper_v1",
+  ) || {};
+  const marketTsmomRelease = (data.by_release || []).find(
+    (row: any) => row.strategy_family === "market_tsmom_consensus"
+      && row.strategy_version === "s0_market_tsmom_28_56_v1",
   ) || {};
   const hasChallenger = Boolean(challenger.strategy_version);
   const activeStrategyLabel = String(active.strategy_version || "v5.2").toUpperCase();
@@ -1332,6 +1337,22 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
           <MetricCard title={`${active.strategy_version || "V4"} 近期基线`} value={`${fmt(activeRecent.closed, 0)} 笔`} sub={`${pfLabel(activeRecent.profit_factor, activeRecent.closed)} · 净收益 ${fmt(activeRecent.net_pnl, 4)} U`} tone={Number(activeRecent.net_pnl || 0) >= 0 ? "positive" : "negative"} />
           <MetricCard title="当前安全观察窗" value={`${fmt(recovery.closed, 0)} / 20 笔`} sub={`${pfLabel(recovery.profit_factor, recovery.closed)} · 只对应当前 V4`} tone={Number(recovery.net_pnl || 0) >= 0 ? "positive" : "negative"} />
           <MetricCard title={`${activeStrategyLabel} 运行方式`} value="全仓短打" sub="当前版本独立排序；合格后单仓全进全出；快速保护独立 5 秒监督" />
+        </div>
+      </div>
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>28/56 日趋势共振候选</h2>
+            <p>每天用高流动性永续币构造市场指数。28 日动量超过历史上三分位且 56 日趋势向上时，只建立 BTC 做多影子；10% 止损、最多持有 5 天，不设固定止盈。当前与实盘完全隔离。</p>
+          </div>
+          <span className="pill">新候选影子</span>
+        </div>
+        <div className="metrics">
+          <MetricCard title="今日共振" value={marketTsmom.status === "candidate_ready" ? "已建立 BTC 多头影子" : marketTsmom.status === "no_signal" ? "趋势条件未同时满足" : marketTsmom.status === "insufficient_history" ? "连续日线不足" : marketTsmom.status === "error" ? "研究线程异常" : marketTsmom.enabled === false ? "已关闭" : "等待每日窗口"} sub={marketTsmom.reason || "UTC 00:03-00:50 评估；每日一次，REST 只走后台预算"} tone={marketTsmom.status === "error" ? "negative" : marketTsmom.status === "candidate_ready" ? "positive" : ""} />
+          <MetricCard title="市场趋势" value={`28日 ${fmt(marketTsmom.market_momentum_28d_pct, 2)}%`} sub={`门槛 ${fmt(marketTsmom.top_third_threshold_pct, 2)}% · 56日 ${fmt(marketTsmom.market_momentum_56d_pct, 2)}%`} />
+          <MetricCard title="市场样本" value={`${fmt(marketTsmom.market_symbols, 0)} 个币`} sub={`预选 ${fmt(marketTsmom.universe_size, 0)} · 可用 ${fmt(marketTsmom.usable_universe_size, 0)} · 限流让路 ${fmt(marketTsmom.rate_limit_retries, 0)} 次`} />
+          <MetricCard title="风险说明" value="常用 15% · 上限 30%" sub="回测显示长期固定使用 30% 会因复利波动损耗变差；候选尚未接管实盘" />
+          <MetricCard title="独立未来结果" value={`${fmt(marketTsmomRelease.closed, 0)} 笔`} sub={`${pfLabel(marketTsmomRelease.profit_factor, marketTsmomRelease.closed)} · 净收益 ${fmt(marketTsmomRelease.net_pnl, 4)} U · 成本 ${fmt(marketTsmomRelease.cost, 4)} U`} tone={Number(marketTsmomRelease.net_pnl || 0) > 0 ? "positive" : Number(marketTsmomRelease.net_pnl || 0) < 0 ? "negative" : ""} />
         </div>
       </div>
       <div className="panel">
@@ -1870,6 +1891,10 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("xmom_shadow_min_onboard_age_days", "动量研究最低币龄", "默认 30 天；历史审计显示刚上市币种拖累结果，仅影响独立研究影子")}
           {toggle("adaptive_30d_shadow_enabled", "30 日动量未来研究", "每天一次抓取最多 150 个高流动性币的连续小时数据；只做独立未来影子，不影响实盘")}
           {number("adaptive_30d_shadow_symbol_limit", "30 日研究币种上限", "默认 150；REST 请求只走后台预算，交易与保护请求始终优先")}
+          {toggle("market_tsmom_shadow_enabled", "28/56 日趋势共振影子", "每天一次构造 20 币市场指数；只做 BTC 多头独立影子，不参与实盘准入、许可证或仓位")}
+          {number("market_tsmom_shadow_prefetch_symbols", "趋势共振预选币数", "默认 40；仅每日读取 60 根日线，按近 30 日成交额选 20 个构造市场指数")}
+          {number("market_tsmom_shadow_top_third_threshold_pct", "28 日历史上三分位门槛%", "默认 10.65%；来自冻结历史样本，不随短期输赢自动漂移")}
+          {number("market_tsmom_shadow_reference_risk_pct", "趋势共振参考风险%", "默认 15%；当前仅用于解释与离线压力测试，影子不会真实下单")}
           {number("shadow_min_candidate_score", "影子交易最低候选分", "默认 70；只记录值得研究的机会")}
           {number("shadow_dedupe_minutes", "影子信号去重分钟", "同币、同方向、同信号在窗口内只算一笔")}
           {number("shadow_max_hold_minutes", "影子交易最长观察分钟", "到时仍未止盈止损则按当时价格模拟退出")}

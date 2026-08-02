@@ -300,11 +300,16 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
             high = max(float(item.get("high_price") or item["entry"]), price, stream_high)
             low = min(float(item.get("low_price") or item["entry"]), price, stream_low)
             stop_hit = low <= float(item["stop"]) if direction == "LONG" else high >= float(item["stop"])
-            take_hit = high >= float(item["take_profit"]) if direction == "LONG" else low <= float(item["take_profit"])
             try:
                 payload = json.loads(item.get("payload") or "{}")
             except (TypeError, json.JSONDecodeError):
                 payload = {}
+            take_profit_disabled = bool(payload.get("shadow_disable_take_profit"))
+            take_hit = False if take_profit_disabled else (
+                high >= float(item["take_profit"])
+                if direction == "LONG"
+                else low <= float(item["take_profit"])
+            )
             protection = payload.get("protection_profile") if isinstance(payload.get("protection_profile"), dict) else {}
             opened_at = datetime.fromisoformat(str(item["opened_at"]).replace("Z", "+00:00"))
             if opened_at.tzinfo is None:
@@ -565,6 +570,9 @@ def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any
                                 "model_features": v4.get("features"),
                                 "moe": v4.get("moe"),
                                 "research_context": candidate.get("research_context"),
+                                "shadow_disable_take_profit": bool(
+                                    candidate.get("shadow_disable_take_profit")
+                                ),
                                 "features": {
                                     "spread_pct": (candidate.get("depth") or {}).get("spread_pct"),
                                     "depth_notional": (candidate.get("depth") or {}).get("depth_notional"),

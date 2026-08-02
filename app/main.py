@@ -35,6 +35,7 @@ from app.scanner import mode_config
 from app.shadow_trading import shadow_summary
 from app.adaptive_30d_momentum_shadow import adaptive_30d_momentum_status
 from app.cross_sectional_momentum import cross_sectional_momentum_status
+from app.market_tsmom_consensus_shadow import market_tsmom_consensus_status
 from app.strategy_releases import list_strategy_releases
 from app.stage_modes import all_stage_profiles, stage_profile_for_equity
 from app.stage_simulation import simulate_stage_path
@@ -70,7 +71,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.30.0")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.30.1")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -279,6 +280,7 @@ def shadow_trades(limit: int = 100) -> dict[str, Any]:
     result = shadow_summary(limit, load_config())
     result["xmom_runtime"] = cross_sectional_momentum_status()
     result["adaptive_30d_runtime"] = adaptive_30d_momentum_status()
+    result["market_tsmom_runtime"] = market_tsmom_consensus_status()
     return result
 
 

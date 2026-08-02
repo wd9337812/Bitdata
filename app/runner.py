@@ -18,6 +18,7 @@ from app.live_learning import sync_live_learning_from_binance
 from app.live_reaction import sync_live_reaction_from_binance
 from app.local_circuit import record_v4_live_open
 from app.market_stream import start_market_stream_thread
+from app.market_tsmom_consensus_shadow import start_market_tsmom_consensus_thread
 from app.opportunity_queue import read_opportunities
 from app.opportunity_v4 import V4_CONTROL_FAMILY
 from app.performance_guard import global_performance_guard, update_release_equity_guard
@@ -913,6 +914,7 @@ def main() -> None:
     start_market_stream_thread(load_config)
     start_cross_sectional_momentum_thread(load_config)
     start_adaptive_30d_momentum_thread(load_config)
+    start_market_tsmom_consensus_thread(load_config)
     interval_seconds = int(os.getenv("BOT_LOOP_SECONDS", "300"))
     while True:
         try:
@@ -1182,6 +1184,7 @@ def coordinator_main() -> None:
     start_market_stream_thread(load_config)
     start_cross_sectional_momentum_thread(load_config)
     start_adaptive_30d_momentum_thread(load_config)
+    start_market_tsmom_consensus_thread(load_config)
     start_user_stream_thread(load_config)
     threading.Thread(target=_account_supervisor_loop, name="account-supervisor", daemon=True).start()
     scan_thread = threading.Thread(target=_background_scan_loop, name="background-scan", daemon=True)

@@ -357,6 +357,20 @@ class TradingConfig(BaseModel):
     adaptive_30d_shadow_reward_r: float = Field(default=2.5, ge=0.1, le=10)
     adaptive_30d_shadow_max_stop_pct: float = Field(default=12.0, ge=0.1, le=30)
     adaptive_30d_shadow_max_hold_hours: int = Field(default=120, ge=1, le=720)
+    market_tsmom_shadow_enabled: bool = True
+    market_tsmom_shadow_utc_hour: int = Field(default=0, ge=0, le=23)
+    market_tsmom_shadow_minute_start: int = Field(default=3, ge=0, le=59)
+    market_tsmom_shadow_minute_end: int = Field(default=50, ge=0, le=59)
+    market_tsmom_shadow_min_24h_volume_usdt: float = Field(default=20_000_000, ge=0)
+    market_tsmom_shadow_min_onboard_age_days: int = Field(default=90, ge=0, le=3650)
+    market_tsmom_shadow_stream_max_age_seconds: int = Field(default=30, ge=1, le=300)
+    market_tsmom_shadow_prefetch_symbols: int = Field(default=40, ge=20, le=250)
+    market_tsmom_shadow_min_prefetch_symbols: int = Field(default=25, ge=20, le=250)
+    market_tsmom_shadow_market_symbols: int = Field(default=20, ge=10, le=100)
+    market_tsmom_shadow_top_third_threshold_pct: float = Field(default=10.65, ge=-100, le=1000)
+    market_tsmom_shadow_stop_pct: float = Field(default=10.0, ge=0.1, le=50)
+    market_tsmom_shadow_max_hold_hours: int = Field(default=120, ge=1, le=720)
+    market_tsmom_shadow_reference_risk_pct: float = Field(default=15.0, ge=0.01, le=30)
     auto_risk_by_equity: bool = True
     stage_routing_enabled: bool = True
     stage_manual_mode: str = "auto"
