@@ -30,11 +30,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--extension", type=Path, default=DEFAULT_EXTENSION)
+    parser.add_argument(
+        "--history",
+        type=Path,
+        action="append",
+        default=[],
+        help="Optional earlier point-in-time archive roots, oldest first.",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     return parser.parse_args()
 
 
-def load_btc(data: Path, extension: Path) -> pd.DataFrame:
+def load_btc(
+    data: Path, extension: Path, history: tuple[Path, ...] = ()
+) -> pd.DataFrame:
     columns = [
         "open_time",
         "open",
@@ -44,7 +53,8 @@ def load_btc(data: Path, extension: Path) -> pd.DataFrame:
         "quote_volume",
         "taker_buy_quote_volume",
     ]
-    paths = [data / "parquet" / "BTCUSDT.parquet"]
+    paths = [root / "parquet" / "BTCUSDT.parquet" for root in history]
+    paths.append(data / "parquet" / "BTCUSDT.parquet")
     extra = extension / "parquet" / "BTCUSDT.parquet"
     if extra.exists():
         paths.append(extra)
@@ -183,8 +193,22 @@ def metrics(returns: pd.DataFrame) -> dict[str, float | int]:
     }
 
 
+def yearly_metrics(returns: pd.DataFrame) -> dict[str, dict[str, float | int]]:
+    if returns.empty:
+        return {}
+    frame = returns.copy()
+    frame["year"] = pd.to_datetime(frame.time, utc=True).dt.year
+    return {
+        str(int(year)): metrics(group.drop(columns="year"))
+        for year, group in frame.groupby("year", sort=True)
+    }
+
+
 def fold_boundaries(frame: pd.DataFrame) -> list[dict[str, pd.Timestamp]]:
-    first = pd.Timestamp("2024-01-01", tz="UTC")
+    first_observation = frame.time.min()
+    first = pd.Timestamp(
+        year=int(first_observation.year), month=1, day=1, tz="UTC"
+    )
     last = frame.time.max().floor("D")
     folds: list[dict[str, pd.Timestamp]] = []
     test_start = first + pd.DateOffset(months=15)
@@ -248,7 +272,9 @@ def choose_rule(
 
 def main() -> None:
     args = parse_args()
-    frame, features = build_features(load_btc(args.data, args.extension))
+    frame, features = build_features(
+        load_btc(args.data, args.extension, tuple(args.history))
+    )
     fold_reports: list[dict[str, Any]] = []
     base_parts: list[pd.DataFrame] = []
     stress_parts: list[pd.DataFrame] = []
@@ -309,6 +335,8 @@ def main() -> None:
     report = {
         "experiment": "s0_btc_cost_aware_lgbm",
         "source_method": "Bysik-Slepaczuk cost-aware hourly forecast proxy",
+        "data_start": frame.time.min().isoformat(),
+        "data_end": frame.time.max().isoformat(),
         "execution": "features at close t; trade next open; earn next open-to-open return",
         "feature_count": len(features),
         "features": features,
@@ -317,6 +345,17 @@ def main() -> None:
         "folds": fold_reports,
         "base": base_metrics,
         "stress": stress_metrics,
+        "base_yearly": yearly_metrics(base_all),
+        "stress_yearly": yearly_metrics(stress_all),
+        "fold_stability": {
+            "folds": len(fold_reports),
+            "base_positive_folds": sum(
+                item["base"]["net_return"] > 0 for item in fold_reports
+            ),
+            "stress_positive_folds": sum(
+                item["stress"]["net_return"] > 0 for item in fold_reports
+            ),
+        },
         "accepted": accepted,
         "decision": (
             "eligible_for_further_shadow_validation"
