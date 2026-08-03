@@ -538,6 +538,48 @@ def manage_market_tsmom_live_position(
         return {"managed": True, "closed": True, "reason": "max_hold", "result": result}
     if tracked_version == MARKET_TSMOM_VERSION:
         return {"managed": True, "closed": False, "reason": "fixed_time_hold_active"}
+
+    # A protected legacy position must not occupy the only S0 slot for weeks
+    # after its rule has been retired. Rotate only when the replacement rule is
+    # fresh and executable with the balance that becomes available after exit.
+    projected_flat_account = {
+        **account,
+        "available_balance": float(account.get("equity") or 0),
+        "positions": [],
+    }
+    replacement = build_market_tsmom_live_decision(
+        config,
+        state,
+        projected_flat_account,
+    )
+    if replacement.get("action") == "OPEN_LONG":
+        with _EXECUTION_LOCK, request_priority("critical"):
+            result = close_rotation_position(client, position)
+        tracked.pop(tracked_key, None)
+        save_state({"runtime_protection_positions": tracked})
+        record_event(
+            "info",
+            "market_tsmom_live_migration",
+            f"旧版市场趋势持仓 {symbol} 已退出，准备切换到新鲜且可执行的 "
+            f"{replacement.get('symbol')} V4 信号。",
+            {
+                "from_strategy_version": tracked_version,
+                "to_strategy_version": MARKET_TSMOM_VERSION,
+                "replacement_symbol": replacement.get("symbol"),
+                "replacement_risk_pct": replacement.get("risk_pct"),
+                "result": result,
+            },
+        )
+        return {
+            "managed": True,
+            "closed": True,
+            "reason": "legacy_strategy_replaced",
+            "replacement": {
+                "symbol": replacement.get("symbol"),
+                "risk_pct": replacement.get("risk_pct"),
+            },
+            "result": result,
+        }
     status = market_tsmom_consensus_status()
     try:
         boundary = datetime.fromisoformat(

@@ -504,3 +504,108 @@ def test_legacy_position_remains_managed_after_v4_release(monkeypatch) -> None:
     assert result["closed"] is True
     assert result["reason"] == "market_signal_off"
     assert saved[-1] == {"runtime_protection_positions": {}}
+
+
+def test_legacy_position_rotates_only_when_fresh_v4_is_executable(monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
+    saved = []
+    events = []
+    monkeypatch.setattr(
+        runner_module,
+        "build_market_tsmom_live_decision",
+        lambda _config, _state, account: {
+            "action": "OPEN_LONG",
+            "symbol": "BNBUSDT",
+            "risk_pct": 11.7,
+            "projected_positions": account["positions"],
+            "projected_available": account["available_balance"],
+        },
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "close_rotation_position",
+        lambda _client, position: {"closed": position["symbol"]},
+    )
+    monkeypatch.setattr(runner_module, "save_state", lambda payload: saved.append(payload))
+    monkeypatch.setattr(
+        runner_module,
+        "record_event",
+        lambda *args, **kwargs: events.append((args, kwargs)),
+    )
+    state = {
+        "runtime_protection_positions": {
+            "ETHUSDT:LONG": {
+                "opened_at": now.isoformat(),
+                "max_hold_seconds": 20 * 24 * 3600,
+                "strategy_family": STRATEGY_FAMILY,
+                "strategy_version": "s0_market_tsmom_28_56_trailing_v3",
+            }
+        }
+    }
+
+    result = runner_module.manage_market_tsmom_live_position(
+        object(),
+        {"market_tsmom_live_enabled": True},
+        state,
+        {
+            "equity": 15.0,
+            "available_balance": 3.0,
+            "positions": [{"symbol": "ETHUSDT", "positionAmt": "0.01"}],
+        },
+    )
+
+    assert result["closed"] is True
+    assert result["reason"] == "legacy_strategy_replaced"
+    assert result["replacement"] == {"symbol": "BNBUSDT", "risk_pct": 11.7}
+    assert saved[-1] == {"runtime_protection_positions": {}}
+    assert events[-1][0][1] == "market_tsmom_live_migration"
+
+
+def test_legacy_position_is_kept_when_v4_replacement_is_not_executable(monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
+    monkeypatch.setattr(
+        runner_module,
+        "build_market_tsmom_live_decision",
+        lambda _config, _state, _account: {
+            "action": "WAIT",
+            "reason": "market_tsmom_entry_window_expired",
+        },
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "market_tsmom_consensus_status",
+        lambda: {
+            "status": "candidate_ready",
+            "signal_boundary": now.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ).isoformat(),
+        },
+    )
+    monkeypatch.setattr(runner_module, "current_market_tsmom_candidate", lambda: None)
+    state = {
+        "runtime_protection_positions": {
+            "ETHUSDT:LONG": {
+                "opened_at": now.isoformat(),
+                "max_hold_seconds": 20 * 24 * 3600,
+                "strategy_family": STRATEGY_FAMILY,
+                "strategy_version": "s0_market_tsmom_28_56_trailing_v3",
+            }
+        },
+        "market_tsmom_live_management_day": now.date().isoformat(),
+    }
+
+    result = runner_module.manage_market_tsmom_live_position(
+        object(),
+        {"market_tsmom_live_enabled": True},
+        state,
+        {
+            "equity": 15.0,
+            "available_balance": 3.0,
+            "positions": [{"symbol": "ETHUSDT", "positionAmt": "0.01"}],
+        },
+    )
+
+    assert result == {
+        "managed": False,
+        "reason": "no_new_daily_stop",
+    }
