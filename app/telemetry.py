@@ -24,17 +24,20 @@ def db_path() -> Path:
 def connect() -> sqlite3.Connection:
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path, timeout=15)
+    conn = sqlite3.connect(path, timeout=30)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=15000")
     path_key = str(path.resolve())
     if path_key in _SCHEMA_READY:
         return conn
     with _SCHEMA_LOCK:
         if path_key in _SCHEMA_READY:
             return conn
+        # Changing journal mode takes a database-wide lock. Doing it for every
+        # high-frequency connection caused runner threads to contend with each
+        # other on large production databases.
+        conn.execute("PRAGMA journal_mode=WAL")
         _initialize_schema(conn)
         _SCHEMA_READY.add(path_key)
     return conn
