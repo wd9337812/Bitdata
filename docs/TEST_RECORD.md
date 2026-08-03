@@ -576,3 +576,4 @@ This file tracks local verification for the two-stage futures system.
 - Dashboard 改为中文显示“30日山寨动量主路线”和“BNB趋势后备”，并展示扫描、方向门和风险配置。
 - 项目 `.venv` 完整后端回归 `684 passed`，仅有5条既有 ElasticNet 收敛警告；前端生产构建通过（452个模块）。
 - 本地 FastAPI `0.31.0` 首页、OpenAPI 及5个生产哈希静态资源逐项请求均返回 HTTP 200。
+- 部署验收后补充 `0.31.1` 展示修正：每日候选窗口外仍明确标识“30日山寨动量主路线已启用”，S0 阶段卡片不再误显示旧 V5 路由与30%风险。

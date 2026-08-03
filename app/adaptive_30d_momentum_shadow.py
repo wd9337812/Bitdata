@@ -582,7 +582,11 @@ def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
                 "strategy_family": STRATEGY_FAMILY,
                 "strategy_version": STRATEGY_VERSION,
                 "updated_at": now.isoformat(),
-                "live_effect": "none",
+                "live_effect": (
+                    "s0_primary"
+                    if config.get("adaptive_30d_live_enabled", False)
+                    else "none"
+                ),
             }
             if not enabled:
                 _write_status({**base, "status": "disabled", "reason": "配置已关闭"})

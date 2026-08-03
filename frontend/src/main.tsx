@@ -26,7 +26,7 @@ import {
 } from "recharts";
 import { api, fmt, modeLabel, stageLabel, statusLabel } from "./lib/api";
 import "./styles.css";
-type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; user_stream?: Record<string, any>; binance_rate?: Record<string, any>; opportunity_queue?: Record<string, any>; runtime?: Record<string, any>; target_progress?: Record<string, any>; stage_profile?: Record<string, any>; stage_route?: Record<string, any>; stage_profiles?: Record<string, any>[]; product_completion?: Record<string, any>; storage?: Record<string, any>; v49_global_adaptive?: Record<string, any>; global_adaptive?: Record<string, any>; s0_moe?: Record<string, any> };
+type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; user_stream?: Record<string, any>; binance_rate?: Record<string, any>; opportunity_queue?: Record<string, any>; runtime?: Record<string, any>; target_progress?: Record<string, any>; stage_profile?: Record<string, any>; stage_route?: Record<string, any>; stage_profiles?: Record<string, any>[]; product_completion?: Record<string, any>; storage?: Record<string, any>; v49_global_adaptive?: Record<string, any>; global_adaptive?: Record<string, any>; s0_moe?: Record<string, any>; adaptive_30d_runtime?: Record<string, any> };
 type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any; funnel?: any }; stage2_grid: any[]; auth_error?: string };
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
@@ -309,7 +309,21 @@ function App() {
     global_guard_normal: "当前无需穿透风险背景",
     release_not_authorized: "当前策略版本未获授权",
   };
-  const stageRoute = Object.keys(rawStageRoute).length > 0 ? rawStageRoute : stageProfile;
+  const baseStageRoute = Object.keys(rawStageRoute).length > 0 ? rawStageRoute : stageProfile;
+  const adaptive30dRuntime = status?.adaptive_30d_runtime || {};
+  const adaptive30dActive = Boolean(config.adaptive_30d_live_enabled)
+    && String(baseStageRoute.stage || "").toUpperCase() === "S0";
+  const stageRoute = adaptive30dActive
+    ? {
+        ...baseStageRoute,
+        label: "30日山寨动量主路线",
+        strategy_family: "adaptive_30d_momentum",
+        risk_pct: Number(config.adaptive_30d_live_risk_pct || 15),
+        leverage: Number(config.adaptive_30d_live_leverage || 2),
+        summary: "S0 每日山寨动量主路线；BNB 仅在无可执行山寨候选时后备",
+        runtime_status: adaptive30dRuntime.status,
+      }
+    : baseStageRoute;
   const stageProfiles = status?.stage_profiles || [];
   const completion = status?.product_completion || {};
 
