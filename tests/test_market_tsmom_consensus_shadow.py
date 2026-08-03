@@ -131,7 +131,7 @@ def test_builds_contract_executable_long_shadow() -> None:
     assert candidate["passed"] is False
     assert candidate["evidence_type"] == "independent_realtime"
     assert candidate["shadow_disable_take_profit"] is True
-    assert candidate["research_context"]["reference_risk_pct"] == 15.0
+    assert candidate["research_context"]["reference_risk_pct"] == 20.0
     assert candidate["research_context"]["max_risk_cap_pct"] == 30.0
     assert candidate["signal"]["protection_profile"]["stop_pct"] == 15.0
     assert candidate["signal"]["protection_profile"]["daily_stop_audit_enabled"] is False
@@ -378,6 +378,7 @@ def test_strategy_management_tightens_stop_and_closes_on_signal_off(
 
 
 def test_market_tsmom_settings_are_accepted_by_app_config() -> None:
+    defaults = TradingConfig()
     config = TradingConfig(
         market_tsmom_shadow_enabled=False,
         market_tsmom_shadow_prefetch_symbols=60,
@@ -391,6 +392,8 @@ def test_market_tsmom_settings_are_accepted_by_app_config() -> None:
     assert config.market_tsmom_shadow_top_third_threshold_pct == 11.25
     assert config.market_tsmom_shadow_reference_risk_pct == 12.0
     assert config.market_tsmom_shadow_atr_multiple == 2.5
+    assert defaults.market_tsmom_shadow_reference_risk_pct == 20.0
+    assert defaults.market_tsmom_live_risk_pct == 20.0
 
 
 def test_live_takeover_decision_requires_headroom_and_preserves_daily_profile(
@@ -435,7 +438,7 @@ def test_live_takeover_decision_requires_headroom_and_preserves_daily_profile(
     assert decision["risk_pct"] <= 10.0
     assert decision["estimated_notional"] >= 10.0
     assert decision["signal"]["protection_profile"]["runtime_intraday_trailing_enabled"] is False
-    assert decision["signal"]["protection_profile"]["protection_version"] == "market_tsmom_bnb_time5_stop15_v5"
+    assert decision["signal"]["protection_profile"]["protection_version"] == "market_tsmom_bnb_time5_stop15_risk20_v6"
     assert decision["signal"]["protection_profile"]["max_hold_seconds"] == 5 * 24 * 3600
 
     preferred = build_market_tsmom_live_decision(
@@ -454,6 +457,26 @@ def test_live_takeover_decision_requires_headroom_and_preserves_daily_profile(
     assert preferred["action"] == "OPEN_LONG"
     assert preferred["symbol"] == "BNBUSDT"
     assert preferred["risk"]["execution_fallback_used"] is False
+
+    candidate["execution_options"]["BNBUSDT"]["execution_constraints"].update(
+        {"step_size": "0.01", "min_quantity": 0.01}
+    )
+    promoted = build_market_tsmom_live_decision(
+        {
+            "hard_stop_equity": 5.0,
+            "market_tsmom_live_min_equity_usdt": 10.0,
+            "market_tsmom_live_leverage": 2,
+            "market_tsmom_live_margin_pct": 90.0,
+            "effective_min_order_notional_usdt": 10.0,
+        },
+        {},
+        {"equity": 15.153, "available_balance": 15.153, "positions": []},
+        now,
+    )
+    assert promoted["action"] == "OPEN_LONG"
+    assert promoted["quantity"] == pytest.approx(0.03)
+    assert promoted["risk_pct"] == pytest.approx(17.8189, rel=1e-3)
+    assert promoted["candidate"]["base_risk_pct"] == 20.0
 
     duplicate = build_market_tsmom_live_decision(
         {

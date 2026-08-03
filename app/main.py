@@ -71,7 +71,7 @@ from app.trading_engine import (
 load_dotenv()
 
 APP_DIR = Path(__file__).resolve().parent
-app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.30.7")
+app = FastAPI(title="Binance Futures Strategy Dashboard", version="0.31.0")
 _BINANCE_HEALTH_CACHE: dict[str, Any] = {}
 app.mount("/static", StaticFiles(directory=APP_DIR / "static"), name="static")
 assets_dir = APP_DIR / "static" / "assets"
@@ -193,6 +193,7 @@ def status() -> dict[str, Any]:
         "state": state,
         "account": account_summary,
         "target_progress": target_progress(config, state, account_summary),
+        "adaptive_30d_runtime": adaptive_30d_momentum_status(),
         "stage_profile": state.get("stage_route") or stage_profile_for_equity(account_summary.get("equity"), config),
         "stage_route": state.get("stage_route") or {},
         "stage_profiles": all_stage_profiles(config),

@@ -1,8 +1,11 @@
 from datetime import datetime, timedelta, timezone
 
 from app.adaptive_30d_momentum_shadow import (
+    LIVE_STRATEGY_VERSION,
     STRATEGY_FAMILY,
     STRATEGY_VERSION,
+    adaptive_30d_direction_gate,
+    build_adaptive_30d_live_decision,
     build_adaptive_30d_shadow_candidate,
     completed_hourly_metrics,
 )
@@ -133,3 +136,75 @@ def test_skips_outside_fixed_daily_window():
     )
     assert candidate is None
     assert status["status"] == "outside_daily_window"
+
+
+def test_direction_gate_uses_audited_seed_and_blocks_weak_short_side():
+    long_gate = adaptive_30d_direction_gate("LONG", {})
+    short_gate = adaptive_30d_direction_gate("SHORT", {})
+
+    assert long_gate["allowed"] is True
+    assert long_gate["profit_factor"] > 2.4
+    assert short_gate["allowed"] is False
+    assert short_gate["profit_factor"] < 1.25
+
+
+def test_live_decision_sizes_long_with_hard_stop_headroom():
+    now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
+    candidate, _ = build_adaptive_30d_shadow_candidate(
+        FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None
+    )
+    decision = build_adaptive_30d_live_decision(
+        {},
+        {},
+        {"equity": 15.0, "available_balance": 15.0, "positions": []},
+        now,
+        candidate=candidate,
+        closed_net_pcts=[10, 10, 10],
+    )
+
+    assert decision["action"] == "OPEN_LONG"
+    assert decision["strategy_version"] == LIVE_STRATEGY_VERSION
+    assert 0 < decision["risk_pct"] <= 15.0
+    assert decision["estimated_notional"] >= 10.0
+    assert decision["candidate"]["direction_gate"]["allowed"] is True
+    assert decision["signal"]["stop"] < decision["signal"]["last_price"]
+    profile = decision["signal"]["protection_profile"]
+    assert profile["protection_version"] == "adaptive_30d_daily_v1"
+    assert profile["runtime_intraday_trailing_enabled"] is False
+
+
+def test_live_decision_supports_contract_safe_short():
+    now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
+    candidate, _ = build_adaptive_30d_shadow_candidate(
+        FakeClient(now, down=True), _snapshot(now), {}, now, sleep_fn=lambda _: None
+    )
+    decision = build_adaptive_30d_live_decision(
+        {},
+        {},
+        {"equity": 15.0, "available_balance": 15.0, "positions": []},
+        now,
+        candidate=candidate,
+        closed_net_pcts=[20, 20, 20],
+    )
+
+    assert decision["action"] == "OPEN_SHORT"
+    assert decision["quantity"] > 0
+    assert decision["signal"]["stop"] > decision["signal"]["last_price"]
+
+
+def test_live_decision_refuses_equity_without_hard_stop_reserve():
+    now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
+    candidate, _ = build_adaptive_30d_shadow_candidate(
+        FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None
+    )
+    decision = build_adaptive_30d_live_decision(
+        {},
+        {},
+        {"equity": 5.4, "available_balance": 5.4, "positions": []},
+        now,
+        candidate=candidate,
+        closed_net_pcts=[20, 20, 20],
+    )
+
+    assert decision["action"] == "WAIT"
+    assert decision["reason"] == "adaptive_30d_insufficient_hard_stop_headroom"

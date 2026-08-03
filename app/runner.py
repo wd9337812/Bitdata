@@ -8,7 +8,12 @@ from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 from app.account_projection import canonical_account_projection
-from app.adaptive_30d_momentum_shadow import start_adaptive_30d_momentum_thread
+from app.adaptive_30d_momentum_shadow import (
+    LIVE_STRATEGY_VERSION as ADAPTIVE_30D_LIVE_VERSION,
+    STRATEGY_FAMILY as ADAPTIVE_30D_FAMILY,
+    build_adaptive_30d_live_decision,
+    start_adaptive_30d_momentum_thread,
+)
 from app.binance_client import BinanceFuturesClient
 from app.binance_rate import BinanceRateLimitError, rate_status, request_priority
 from app.config_store import load_config
@@ -315,6 +320,21 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
     updates = {"runtime_protection_positions": tracked}
     if strategy_family == MARKET_TSMOM_FAMILY:
         updates["market_tsmom_live_entry_day"] = datetime.now(timezone.utc).date().isoformat()
+    if strategy_family == ADAPTIVE_30D_FAMILY:
+        current = datetime.now(timezone.utc)
+        updates["adaptive_30d_live_entry_day"] = current.date().isoformat()
+        if not load_state().get("adaptive_30d_live_progress_reset_done"):
+            entry_equity = float(decision.get("equity") or 0)
+            updates.update(
+                {
+                    "adaptive_30d_live_progress_reset_done": True,
+                    "target_active_phase": "A",
+                    "target_phase_a_start_equity": entry_equity,
+                    "target_phase_a_start_time": current.isoformat(),
+                    "target_start_equity": entry_equity,
+                    "target_start_time": current.isoformat(),
+                }
+            )
     save_state(updates)
 
 
@@ -625,6 +645,140 @@ def manage_market_tsmom_live_position(
     return {"managed": True, "closed": False, "reason": "daily_stop_audit", "result": result}
 
 
+def manage_adaptive_30d_live_position(
+    client: BinanceFuturesClient,
+    config: dict,
+    state: dict,
+    account: dict,
+) -> dict:
+    if not config.get("adaptive_30d_live_enabled", False):
+        return {"managed": False, "reason": "adaptive_takeover_disabled"}
+    tracked = dict(state.get("runtime_protection_positions") or {})
+    tracked_entry = next(
+        (
+            (key, item)
+            for key, item in tracked.items()
+            if str(item.get("strategy_family") or "") == ADAPTIVE_30D_FAMILY
+            and str(item.get("strategy_version") or "") == ADAPTIVE_30D_LIVE_VERSION
+        ),
+        None,
+    )
+    if not tracked_entry:
+        return {"managed": False, "reason": "no_adaptive_position"}
+    tracked_key, tracked_item = tracked_entry
+    symbol = str(tracked_key).split(":", 1)[0].upper()
+    position = next(
+        (
+            item for item in account.get("positions", []) or []
+            if str(item.get("symbol") or "").upper() == symbol
+            and abs(float(item.get("positionAmt") or item.get("amount") or 0)) > 0
+        ),
+        None,
+    )
+    if not position:
+        tracked.pop(tracked_key, None)
+        save_state({"runtime_protection_positions": tracked})
+        return {"managed": False, "reason": "adaptive_position_already_flat"}
+    try:
+        opened_at = datetime.fromisoformat(
+            str(tracked_item.get("opened_at") or "").replace("Z", "+00:00")
+        )
+        if opened_at.tzinfo is None:
+            opened_at = opened_at.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        opened_at = datetime.now(timezone.utc)
+    max_hold_seconds = int(
+        tracked_item.get("max_hold_seconds")
+        or int(config.get("adaptive_30d_shadow_max_hold_hours", 168)) * 3600
+    )
+    if (
+        max_hold_seconds > 0
+        and (datetime.now(timezone.utc) - opened_at).total_seconds() >= max_hold_seconds
+    ):
+        with _EXECUTION_LOCK, request_priority("critical"):
+            result = close_rotation_position(client, position)
+        tracked.pop(tracked_key, None)
+        save_state({"runtime_protection_positions": tracked})
+        record_event(
+            "info",
+            "adaptive_30d_live_exit",
+            f"30日山寨动量仓达到最长7天持仓，已退出 {symbol}。",
+            {"strategy_version": ADAPTIVE_30D_LIVE_VERSION, "result": result},
+        )
+        return {"managed": True, "closed": True, "reason": "max_hold", "result": result}
+    return {"managed": True, "closed": False, "reason": "fixed_hold_active"}
+
+
+def manage_adaptive_30d_handoff(
+    client: BinanceFuturesClient,
+    config: dict,
+    state: dict,
+    account: dict,
+) -> dict:
+    if not config.get("adaptive_30d_live_enabled", False):
+        return {"managed": False, "reason": "adaptive_takeover_disabled"}
+    tracked = dict(state.get("runtime_protection_positions") or {})
+    existing = next(
+        (
+            (key, item)
+            for key, item in tracked.items()
+            if str(item.get("strategy_family") or "") == MARKET_TSMOM_FAMILY
+        ),
+        None,
+    )
+    if not existing:
+        return {"managed": False, "reason": "no_market_position_to_handoff"}
+    projected = {
+        **account,
+        "available_balance": float(account.get("equity") or 0),
+        "positions": [],
+    }
+    replacement = build_adaptive_30d_live_decision(config, state, projected)
+    if replacement.get("action") not in {"OPEN_LONG", "OPEN_SHORT"}:
+        return {
+            "managed": False,
+            "reason": "no_fresh_executable_adaptive_replacement",
+            "replacement": replacement,
+        }
+    tracked_key, tracked_item = existing
+    symbol = str(tracked_key).split(":", 1)[0].upper()
+    position = next(
+        (
+            item for item in account.get("positions", []) or []
+            if str(item.get("symbol") or "").upper() == symbol
+            and abs(float(item.get("positionAmt") or item.get("amount") or 0)) > 0
+        ),
+        None,
+    )
+    if not position:
+        return {"managed": False, "reason": "tracked_market_position_not_found"}
+    with _EXECUTION_LOCK, request_priority("critical"):
+        result = close_rotation_position(client, position)
+    tracked.pop(tracked_key, None)
+    save_state({"runtime_protection_positions": tracked})
+    record_event(
+        "info",
+        "adaptive_30d_live_handoff",
+        f"已安全退出受保护的 {symbol} 市场趋势仓，下一轮切换到 "
+        f"{replacement.get('symbol')} 30日山寨动量信号。",
+        {
+            "from_strategy_version": tracked_item.get("strategy_version"),
+            "to_strategy_version": ADAPTIVE_30D_LIVE_VERSION,
+            "replacement_symbol": replacement.get("symbol"),
+            "replacement_direction": replacement.get("direction"),
+            "replacement_risk_pct": replacement.get("risk_pct"),
+            "result": result,
+        },
+    )
+    return {
+        "managed": True,
+        "closed": True,
+        "reason": "fresh_adaptive_replacement",
+        "replacement": replacement,
+        "result": result,
+    }
+
+
 def stage4_scalp_overlay_config(config: dict, state: dict) -> dict | None:
     route = state.get("stage_route") or {}
     if route.get("stage") != "S4" or not config.get("stage_s4_scalp_overlay_enabled", True):
@@ -771,6 +925,27 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             if fast_lane and not symbols_override:
                 return {"status": "grid_event_ignored", "results": grid_results, "loop_seconds": int(config.get("grid_loop_seconds", 300))}
 
+    adaptive_takeover = bool(config.get("adaptive_30d_live_enabled", False)) and str(
+        (state.get("stage_route") or {}).get("stage") or ""
+    ).upper() == "S0"
+    adaptive_handoff = manage_adaptive_30d_handoff(
+        client, config, state, account
+    ) if adaptive_takeover else {"managed": False}
+    if adaptive_handoff.get("closed"):
+        return {
+            "status": "adaptive_30d_handoff_closed",
+            "management": adaptive_handoff,
+            "loop_seconds": loop_seconds_for(config, config.get("growth_mode")),
+        }
+    adaptive_management = manage_adaptive_30d_live_position(
+        client, config, state, account
+    ) if adaptive_takeover else {"managed": False}
+    if adaptive_management.get("closed"):
+        return {
+            "status": "adaptive_30d_position_closed",
+            "management": adaptive_management,
+            "loop_seconds": loop_seconds_for(config, config.get("growth_mode")),
+        }
     market_tsmom_management = manage_market_tsmom_live_position(
         client, config, state, account
     )
@@ -783,7 +958,29 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     market_tsmom_takeover = bool(config.get("market_tsmom_live_enabled", False)) and str(
         (state.get("stage_route") or {}).get("stage") or ""
     ).upper() == "S0"
-    if market_tsmom_takeover:
+    if adaptive_takeover:
+        decision = build_adaptive_30d_live_decision(config, state, account)
+        route = "adaptive_30d_momentum"
+        if (
+            decision.get("action") == "WAIT"
+            and config.get("adaptive_30d_live_bnb_fallback_enabled", True)
+            and market_tsmom_takeover
+        ):
+            fallback = build_market_tsmom_live_decision(config, state, account)
+            if fallback.get("action") != "WAIT":
+                decision = fallback
+                route = "market_tsmom_bnb_fallback"
+        decision["scan"] = {
+            "mode": {"mode": route, "strategy": decision.get("strategy")},
+            "candidates": [decision["candidate"]] if decision.get("candidate") else [],
+            "v4_candidates": [],
+            "funnel": {
+                "takeover": route,
+                "primary": "adaptive_30d_momentum",
+                "fallback": "market_tsmom_consensus",
+            },
+        }
+    elif market_tsmom_takeover:
         decision = build_market_tsmom_live_decision(config, state, account)
         decision["scan"] = {
             "mode": {"mode": "market_tsmom", "strategy": "market_tsmom_consensus"},

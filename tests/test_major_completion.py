@@ -213,7 +213,14 @@ def test_runtime_protection_closes_v473_stagnation_after_cost():
     assert action["reason"] == "stagnation_after_cost"
 
 
-@pytest.mark.parametrize("protection_version", ["market_tsmom_daily_v2", "market_tsmom_daily_v3"])
+@pytest.mark.parametrize(
+    "protection_version",
+    [
+        "market_tsmom_daily_v2",
+        "market_tsmom_daily_v3",
+        "adaptive_30d_daily_v1",
+    ],
+)
 def test_runtime_protection_leaves_daily_trend_position_to_daily_manager(protection_version):
     state = {
         "runtime_protection_positions": {

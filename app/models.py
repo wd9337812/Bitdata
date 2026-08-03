@@ -353,10 +353,22 @@ class TradingConfig(BaseModel):
     adaptive_30d_shadow_min_onboard_age_days: int = Field(default=45, ge=0, le=3650)
     adaptive_30d_shadow_min_abs_breadth_pct: float = Field(default=2.0, ge=0, le=100)
     adaptive_30d_shadow_max_abs_breadth_pct: float = Field(default=10.0, ge=0, le=100)
-    adaptive_30d_shadow_stop_atr: float = Field(default=2.5, ge=0.1, le=10)
-    adaptive_30d_shadow_reward_r: float = Field(default=2.5, ge=0.1, le=10)
-    adaptive_30d_shadow_max_stop_pct: float = Field(default=12.0, ge=0.1, le=30)
-    adaptive_30d_shadow_max_hold_hours: int = Field(default=120, ge=1, le=720)
+    adaptive_30d_shadow_stop_atr: float = Field(default=3.0, ge=0.1, le=10)
+    adaptive_30d_shadow_reward_r: float = Field(default=3.0, ge=0.1, le=10)
+    adaptive_30d_shadow_max_stop_pct: float = Field(default=15.0, ge=0.1, le=30)
+    adaptive_30d_shadow_max_hold_hours: int = Field(default=168, ge=1, le=720)
+    adaptive_30d_live_enabled: bool = True
+    adaptive_30d_live_new_entries_enabled: bool = True
+    adaptive_30d_live_entry_window_hours: int = Field(default=2, ge=1, le=6)
+    adaptive_30d_live_direction_window: int = Field(default=8, ge=3, le=50)
+    adaptive_30d_live_direction_min_trades: int = Field(default=3, ge=3, le=50)
+    adaptive_30d_live_direction_min_profit_factor: float = Field(default=1.25, ge=0, le=10)
+    adaptive_30d_live_risk_pct: float = Field(default=15.0, ge=0.01, le=20)
+    adaptive_30d_live_leverage: int = Field(default=2, ge=1, le=5)
+    adaptive_30d_live_margin_pct: float = Field(default=90.0, ge=5, le=95)
+    adaptive_30d_live_min_equity_usdt: float = Field(default=10.0, ge=5, le=10000)
+    adaptive_30d_live_hard_stop_reserve_usdt: float = Field(default=0.50, ge=0, le=100)
+    adaptive_30d_live_bnb_fallback_enabled: bool = True
     market_tsmom_shadow_enabled: bool = True
     market_tsmom_shadow_utc_hour: int = Field(default=0, ge=0, le=23)
     market_tsmom_shadow_minute_start: int = Field(default=3, ge=0, le=59)
@@ -371,14 +383,14 @@ class TradingConfig(BaseModel):
     market_tsmom_shadow_stop_pct: float = Field(default=15.0, ge=0.1, le=50)
     market_tsmom_shadow_atr_multiple: float = Field(default=3.0, ge=0.1, le=10)
     market_tsmom_shadow_max_hold_hours: int = Field(default=480, ge=1, le=720)
-    market_tsmom_shadow_reference_risk_pct: float = Field(default=15.0, ge=0.01, le=30)
+    market_tsmom_shadow_reference_risk_pct: float = Field(default=20.0, ge=0.01, le=30)
     market_tsmom_shadow_execution_equity_usdt: float = Field(default=15.153, ge=5, le=10000)
     market_tsmom_live_enabled: bool = False
     market_tsmom_live_new_entries_enabled: bool = True
     market_tsmom_bnb_stop_pct: float = Field(default=15.0, ge=1, le=30)
     market_tsmom_bnb_max_hold_hours: int = Field(default=120, ge=24, le=240)
     market_tsmom_bnb_entry_window_hours: int = Field(default=2, ge=1, le=6)
-    market_tsmom_live_risk_pct: float = Field(default=15.0, ge=0.01, le=30)
+    market_tsmom_live_risk_pct: float = Field(default=20.0, ge=0.01, le=30)
     market_tsmom_live_leverage: int = Field(default=2, ge=1, le=3)
     market_tsmom_live_margin_pct: float = Field(default=90.0, ge=5, le=95)
     market_tsmom_live_min_equity_usdt: float = Field(default=10.0, ge=5, le=10000)

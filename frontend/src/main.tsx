@@ -1269,7 +1269,7 @@ function strategyFamilyLabel(value?: string) {
     extreme_v4_control: "V4 简单突破对照",
     extreme_v31_challenger: "V3.1 历史归档",
     cross_sectional_momentum: "横截面动量研究",
-    adaptive_30d_momentum: "30日动量未来研究",
+    adaptive_30d_momentum: "30日山寨动量",
     extreme_v2_roll: "Extreme V2 滚仓",
     orderbook_scalp: "盘口剥头皮",
     grid_stable: "稳定网格",
@@ -1308,11 +1308,11 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
   ) || {};
   const adaptive30dRelease = (data.by_release || []).find(
     (row: any) => row.strategy_family === "adaptive_30d_momentum"
-      && row.strategy_version === "s0_xmom_30d_paper_v1",
+      && row.strategy_version === "s0_xmom_30d_paper_v2",
   ) || {};
   const marketTsmomRelease = (data.by_release || []).find(
     (row: any) => row.strategy_family === "market_tsmom_consensus"
-      && row.strategy_version === String(marketTsmom.strategy_version || "s0_market_tsmom_bnb_28_56_time5_stop15_v5"),
+      && row.strategy_version === String(marketTsmom.strategy_version || "s0_market_tsmom_bnb_28_56_time5_stop15_risk20_v6"),
   ) || {};
   const marketTsmomFrequencyRelease = (data.by_release || []).find(
     (row: any) => row.strategy_family === "market_tsmom_consensus"
@@ -1349,10 +1349,10 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h2>BNB 28/56 日趋势共振 V5</h2>
-            <p>每天用高流动性永续币构造市场指数。28 日动量超过冻结门槛且 56 日趋势向上时，只执行冻结回测选出的 BNB 五日规则；风险不变，使用更宽止损和更小名义仓位减少趋势内噪声止损。</p>
+            <h2>BNB 28/56 日趋势后备</h2>
+            <p>BNB 不再是 S0 唯一候选。只有当天没有可执行的 30 日山寨动量机会时，系统才使用这条低频正期望路线作为后备。</p>
           </div>
-          <span className={marketTsmom.live_effect === "s0_takeover" ? "pill ok" : "pill"}>{marketTsmom.live_effect === "s0_takeover" ? "当前 S0 实盘" : "仅影子验证"}</span>
+          <span className="pill">无山寨机会时后备</span>
         </div>
         <div className="metrics">
           <MetricCard title="今日共振" value={marketTsmom.status === "candidate_ready" ? `已建立 ${marketTsmom.symbol || marketTsmom.candidate?.symbol || "可执行"} 多头影子` : marketTsmom.status === "no_signal" ? "趋势条件未同时满足" : marketTsmom.status === "insufficient_history" ? "连续日线不足" : marketTsmom.status === "error" ? "研究线程异常" : marketTsmom.enabled === false ? "已关闭" : "等待每日窗口"} sub={marketTsmom.reason || "UTC 00:03-00:50 评估；新版本部署当天允许一次补评估"} tone={marketTsmom.status === "error" ? "negative" : marketTsmom.status === "candidate_ready" ? "positive" : ""} />
@@ -1382,16 +1382,16 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h2>30 日动量未来验证</h2>
-            <p>每天一次，用连续 30 日小时数据在高流动性永续币中选择最强或最弱端，并用真实后续行情模拟持有最多 5 天。它只验证未知未来，不会接管实盘、许可证、信用或仓位。</p>
+            <h2>30 日山寨动量主路线</h2>
+            <p>每天一次，在至少 60 个高流动性永续币中选择与 BTC 和山寨市场广度同向的最强或最弱端。方向门通过后按 15% 计划风险入场，3 ATR 止损、3R 止盈、最长持有 7 天。</p>
           </div>
-          <span className="pill">严格隔离</span>
+          <span className={adaptive30d.live_effect === "s0_primary" ? "pill ok" : "pill"}>{adaptive30d.live_effect === "s0_primary" ? "当前 S0 主路线" : "等待启用"}</span>
         </div>
         <div className="metrics">
-          <MetricCard title="今日评估" value={adaptive30d.status === "candidate_ready" ? "已建立研究影子" : adaptive30d.status === "breadth_outside_band" ? "市场广度不合适" : adaptive30d.status === "mixed_market" ? "BTC 与山寨不同向" : adaptive30d.status === "insufficient_history" ? "连续历史不足" : adaptive30d.status === "error" ? "研究线程异常" : adaptive30d.enabled === false ? "已关闭" : "等待每日窗口"} sub={adaptive30d.reason || "UTC 00:02-00:45 评估；REST 仅使用后台预算"} tone={adaptive30d.status === "error" ? "negative" : ""} />
+          <MetricCard title="今日评估" value={adaptive30d.status === "candidate_ready" ? "已选出山寨候选" : adaptive30d.status === "breadth_outside_band" ? "市场广度不合适" : adaptive30d.status === "mixed_market" ? "BTC 与山寨不同向" : adaptive30d.status === "insufficient_history" ? "连续历史不足" : adaptive30d.status === "error" ? "研究线程异常" : adaptive30d.enabled === false ? "已关闭" : "等待每日窗口"} sub={adaptive30d.reason || "UTC 00:02-00:45 评估；REST 仅使用后台预算，保护和下单优先"} tone={adaptive30d.status === "error" ? "negative" : adaptive30d.status === "candidate_ready" ? "positive" : ""} />
           <MetricCard title="未来数据覆盖" value={`${fmt(adaptive30d.usable_universe_size || adaptive30d.universe_size, 0)} 个币`} sub={`30日广度 ${fmt(adaptive30d.breadth_30d_pct, 2)}% · BTC ${fmt(adaptive30d.btc_return_30d_pct, 2)}% · 限流让路 ${fmt(adaptive30d.rate_limit_retries, 0)} 次`} />
           <MetricCard title="今日选择" value={adaptive30d.symbol || "-"} sub={adaptive30d.direction ? `${adaptive30d.direction === "LONG" ? "做多" : "做空"} · 30日强弱 ${fmt(adaptive30d.selected_return_30d_pct, 2)}% · 入场延迟 ${fmt(adaptive30d.entry_delay_seconds, 0)} 秒` : "没有符合冻结规则的市场时保持空白"} />
-          <MetricCard title="独立未来结果" value={`${fmt(adaptive30dRelease.closed, 0)} 笔`} sub={`${pfLabel(adaptive30dRelease.profit_factor, adaptive30dRelease.closed)} · 净收益 ${fmt(adaptive30dRelease.net_pnl, 4)} U · 至少 30 笔后才讨论资格`} tone={Number(adaptive30dRelease.net_pnl || 0) > 0 ? "positive" : Number(adaptive30dRelease.net_pnl || 0) < 0 ? "negative" : ""} />
+          <MetricCard title="当前版本独立影子" value={`${fmt(adaptive30dRelease.closed, 0)} 笔`} sub={`${pfLabel(adaptive30dRelease.profit_factor, adaptive30dRelease.closed)} · 净收益 ${fmt(adaptive30dRelease.net_pnl, 4)} U · 只用于滚动方向门，不混入旧V策略`} tone={Number(adaptive30dRelease.net_pnl || 0) > 0 ? "positive" : Number(adaptive30dRelease.net_pnl || 0) < 0 ? "negative" : ""} />
         </div>
       </div>
       {hasChallenger && <div className="panel table-wrap">
@@ -1898,17 +1898,22 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("shadow_trading_enabled", "影子交易", "只是假装开仓并跟踪结果，不会调用 Binance 下单接口")}
           {toggle("xmom_shadow_enabled", "横截面动量研究影子", "每小时从实时币种池选择动量最强端做独立纸面验证；不参与当前实盘准入、许可证、信用或仓位")}
           {number("xmom_shadow_min_onboard_age_days", "动量研究最低币龄", "默认 30 天；历史审计显示刚上市币种拖累结果，仅影响独立研究影子")}
-          {toggle("adaptive_30d_shadow_enabled", "30 日动量未来研究", "每天一次抓取最多 150 个高流动性币的连续小时数据；只做独立未来影子，不影响实盘")}
-          {number("adaptive_30d_shadow_symbol_limit", "30 日研究币种上限", "默认 150；REST 请求只走后台预算，交易与保护请求始终优先")}
+          {toggle("adaptive_30d_shadow_enabled", "30 日山寨动量评估", "每天一次抓取最多 150 个高流动性币的连续小时数据，同时生成独立影子与当天实盘候选")}
+          {number("adaptive_30d_shadow_symbol_limit", "30 日山寨扫描上限", "默认 150；REST 请求只走后台预算，交易与保护请求始终优先")}
+          {toggle("adaptive_30d_live_enabled", "30 日山寨动量作为 S0 主路线", "开启后山寨动量优先，只有当天无可执行山寨候选时才检查 BNB 后备")}
+          {toggle("adaptive_30d_live_bnb_fallback_enabled", "允许 BNB 正期望后备", "推荐开启；它不会挤掉新鲜山寨候选")}
+          {number("adaptive_30d_live_risk_pct", "山寨主路线计划风险%", "默认 15%；历史压力测试显示 30% 会显著增加触发 5U 硬停止的概率")}
+          {number("adaptive_30d_live_direction_min_profit_factor", "滚动方向门最低 PF", "默认 1.25；多空分别计算，当前版本影子结果逐步替换冻结历史种子")}
+          {number("adaptive_30d_live_entry_window_hours", "日线候选入场窗口小时", "默认 2 小时；过期不追价，等待下一次完整日线")}
           {toggle("market_tsmom_shadow_enabled", "BNB 28/56 日趋势影子", "每天一次构造 20 币市场指数；市场趋势共振时只验证 BNB 固定规则，版本证据独立")}
           {number("market_tsmom_shadow_prefetch_symbols", "趋势共振预选币数", "默认 40；仅每日读取 60 根日线，按近 30 日成交额选 20 个构造市场指数")}
           {number("market_tsmom_shadow_top_third_threshold_pct", "28 日历史上三分位门槛%", "默认 10.65%；来自冻结历史样本，不随短期输赢自动漂移")}
-          {number("market_tsmom_shadow_reference_risk_pct", "趋势共振参考风险%", "默认 15%；与当前实盘风险预算同口径，影子仍不会真实下单")}
+          {number("market_tsmom_shadow_reference_risk_pct", "趋势共振参考风险%", "默认 20%；与当前实盘风险预算同口径，影子仍不会真实下单")}
           {number("market_tsmom_bnb_stop_pct", "BNB 固定止损%", "默认 15%；系统会同步缩小名义仓位，使账户计划风险仍不超过配置上限")}
           {number("market_tsmom_bnb_max_hold_hours", "BNB 最长持仓小时", "默认 120 小时（5 天）；到期按市价退出，不用短期噪声追踪止损")}
           {number("market_tsmom_bnb_entry_window_hours", "日线信号入场窗口小时", "默认 2 小时；错过 UTC 日线信号后的执行窗口就等下一天，避免追入过期信号")}
           {toggle("market_tsmom_live_enabled", "允许 BNB 趋势规则接管 S0 实盘", "开启后只在 28/56 日市场趋势共振时执行 BNB 五日规则，不再执行原短打策略")}
-          {number("market_tsmom_live_risk_pct", "BNB 实盘单笔风险%", "默认 15%，硬上限 30%；系统仍按真实止损距离、可用余额和合约步长向下取整")}
+          {number("market_tsmom_live_risk_pct", "BNB 实盘单笔风险%", "默认 20%，硬上限 30%；系统仍按真实止损距离、可用余额和合约步长向下取整")}
           {number("market_tsmom_live_min_equity_usdt", "趋势实盘最低权益 U", "默认 10U；低于该值或距离 5U 硬停止不足时不会开仓")}
           {number("shadow_min_candidate_score", "影子交易最低候选分", "默认 70；只记录值得研究的机会")}
           {number("shadow_dedupe_minutes", "影子信号去重分钟", "同币、同方向、同信号在窗口内只算一笔")}

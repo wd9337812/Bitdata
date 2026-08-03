@@ -21,12 +21,13 @@ from app.telemetry import record_event_throttled
 
 
 STRATEGY_FAMILY = "market_tsmom_consensus"
-STRATEGY_VERSION = "s0_market_tsmom_bnb_28_56_time5_stop15_v5"
+STRATEGY_VERSION = "s0_market_tsmom_bnb_28_56_time5_stop15_risk20_v6"
 FREQUENCY_CHALLENGER_VERSION = "s0_market_tsmom_bnb_28_56_time3_stop15_shadow_v1"
 LEGACY_STRATEGY_VERSIONS = frozenset(
     {
         "s0_market_tsmom_28_56_trailing_v3",
         "s0_market_tsmom_bnb_28_56_time5_v4",
+        "s0_market_tsmom_bnb_28_56_time5_stop15_v5",
     }
 )
 LIVE_SYMBOL = "BNBUSDT"
@@ -144,13 +145,15 @@ def _size_execution_option(
     signal = dict(option.get("signal") or {})
     entry = float(signal.get("last_price") or 0)
     stop = float(signal.get("stop") or 0)
-    if entry <= 0 or stop <= 0 or stop >= entry:
+    direction = str(option.get("direction") or signal.get("signal") or "LONG").upper()
+    invalid_stop = stop >= entry if direction == "LONG" else stop <= entry
+    if entry <= 0 or stop <= 0 or invalid_stop:
         return {"eligible": False, "reason": "invalid_protection"}
     risk_budget = min(
         equity * requested_risk_pct / 100,
         max(0.0, equity - hard_stop - reserve),
     )
-    stop_distance = entry - stop
+    stop_distance = abs(entry - stop)
     max_notional = available * margin_fraction * leverage
     raw_quantity = min(risk_budget / stop_distance, max_notional / entry)
     constraints = dict(option.get("execution_constraints") or {})
@@ -294,7 +297,7 @@ def build_market_tsmom_live_decision(
         }
     requested_risk_pct = min(
         30.0,
-        max(0.01, float(config.get("market_tsmom_live_risk_pct", 10.0))),
+        max(0.01, float(config.get("market_tsmom_live_risk_pct", 20.0))),
     )
     leverage = max(1, min(3, int(config.get("market_tsmom_live_leverage", 1))))
     margin_fraction = min(
@@ -368,7 +371,7 @@ def build_market_tsmom_live_decision(
     signal["take_profit"] = entry * 2.0
     signal["protection_profile"] = {
         **dict(signal.get("protection_profile") or {}),
-        "protection_version": "market_tsmom_bnb_time5_stop15_v5",
+        "protection_version": "market_tsmom_bnb_time5_stop15_risk20_v6",
         "max_hold_seconds": int(config.get("market_tsmom_bnb_max_hold_hours", 120)) * 3600,
         "runtime_intraday_trailing_enabled": False,
         "daily_stop_audit_enabled": False,
@@ -713,7 +716,7 @@ def build_market_tsmom_shadow_candidate(
             "status": "missing_bnb_daily_history",
             "reason": "BNB daily history is unavailable for the fixed five-day rule",
         }
-    risk_pct = float(config.get("market_tsmom_shadow_reference_risk_pct", 15.0))
+    risk_pct = float(config.get("market_tsmom_shadow_reference_risk_pct", 20.0))
     execution_options = {
         symbol: option
         for symbol, daily in (("BTCUSDT", btc_daily), ("ETHUSDT", eth_daily))
