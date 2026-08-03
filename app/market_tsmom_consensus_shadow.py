@@ -13,13 +13,14 @@ from typing import Any, Callable
 from app.binance_client import BinanceFuturesClient
 from app.binance_rate import BinanceRateLimitError, request_priority
 from app.cross_sectional_momentum import _fresh
+from app.exchange_filters import round_step
 from app.market_stream import data_dir, read_snapshot
 from app.shadow_trading import manage_shadow_strategy_positions, update_shadow_trades
 from app.telemetry import record_event_throttled
 
 
 STRATEGY_FAMILY = "market_tsmom_consensus"
-STRATEGY_VERSION = "s0_market_tsmom_28_56_trailing_v2"
+STRATEGY_VERSION = "s0_market_tsmom_28_56_trailing_v3"
 _THREAD: threading.Thread | None = None
 _LOCK = threading.Lock()
 
@@ -71,6 +72,84 @@ def current_market_tsmom_candidate(
     except (TypeError, ValueError):
         return None
     return candidate if boundary.date() == current.date() else None
+
+
+def _option_constraints(exchange_info: dict[str, Any], symbol: str) -> dict[str, float | str]:
+    info = next(
+        (
+            item
+            for item in exchange_info.get("symbols", [])
+            if str(item.get("symbol") or "").upper() == symbol.upper()
+        ),
+        {},
+    )
+    filters = {
+        str(item.get("filterType") or ""): item
+        for item in info.get("filters", [])
+    }
+    lot = filters.get("LOT_SIZE") or {}
+    notional = filters.get("MIN_NOTIONAL") or filters.get("NOTIONAL") or {}
+    return {
+        "step_size": str(lot.get("stepSize") or "0.001"),
+        "min_quantity": float(lot.get("minQty") or 0.001),
+        "min_notional": float(
+            notional.get("notional", notional.get("minNotional", 0)) or 0
+        ),
+    }
+
+
+def _size_execution_option(
+    option: dict[str, Any],
+    *,
+    equity: float,
+    available: float,
+    requested_risk_pct: float,
+    leverage: int,
+    margin_fraction: float,
+    hard_stop: float,
+    reserve: float,
+    effective_min_notional: float,
+) -> dict[str, Any]:
+    signal = dict(option.get("signal") or {})
+    entry = float(signal.get("last_price") or 0)
+    stop = float(signal.get("stop") or 0)
+    if entry <= 0 or stop <= 0 or stop >= entry:
+        return {"eligible": False, "reason": "invalid_protection"}
+    risk_budget = min(
+        equity * requested_risk_pct / 100,
+        max(0.0, equity - hard_stop - reserve),
+    )
+    stop_distance = entry - stop
+    max_notional = available * margin_fraction * leverage
+    raw_quantity = min(risk_budget / stop_distance, max_notional / entry)
+    constraints = dict(option.get("execution_constraints") or {})
+    step = str(constraints.get("step_size") or "0.001")
+    quantity = round_step(raw_quantity, step)
+    min_quantity = float(constraints.get("min_quantity") or 0)
+    required_notional = max(
+        effective_min_notional,
+        float(constraints.get("min_notional") or 0),
+        min_quantity * entry,
+    )
+    notional = quantity * entry
+    actual_risk_pct = quantity * stop_distance / equity * 100 if equity > 0 else 0.0
+    eligible = bool(
+        quantity > 0
+        and quantity >= min_quantity
+        and notional >= required_notional
+        and actual_risk_pct <= requested_risk_pct + 1e-9
+    )
+    return {
+        "eligible": eligible,
+        "reason": "eligible" if eligible else "below_exchange_minimum",
+        "quantity": quantity,
+        "raw_quantity": raw_quantity,
+        "notional": notional,
+        "actual_risk_pct": actual_risk_pct,
+        "required_notional": required_notional,
+        "max_notional": max_notional,
+        "max_margin": available * margin_fraction,
+    }
 
 
 def build_market_tsmom_live_decision(
@@ -145,52 +224,68 @@ def build_market_tsmom_live_decision(
             "candidate": candidate,
             "equity": equity,
         }
-    signal = dict(candidate.get("signal") or {})
-    entry = float(signal.get("last_price") or 0)
-    stop = float(signal.get("stop") or 0)
-    if entry <= 0 or stop <= 0 or stop >= entry:
-        return {
-            **base,
-            "action": "WAIT",
-            "reason": "market_tsmom_invalid_protection",
-            "risk": {"allowed": False, "reason": "market_tsmom_invalid_protection"},
-            "candidate": candidate,
-        }
     requested_risk_pct = min(
         30.0,
         max(0.01, float(config.get("market_tsmom_live_risk_pct", 10.0))),
     )
-    risk_budget = min(
-        equity * requested_risk_pct / 100,
-        max(0.0, equity - hard_stop - reserve),
-    )
-    stop_distance = entry - stop
-    quantity = risk_budget / stop_distance
     leverage = max(1, min(3, int(config.get("market_tsmom_live_leverage", 1))))
     margin_fraction = min(
         0.95,
         max(0.05, float(config.get("market_tsmom_live_margin_pct", 90.0)) / 100),
     )
-    max_notional = available * margin_fraction * leverage
-    quantity = min(quantity, max_notional / entry)
-    notional = quantity * entry
-    actual_risk_pct = quantity * stop_distance / equity * 100 if equity > 0 else 0.0
     minimum_notional = float(config.get("effective_min_order_notional_usdt", 10.0))
-    if quantity <= 0 or notional < minimum_notional:
+    options = dict(candidate.get("execution_options") or {})
+    if not options:
+        options = {str(candidate.get("symbol") or "BTCUSDT"): candidate}
+    preferred = ["BTCUSDT"]
+    if bool(config.get("market_tsmom_execution_fallback_enabled", True)):
+        preferred.append("ETHUSDT")
+    selected_option = None
+    sizing = None
+    sizing_attempts = {}
+    for symbol in preferred:
+        option = options.get(symbol)
+        if not isinstance(option, dict):
+            continue
+        attempt = _size_execution_option(
+            option,
+            equity=equity,
+            available=available,
+            requested_risk_pct=requested_risk_pct,
+            leverage=leverage,
+            margin_fraction=margin_fraction,
+            hard_stop=hard_stop,
+            reserve=reserve,
+            effective_min_notional=minimum_notional,
+        )
+        sizing_attempts[symbol] = attempt
+        if attempt.get("eligible"):
+            selected_option = option
+            sizing = attempt
+            break
+    if selected_option is None or sizing is None:
         return {
             **base,
             "action": "WAIT",
-            "reason": "market_tsmom_below_effective_min_notional",
+            "reason": "market_tsmom_no_contract_safe_execution",
             "risk": {
                 "allowed": False,
-                "reason": "market_tsmom_below_effective_min_notional",
-                "max_notional": max_notional,
+                "reason": "market_tsmom_no_contract_safe_execution",
+                "attempts": sizing_attempts,
             },
             "candidate": candidate,
             "equity": equity,
         }
+    symbol = str(selected_option.get("symbol") or "").upper()
+    signal = dict(selected_option.get("signal") or {})
+    entry = float(signal.get("last_price") or 0)
+    stop = float(signal.get("stop") or 0)
+    quantity = float(sizing["quantity"])
+    notional = float(sizing["notional"])
+    actual_risk_pct = float(sizing["actual_risk_pct"])
     live_candidate = {
         **candidate,
+        **selected_option,
         "mode": "market_tsmom",
         "strategy": "market_tsmom_consensus",
         "strategy_role": "active",
@@ -199,27 +294,33 @@ def build_market_tsmom_live_decision(
         "base_risk_pct": requested_risk_pct,
         "leverage": leverage,
         "margin_pct": margin_fraction * 100,
-        "decision_reason": "28/56-day market trend consensus live takeover candidate",
+        "decision_reason": (
+            "28/56-day market trend consensus live takeover; BTC preferred, "
+            "ETH used only when BTC minimum contract exceeds the risk budget"
+        ),
     }
     signal["take_profit"] = entry * 2.0
     signal["protection_profile"] = {
         **dict(signal.get("protection_profile") or {}),
-        "protection_version": "market_tsmom_daily_v2",
+        "protection_version": "market_tsmom_daily_v3",
         "max_hold_seconds": int(config.get("market_tsmom_shadow_max_hold_hours", 480)) * 3600,
         "runtime_intraday_trailing_enabled": False,
     }
     live_candidate["signal"] = signal
     return {
         **base,
-        "symbol": "BTCUSDT",
+        "symbol": symbol,
         "action": "OPEN_LONG",
         "direction": "LONG",
         "signal": signal,
         "risk": {
             "allowed": True,
             "reason": "market_tsmom_live_takeover",
-            "max_notional": max_notional,
-            "max_margin": available * margin_fraction,
+            "max_notional": sizing["max_notional"],
+            "max_margin": sizing["max_margin"],
+            "required_notional": sizing["required_notional"],
+            "execution_fallback_used": symbol != "BTCUSDT",
+            "attempts": sizing_attempts,
         },
         "quantity": quantity,
         "estimated_notional": notional,
@@ -373,6 +474,48 @@ def _fetch_daily_series(
     return result, retries
 
 
+def _build_execution_option(
+    symbol: str,
+    snapshot: dict[str, Any],
+    daily: dict[str, Any],
+    exchange_info: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    ticker = (read_snapshot().get("tickers") or {}).get(symbol) or (
+        snapshot.get("tickers") or {}
+    ).get(symbol) or {}
+    entry = float(ticker.get("lastPrice") or 0)
+    if entry <= 0:
+        return None
+    stop_pct = float(config.get("market_tsmom_shadow_stop_pct", 15.0)) / 100
+    atr_multiple = float(config.get("market_tsmom_shadow_atr_multiple", 3.0))
+    trailing_stop = float(daily["last_close"]) - atr_multiple * float(daily["atr_10"])
+    initial_stop = max(entry * (1.0 - stop_pct), trailing_stop)
+    return {
+        "symbol": symbol,
+        "ticker": {"last": entry},
+        "execution_constraints": _option_constraints(exchange_info, symbol),
+        "signal": {
+            "signal": "LONG",
+            "last_price": entry,
+            "atr": float(daily["atr_10"]),
+            "stop": initial_stop,
+            "take_profit": entry * 10.0,
+            "protection_profile": {
+                "stop_pct": stop_pct * 100,
+                "atr_days": 10,
+                "atr_multiple": atr_multiple,
+                "daily_trailing_stop": trailing_stop,
+                "take_profit_mode": "none_time_exit_only",
+                "max_hold_seconds": int(
+                    config.get("market_tsmom_shadow_max_hold_hours", 480)
+                )
+                * 3600,
+            },
+        },
+    }
+
+
 def build_market_tsmom_shadow_candidate(
     client: BinanceFuturesClient,
     snapshot: dict[str, Any],
@@ -380,13 +523,15 @@ def build_market_tsmom_shadow_candidate(
     now: datetime,
     *,
     sleep_fn: Callable[[float], None] = time.sleep,
+    allow_outside_window: bool = False,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
-    if not _inside_daily_window(config, now):
+    if not allow_outside_window and not _inside_daily_window(config, now):
         return None, {"status": "outside_daily_window", "reason": "等待每日 UTC 固定评估窗口"}
 
-    universe = _eligible_symbols(snapshot, client.exchange_info(), config, now)
+    exchange_info = client.exchange_info()
+    universe = _eligible_symbols(snapshot, exchange_info, config, now)
     prefetch_minimum = int(config.get("market_tsmom_shadow_min_prefetch_symbols", 25))
     if len(universe) < prefetch_minimum:
         return None, {
@@ -445,15 +590,78 @@ def build_market_tsmom_shadow_candidate(
             "status": "missing_btc_daily_history",
             "reason": "BTC daily history is unavailable for ATR trailing protection",
         }
+    eth_daily = completed_daily_series(
+        client.klines("ETHUSDT", "1d", 60), boundary_ms
+    )
+    if not eth_daily:
+        return None, {
+            **context,
+            "status": "missing_eth_daily_history",
+            "reason": "ETH daily history is unavailable for ATR trailing protection",
+        }
     stop_pct = float(config.get("market_tsmom_shadow_stop_pct", 15.0)) / 100
     atr_multiple = float(config.get("market_tsmom_shadow_atr_multiple", 3.0))
     hold_hours = int(config.get("market_tsmom_shadow_max_hold_hours", 480))
     risk_pct = float(config.get("market_tsmom_shadow_reference_risk_pct", 10.0))
     trailing_stop = float(btc_daily["last_close"]) - atr_multiple * float(btc_daily["atr_10"])
     initial_stop = max(entry * (1.0 - stop_pct), trailing_stop)
+    execution_options = {
+        symbol: option
+        for symbol, daily in (("BTCUSDT", btc_daily), ("ETHUSDT", eth_daily))
+        if (
+            option := _build_execution_option(
+                symbol, snapshot, daily, exchange_info, config
+            )
+        )
+    }
+    if len(execution_options) < 2:
+        return None, {
+            **context,
+            "status": "missing_execution_price",
+            "reason": "BTC/ETH realtime prices are unavailable",
+        }
+    reference_equity = float(
+        config.get("market_tsmom_shadow_execution_equity_usdt", 15.153)
+    )
+    reference_attempts = {
+        symbol: _size_execution_option(
+            option,
+            equity=reference_equity,
+            available=reference_equity,
+            requested_risk_pct=risk_pct,
+            leverage=max(1, min(3, int(config.get("market_tsmom_live_leverage", 2)))),
+            margin_fraction=min(
+                0.95,
+                max(
+                    0.05,
+                    float(config.get("market_tsmom_live_margin_pct", 90.0)) / 100,
+                ),
+            ),
+            hard_stop=float(config.get("hard_stop_equity", 5.0)),
+            reserve=float(config.get("market_tsmom_live_hard_stop_reserve_usdt", 0.50)),
+            effective_min_notional=float(
+                config.get("effective_min_order_notional_usdt", 10.0)
+            ),
+        )
+        for symbol, option in execution_options.items()
+    }
+    shadow_symbol = next(
+        (
+            symbol
+            for symbol in ("BTCUSDT", "ETHUSDT")
+            if reference_attempts.get(symbol, {}).get("eligible")
+        ),
+        "ETHUSDT",
+    )
+    shadow_option = execution_options[shadow_symbol]
+    entry = float(shadow_option["signal"]["last_price"])
+    initial_stop = float(shadow_option["signal"]["stop"])
+    trailing_stop = float(
+        shadow_option["signal"]["protection_profile"]["daily_trailing_stop"]
+    )
     day = boundary.date().isoformat()
     candidate = {
-        "symbol": "BTCUSDT",
+        "symbol": shadow_symbol,
         "direction": "LONG",
         "entry_type": "market_tsmom_28_56_trailing",
         "mode": "research_shadow",
@@ -472,22 +680,11 @@ def build_market_tsmom_shadow_candidate(
         "passed": False,
         "decision_reason": "28/56 日市场趋势共振独立影子，只验证未来表现，不影响当前实盘",
         "market_state": {"state": "broad_up"},
-        "ticker": {"last": entry},
-        "signal": {
-            "signal": "LONG",
-            "last_price": entry,
-            "atr": float(btc_daily["atr_10"]),
-            "stop": initial_stop,
-            "take_profit": entry * 10.0,
-            "protection_profile": {
-                "stop_pct": stop_pct * 100,
-                "atr_days": 10,
-                "atr_multiple": atr_multiple,
-                "daily_trailing_stop": trailing_stop,
-                "take_profit_mode": "none_time_exit_only",
-                "max_hold_seconds": hold_hours * 3600,
-            },
-        },
+        "ticker": shadow_option["ticker"],
+        "signal": shadow_option["signal"],
+        "execution_constraints": shadow_option["execution_constraints"],
+        "execution_options": execution_options,
+        "reference_execution_attempts": reference_attempts,
         "opportunity_id": f"{STRATEGY_VERSION}:{day}",
         "event_id": f"{STRATEGY_VERSION}:{day}",
         "parameter_fingerprint": (
@@ -497,7 +694,9 @@ def build_market_tsmom_shadow_candidate(
         "research_context": {
             **context,
             "status": "candidate_ready",
-            "symbol": "BTCUSDT",
+            "symbol": shadow_symbol,
+            "preferred_symbol": "BTCUSDT",
+            "fallback_symbol": "ETHUSDT",
             "direction": "LONG",
             "reference_risk_pct": risk_pct,
             "max_risk_cap_pct": 30.0,
@@ -521,11 +720,19 @@ def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
                 "strategy_family": STRATEGY_FAMILY,
                 "strategy_version": STRATEGY_VERSION,
                 "updated_at": now.isoformat(),
-                "live_effect": "none",
+                "live_effect": (
+                    "s0_takeover"
+                    if config.get("market_tsmom_live_enabled", False)
+                    else "none"
+                ),
             }
             if not enabled:
                 _write_status({**base, "status": "disabled", "reason": "配置已关闭"})
             elif day != evaluated_day:
+                previous = market_tsmom_consensus_status()
+                bootstrap = bool(
+                    config.get("market_tsmom_bootstrap_current_day_enabled", True)
+                ) and str(previous.get("strategy_version") or "") != STRATEGY_VERSION
                 candidate, status = build_market_tsmom_shadow_candidate(
                     BinanceFuturesClient(
                         str(config.get("api_key") or ""),
@@ -535,6 +742,7 @@ def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
                     read_snapshot(),
                     config,
                     now,
+                    allow_outside_window=bootstrap,
                 )
                 if status.get("status") != "outside_daily_window":
                     evaluated_day = day
@@ -545,17 +753,25 @@ def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
                         management = manage_shadow_strategy_positions(
                             STRATEGY_FAMILY,
                             STRATEGY_VERSION,
-                            "BTCUSDT",
+                            str(candidate.get("symbol") or "ETHUSDT"),
                             trailing_stop=float(candidate["signal"]["stop"]),
                         )
                     elif status.get("status") == "no_signal" and btc_price > 0:
-                        management = manage_shadow_strategy_positions(
-                            STRATEGY_FAMILY,
-                            STRATEGY_VERSION,
-                            "BTCUSDT",
-                            exit_price=btc_price,
-                            outcome="MARKET_SIGNAL_OFF",
-                        )
+                        management = {"updated": 0, "closed": 0}
+                        prices = (read_snapshot().get("tickers") or {})
+                        for symbol in ("BTCUSDT", "ETHUSDT"):
+                            price = float((prices.get(symbol) or {}).get("lastPrice") or 0)
+                            if price <= 0:
+                                continue
+                            result = manage_shadow_strategy_positions(
+                                STRATEGY_FAMILY,
+                                STRATEGY_VERSION,
+                                symbol,
+                                exit_price=price,
+                                outcome="MARKET_SIGNAL_OFF",
+                            )
+                            management["updated"] += int(result.get("updated") or 0)
+                            management["closed"] += int(result.get("closed") or 0)
                     result = update_shadow_trades([candidate], config) if candidate else None
                     _write_status(
                         {

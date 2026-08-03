@@ -731,7 +731,8 @@ def build_runtime_protection_action(
     key = _position_key(symbol, direction)
     tracked_item = tracked.get(key) or {}
     daily_strategy_managed = (
-        tracked_item.get("protection_version") == "market_tsmom_daily_v2"
+        tracked_item.get("protection_version")
+        in {"market_tsmom_daily_v2", "market_tsmom_daily_v3"}
         and tracked_item.get("runtime_intraday_trailing_enabled") is False
     )
     opened_at_raw = (tracked.get(key) or {}).get("opened_at")

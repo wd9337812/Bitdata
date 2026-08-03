@@ -481,23 +481,30 @@ def manage_market_tsmom_live_position(
     if not config.get("market_tsmom_live_enabled", False):
         return {"managed": False, "reason": "takeover_disabled"}
     tracked = dict(state.get("runtime_protection_positions") or {})
-    tracked_item = tracked.get("BTCUSDT:LONG") or {}
-    if (
-        str(tracked_item.get("strategy_family") or "") != MARKET_TSMOM_FAMILY
-        or str(tracked_item.get("strategy_version") or "") != MARKET_TSMOM_VERSION
-    ):
+    tracked_entry = next(
+        (
+            (key, item)
+            for key, item in tracked.items()
+            if str(item.get("strategy_family") or "") == MARKET_TSMOM_FAMILY
+            and str(item.get("strategy_version") or "") == MARKET_TSMOM_VERSION
+        ),
+        None,
+    )
+    if tracked_entry is None:
         return {"managed": False, "reason": "no_tracked_market_tsmom_position"}
+    tracked_key, tracked_item = tracked_entry
+    symbol = str(tracked_key).split(":", 1)[0].upper()
     position = next(
         (
             item
             for item in account.get("positions", []) or []
-            if str(item.get("symbol") or "").upper() == "BTCUSDT"
+            if str(item.get("symbol") or "").upper() == symbol
             and float(item.get("positionAmt") or item.get("amount") or 0) > 0
         ),
         None,
     )
     if not position:
-        tracked.pop("BTCUSDT:LONG", None)
+        tracked.pop(tracked_key, None)
         save_state({"runtime_protection_positions": tracked})
         return {"managed": False, "reason": "tracked_position_already_flat"}
     opened_at = tracked_item.get("opened_at")
@@ -517,12 +524,12 @@ def manage_market_tsmom_live_position(
     ):
         with _EXECUTION_LOCK, request_priority("critical"):
             result = close_rotation_position(client, position)
-        tracked.pop("BTCUSDT:LONG", None)
+        tracked.pop(tracked_key, None)
         save_state({"runtime_protection_positions": tracked})
         record_event(
             "info",
             "market_tsmom_live_exit",
-            "28/56 日市场趋势仓达到最长持仓时间，已退出 BTC 趋势仓位。",
+            f"28/56 日市场趋势仓达到最长持仓时间，已退出 {symbol} 趋势仓位。",
             {"strategy_version": MARKET_TSMOM_VERSION, "result": result},
         )
         return {"managed": True, "closed": True, "reason": "max_hold", "result": result}
@@ -541,17 +548,21 @@ def manage_market_tsmom_live_position(
     if status.get("status") == "no_signal":
         with _EXECUTION_LOCK, request_priority("critical"):
             result = close_rotation_position(client, position)
-        tracked.pop("BTCUSDT:LONG", None)
+        tracked.pop(tracked_key, None)
         save_state({"runtime_protection_positions": tracked})
         record_event(
             "info",
             "market_tsmom_live_exit",
-            "28/56 日市场趋势共振关闭，已退出对应 BTC 趋势仓位。",
+            f"28/56 日市场趋势共振关闭，已退出对应 {symbol} 趋势仓位。",
             {"strategy_version": MARKET_TSMOM_VERSION, "result": result},
         )
         return {"managed": True, "closed": True, "reason": "market_signal_off", "result": result}
     candidate = current_market_tsmom_candidate()
-    desired_stop = float(((candidate or {}).get("signal") or {}).get("stop") or 0)
+    options = dict((candidate or {}).get("execution_options") or {})
+    managed_option = options.get(symbol) or (
+        candidate if str((candidate or {}).get("symbol") or "").upper() == symbol else None
+    )
+    desired_stop = float(((managed_option or {}).get("signal") or {}).get("stop") or 0)
     management_day = str(state.get("market_tsmom_live_management_day") or "")
     if not candidate or desired_stop <= 0 or management_day == today.isoformat():
         return {"managed": False, "reason": "no_new_daily_stop"}

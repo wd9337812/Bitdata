@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from app.learning_report import build_daily_learning_report, save_daily_learning_report
 from app.position_sizing import effective_order_viability, effective_position_risk, signal_strength_tier, unified_position_sizing
 from app.product_completion import product_completion_summary
@@ -211,13 +213,14 @@ def test_runtime_protection_closes_v473_stagnation_after_cost():
     assert action["reason"] == "stagnation_after_cost"
 
 
-def test_runtime_protection_leaves_daily_trend_position_to_daily_manager():
+@pytest.mark.parametrize("protection_version", ["market_tsmom_daily_v2", "market_tsmom_daily_v3"])
+def test_runtime_protection_leaves_daily_trend_position_to_daily_manager(protection_version):
     state = {
         "runtime_protection_positions": {
             "BTCUSDT:LONG": {
                 "opened_at": (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat(),
                 "max_hold_seconds": 480 * 3600,
-                "protection_version": "market_tsmom_daily_v2",
+                "protection_version": protection_version,
                 "runtime_intraday_trailing_enabled": False,
             }
         }

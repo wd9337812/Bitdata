@@ -78,6 +78,7 @@ def _snapshot(now: datetime) -> dict:
     return {
         "tickers": {
             "BTCUSDT": _ticker(now, 50_000),
+            "ETHUSDT": _ticker(now, 2_000),
             **{f"ALT{index}USDT": _ticker(now, 100 + index) for index in range(30)},
         }
     }
@@ -107,7 +108,7 @@ def test_market_consensus_compounds_equal_weight_returns() -> None:
     assert result["momentum_56d"] > 0.70
 
 
-def test_builds_isolated_btc_long_shadow() -> None:
+def test_builds_contract_executable_long_shadow() -> None:
     now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
     candidate, status = build_market_tsmom_shadow_candidate(
         FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None
@@ -117,7 +118,10 @@ def test_builds_isolated_btc_long_shadow() -> None:
     assert candidate is not None
     assert candidate["strategy_family"] == STRATEGY_FAMILY
     assert candidate["strategy_version"] == STRATEGY_VERSION
-    assert candidate["symbol"] == "BTCUSDT"
+    assert candidate["symbol"] == "ETHUSDT"
+    assert set(candidate["execution_options"]) == {"BTCUSDT", "ETHUSDT"}
+    assert candidate["reference_execution_attempts"]["BTCUSDT"]["eligible"] is False
+    assert candidate["reference_execution_attempts"]["ETHUSDT"]["eligible"] is True
     assert candidate["direction"] == "LONG"
     assert candidate["passed"] is False
     assert candidate["evidence_type"] == "independent_realtime"
@@ -137,6 +141,26 @@ def test_no_candidate_when_fast_momentum_is_below_threshold() -> None:
 
     assert candidate is None
     assert status["status"] == "no_signal"
+
+
+def test_new_release_can_bootstrap_after_daily_window() -> None:
+    now = datetime(2026, 8, 1, 3, 5, tzinfo=timezone.utc)
+    blocked, blocked_status = build_market_tsmom_shadow_candidate(
+        FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None
+    )
+    candidate, status = build_market_tsmom_shadow_candidate(
+        FakeClient(now),
+        _snapshot(now),
+        {},
+        now,
+        sleep_fn=lambda _: None,
+        allow_outside_window=True,
+    )
+
+    assert blocked is None
+    assert blocked_status["status"] == "outside_daily_window"
+    assert candidate is not None
+    assert status["status"] == "candidate_ready"
 
 
 def test_candidate_opens_only_as_isolated_shadow_without_fixed_take_profit(
@@ -205,21 +229,21 @@ def test_strategy_management_tightens_stop_and_closes_on_signal_off(
     tightened = manage_shadow_strategy_positions(
         STRATEGY_FAMILY,
         STRATEGY_VERSION,
-        "BTCUSDT",
+        candidate["symbol"],
         trailing_stop=initial_stop * 1.01,
     )
     assert tightened == {"updated": 1, "closed": 0}
     ignored = manage_shadow_strategy_positions(
         STRATEGY_FAMILY,
         STRATEGY_VERSION,
-        "BTCUSDT",
+        candidate["symbol"],
         trailing_stop=initial_stop * 0.99,
     )
     assert ignored == {"updated": 0, "closed": 0}
     closed = manage_shadow_strategy_positions(
         STRATEGY_FAMILY,
         STRATEGY_VERSION,
-        "BTCUSDT",
+        candidate["symbol"],
         exit_price=50_500,
         outcome="MARKET_SIGNAL_OFF",
     )
@@ -285,10 +309,47 @@ def test_live_takeover_decision_requires_headroom_and_preserves_daily_profile(
         now,
     )
     assert decision["action"] == "OPEN_LONG"
+    assert decision["symbol"] == "ETHUSDT"
+    assert decision["risk"]["execution_fallback_used"] is True
     assert decision["strategy_version"] == STRATEGY_VERSION
     assert decision["risk_pct"] <= 10.0
     assert decision["estimated_notional"] >= 10.0
     assert decision["signal"]["protection_profile"]["runtime_intraday_trailing_enabled"] is False
+    assert decision["signal"]["protection_profile"]["protection_version"] == "market_tsmom_daily_v3"
+
+    preferred = build_market_tsmom_live_decision(
+        {
+            "hard_stop_equity": 5.0,
+            "market_tsmom_live_min_equity_usdt": 10.0,
+            "market_tsmom_live_risk_pct": 10.0,
+            "market_tsmom_live_leverage": 2,
+            "market_tsmom_live_margin_pct": 90.0,
+            "effective_min_order_notional_usdt": 10.0,
+        },
+        {},
+        {"equity": 100.0, "available_balance": 100.0, "positions": []},
+        now,
+    )
+    assert preferred["action"] == "OPEN_LONG"
+    assert preferred["symbol"] == "BTCUSDT"
+    assert preferred["risk"]["execution_fallback_used"] is False
+
+    no_fallback = build_market_tsmom_live_decision(
+        {
+            "hard_stop_equity": 5.0,
+            "market_tsmom_live_min_equity_usdt": 10.0,
+            "market_tsmom_live_risk_pct": 10.0,
+            "market_tsmom_live_leverage": 2,
+            "market_tsmom_live_margin_pct": 90.0,
+            "effective_min_order_notional_usdt": 10.0,
+            "market_tsmom_execution_fallback_enabled": False,
+        },
+        {},
+        {"equity": 20.0, "available_balance": 20.0, "positions": []},
+        now,
+    )
+    assert no_fallback["action"] == "WAIT"
+    assert no_fallback["reason"] == "market_tsmom_no_contract_safe_execution"
 
     duplicate = build_market_tsmom_live_decision(
         {

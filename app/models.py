@@ -372,12 +372,15 @@ class TradingConfig(BaseModel):
     market_tsmom_shadow_atr_multiple: float = Field(default=3.0, ge=0.1, le=10)
     market_tsmom_shadow_max_hold_hours: int = Field(default=480, ge=1, le=720)
     market_tsmom_shadow_reference_risk_pct: float = Field(default=10.0, ge=0.01, le=30)
+    market_tsmom_shadow_execution_equity_usdt: float = Field(default=15.153, ge=5, le=10000)
     market_tsmom_live_enabled: bool = False
     market_tsmom_live_risk_pct: float = Field(default=10.0, ge=0.01, le=30)
-    market_tsmom_live_leverage: int = Field(default=1, ge=1, le=3)
+    market_tsmom_live_leverage: int = Field(default=2, ge=1, le=3)
     market_tsmom_live_margin_pct: float = Field(default=90.0, ge=5, le=95)
     market_tsmom_live_min_equity_usdt: float = Field(default=10.0, ge=5, le=10000)
     market_tsmom_live_hard_stop_reserve_usdt: float = Field(default=0.50, ge=0, le=100)
+    market_tsmom_execution_fallback_enabled: bool = True
+    market_tsmom_bootstrap_current_day_enabled: bool = True
     auto_risk_by_equity: bool = True
     stage_routing_enabled: bool = True
     stage_manual_mode: str = "auto"
