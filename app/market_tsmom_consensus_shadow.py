@@ -5,6 +5,7 @@ import math
 import os
 import threading
 import time
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
@@ -21,6 +22,7 @@ from app.telemetry import record_event_throttled
 
 STRATEGY_FAMILY = "market_tsmom_consensus"
 STRATEGY_VERSION = "s0_market_tsmom_bnb_28_56_time5_v4"
+FREQUENCY_CHALLENGER_VERSION = "s0_market_tsmom_bnb_28_56_time3_stop15_shadow_v1"
 LEGACY_STRATEGY_VERSIONS = frozenset({"s0_market_tsmom_28_56_trailing_v3"})
 LIVE_SYMBOL = "BNBUSDT"
 _THREAD: threading.Thread | None = None
@@ -807,6 +809,67 @@ def build_market_tsmom_shadow_candidate(
     return candidate, candidate["research_context"]
 
 
+def build_frequency_challenger_candidate(
+    active_candidate: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    if not config.get("market_tsmom_frequency_challenger_enabled", True):
+        return None
+    candidate = deepcopy(active_candidate)
+    signal = dict(candidate.get("signal") or {})
+    entry = float(signal.get("last_price") or 0)
+    if entry <= 0:
+        return None
+    stop_pct = float(config.get("market_tsmom_frequency_challenger_stop_pct", 15.0))
+    max_hold_hours = int(
+        config.get("market_tsmom_frequency_challenger_max_hold_hours", 72)
+    )
+    signal["stop"] = entry * (1.0 - stop_pct / 100.0)
+    signal["protection_profile"] = {
+        **dict(signal.get("protection_profile") or {}),
+        "stop_pct": stop_pct,
+        "take_profit_mode": "distant_exchange_safety_time_exit_primary",
+        "max_hold_seconds": max_hold_hours * 3600,
+        "runtime_intraday_trailing_enabled": False,
+        "daily_stop_audit_enabled": False,
+        "protection_version": "market_tsmom_bnb_time3_stop15_shadow_v1",
+    }
+    day = str(candidate.get("signal_boundary") or "")[:10]
+    candidate.update(
+        {
+            "entry_type": "market_tsmom_bnb_28_56_time3_stop15_shadow",
+            "strategy_version": FREQUENCY_CHALLENGER_VERSION,
+            "strategy_role": "challenger",
+            "strategy_generation": "train-selected-frequency-challenger",
+            "shadow_max_hold_minutes": max_hold_hours * 60,
+            "shadow_dedupe_key": f"{FREQUENCY_CHALLENGER_VERSION}:{day}",
+            "opportunity_id": f"{FREQUENCY_CHALLENGER_VERSION}:{day}",
+            "event_id": f"{FREQUENCY_CHALLENGER_VERSION}:{day}",
+            "parameter_fingerprint": (
+                f"{FREQUENCY_CHALLENGER_VERSION}:fast=28:slow=56:"
+                f"symbol={LIVE_SYMBOL}:stop={stop_pct / 100.0:.4f}:"
+                f"hold={max_hold_hours}"
+            ),
+            "decision_reason": (
+                "与当前 BNB 28/56 日趋势入场完全相同，只比较三日持有和 15% 固定止损；"
+                "仅作独立未来影子，不参与实盘。"
+            ),
+            "signal": signal,
+            "research_context": {
+                **dict(candidate.get("research_context") or {}),
+                "strategy_version": FREQUENCY_CHALLENGER_VERSION,
+                "gate_policy": "isolated_frequency_shadow_no_live_effect",
+                "exit_policy": "fixed_15pct_exchange_stop_or_3d_time_exit",
+                "selection_note": (
+                    "三日版本增加样本频率，但冻结训练期稳健性弱于五日版本，"
+                    "因此只收集未来证据。"
+                ),
+            },
+        }
+    )
+    return candidate
+
+
 def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
     evaluated_day = ""
     while True:
@@ -854,14 +917,7 @@ def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
                     btc_ticker = (read_snapshot().get("tickers") or {}).get("BTCUSDT") or {}
                     btc_price = float(btc_ticker.get("lastPrice") or 0)
                     management = None
-                    if candidate:
-                        management = manage_shadow_strategy_positions(
-                            STRATEGY_FAMILY,
-                            STRATEGY_VERSION,
-                            str(candidate.get("symbol") or "ETHUSDT"),
-                            trailing_stop=float(candidate["signal"]["stop"]),
-                        )
-                    elif status.get("status") == "no_signal" and btc_price > 0:
+                    if not candidate and status.get("status") == "no_signal" and btc_price > 0:
                         management = {"updated": 0, "closed": 0}
                         prices = (read_snapshot().get("tickers") or {})
                         for symbol in ("BTCUSDT", "ETHUSDT"):
@@ -877,12 +933,25 @@ def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
                             )
                             management["updated"] += int(result.get("updated") or 0)
                             management["closed"] += int(result.get("closed") or 0)
-                    result = update_shadow_trades([candidate], config) if candidate else None
+                    challenger = (
+                        build_frequency_challenger_candidate(candidate, config)
+                        if candidate
+                        else None
+                    )
+                    shadow_candidates = [
+                        item for item in (candidate, challenger) if item is not None
+                    ]
+                    result = (
+                        update_shadow_trades(shadow_candidates, config)
+                        if shadow_candidates
+                        else None
+                    )
                     _write_status(
                         {
                             **base,
                             **status,
                             "candidate": candidate,
+                            "frequency_challenger": challenger,
                             "shadow_management": management,
                             "shadow_result": result,
                         }

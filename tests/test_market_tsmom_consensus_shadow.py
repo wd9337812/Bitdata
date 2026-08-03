@@ -136,6 +136,67 @@ def test_builds_contract_executable_long_shadow() -> None:
     assert candidate["shadow_max_hold_minutes"] == 5 * 24 * 60
 
 
+def test_frequency_challenger_reuses_entry_and_isolated_version() -> None:
+    now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
+    active, _ = build_market_tsmom_shadow_candidate(
+        FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None
+    )
+    assert active is not None
+
+    challenger = market_tsmom_module.build_frequency_challenger_candidate(active, {})
+
+    assert challenger is not None
+    assert challenger["symbol"] == active["symbol"] == "BNBUSDT"
+    assert challenger["signal"]["last_price"] == active["signal"]["last_price"]
+    assert challenger["strategy_version"] == market_tsmom_module.FREQUENCY_CHALLENGER_VERSION
+    assert challenger["strategy_version"] != active["strategy_version"]
+    assert challenger["shadow_max_hold_minutes"] == 3 * 24 * 60
+    assert challenger["signal"]["stop"] == challenger["signal"]["last_price"] * 0.85
+    assert challenger["signal"]["protection_profile"]["daily_stop_audit_enabled"] is False
+    assert challenger["research_context"]["gate_policy"] == "isolated_frequency_shadow_no_live_effect"
+
+
+def test_frequency_challenger_can_be_disabled() -> None:
+    assert market_tsmom_module.build_frequency_challenger_candidate(
+        {"signal": {"last_price": 100.0}},
+        {"market_tsmom_frequency_challenger_enabled": False},
+    ) is None
+
+
+def test_live_profile_and_frequency_challenger_open_as_separate_shadows(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
+    active, _ = build_market_tsmom_shadow_candidate(
+        FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None
+    )
+    assert active is not None
+    challenger = market_tsmom_module.build_frequency_challenger_candidate(active, {})
+    assert challenger is not None
+
+    result = update_shadow_trades(
+        [active, challenger],
+        {
+            "shadow_trading_enabled": True,
+            "shadow_reference_notional_usdt": 20,
+            "shadow_round_trip_cost_pct": 0.12,
+        },
+    )
+
+    assert result["opened"] == 2
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT strategy_version, expires_at, stop FROM shadow_trades ORDER BY strategy_version"
+        ).fetchall()
+    assert {row[0] for row in rows} == {
+        STRATEGY_VERSION,
+        market_tsmom_module.FREQUENCY_CHALLENGER_VERSION,
+    }
+    assert len({row[1] for row in rows}) == 2
+    assert len({round(float(row[2]), 8) for row in rows}) == 2
+
+
 def test_no_candidate_when_fast_momentum_is_below_threshold() -> None:
     now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
     candidate, status = build_market_tsmom_shadow_candidate(

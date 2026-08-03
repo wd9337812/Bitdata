@@ -1314,6 +1314,13 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
     (row: any) => row.strategy_family === "market_tsmom_consensus"
       && row.strategy_version === String(marketTsmom.strategy_version || "s0_market_tsmom_bnb_28_56_time5_v4"),
   ) || {};
+  const marketTsmomFrequencyRelease = (data.by_release || []).find(
+    (row: any) => row.strategy_family === "market_tsmom_consensus"
+      && row.strategy_version === String(
+        marketTsmom.frequency_challenger?.strategy_version
+          || "s0_market_tsmom_bnb_28_56_time3_stop15_shadow_v1",
+      ),
+  ) || {};
   const hasChallenger = Boolean(challenger.strategy_version);
   const activeStrategyLabel = String(active.strategy_version || "v5.2").toUpperCase();
   const evidenceTypes = data.by_evidence_type || [];
@@ -1342,18 +1349,19 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h2>28/56 日趋势共振 V3</h2>
-            <p>每天用高流动性永续币构造市场指数。28 日动量超过冻结门槛且 56 日趋势向上时做多；优先 BTC，小账户因最小合约无法控制风险时才使用 ETH。两者共用同一市场开关与 ATR 退出规则。</p>
+            <h2>BNB 28/56 日趋势共振 V4</h2>
+            <p>每天用高流动性永续币构造市场指数。28 日动量超过冻结门槛且 56 日趋势向上时，只执行冻结回测选出的 BNB 五日规则；三日版本仅同步做影子对照。</p>
           </div>
-          <span className="pill">影子验证 · 接管待启用</span>
+          <span className={marketTsmom.live_effect === "s0_takeover" ? "pill ok" : "pill"}>{marketTsmom.live_effect === "s0_takeover" ? "当前 S0 实盘" : "仅影子验证"}</span>
         </div>
         <div className="metrics">
           <MetricCard title="今日共振" value={marketTsmom.status === "candidate_ready" ? `已建立 ${marketTsmom.symbol || marketTsmom.candidate?.symbol || "可执行"} 多头影子` : marketTsmom.status === "no_signal" ? "趋势条件未同时满足" : marketTsmom.status === "insufficient_history" ? "连续日线不足" : marketTsmom.status === "error" ? "研究线程异常" : marketTsmom.enabled === false ? "已关闭" : "等待每日窗口"} sub={marketTsmom.reason || "UTC 00:03-00:50 评估；新版本部署当天允许一次补评估"} tone={marketTsmom.status === "error" ? "negative" : marketTsmom.status === "candidate_ready" ? "positive" : ""} />
           <MetricCard title="市场趋势" value={`28日 ${fmt(marketTsmom.market_momentum_28d_pct, 2)}%`} sub={`门槛 ${fmt(marketTsmom.top_third_threshold_pct, 2)}% · 56日 ${fmt(marketTsmom.market_momentum_56d_pct, 2)}%`} />
           <MetricCard title="市场样本" value={`${fmt(marketTsmom.market_symbols, 0)} 个币`} sub={`预选 ${fmt(marketTsmom.universe_size, 0)} · 可用 ${fmt(marketTsmom.usable_universe_size, 0)} · 限流让路 ${fmt(marketTsmom.rate_limit_retries, 0)} 次`} />
-          <MetricCard title="执行合约" value={marketTsmom.candidate?.symbol || "等待信号"} sub="BTC 优先；仅当最小合约超出风险预算时回退 ETH，不按近期涨跌挑币" />
-          <MetricCard title="风险说明" value="默认 10% · 上限 30%" sub="按实际合约步长和 ATR 止损距离验算；5U 硬停止与交易所保护单保持生效" />
-          <MetricCard title="独立未来结果" value={`${fmt(marketTsmomRelease.closed, 0)} 笔`} sub={`${pfLabel(marketTsmomRelease.profit_factor, marketTsmomRelease.closed)} · 净收益 ${fmt(marketTsmomRelease.net_pnl, 4)} U · 成本 ${fmt(marketTsmomRelease.cost, 4)} U`} tone={Number(marketTsmomRelease.net_pnl || 0) > 0 ? "positive" : Number(marketTsmomRelease.net_pnl || 0) < 0 ? "negative" : ""} />
+          <MetricCard title="当前实盘规则" value={marketTsmom.candidate?.symbol || "等待信号"} sub="信号后 2 小时内入场 · 固定 10% 止损 · 最长持有 5 天" />
+          <MetricCard title="风险说明" value="配置 15% · 硬上限 30%" sub="按真实止损距离、合约步长和可用保证金向下取整；5U 硬停止与交易所保护单始终生效" />
+          <MetricCard title="五日实盘同版影子" value={`${fmt(marketTsmomRelease.closed, 0)} 笔`} sub={`${pfLabel(marketTsmomRelease.profit_factor, marketTsmomRelease.closed)} · 净收益 ${fmt(marketTsmomRelease.net_pnl, 4)} U · 成本 ${fmt(marketTsmomRelease.cost, 4)} U`} tone={Number(marketTsmomRelease.net_pnl || 0) > 0 ? "positive" : Number(marketTsmomRelease.net_pnl || 0) < 0 ? "negative" : ""} />
+          <MetricCard title="三日高频挑战影子" value={`${fmt(marketTsmomFrequencyRelease.closed, 0)} 笔`} sub={`${pfLabel(marketTsmomFrequencyRelease.profit_factor, marketTsmomFrequencyRelease.closed)} · 净收益 ${fmt(marketTsmomFrequencyRelease.net_pnl, 4)} U · 固定 15% 止损；不参与实盘`} tone={Number(marketTsmomFrequencyRelease.net_pnl || 0) > 0 ? "positive" : Number(marketTsmomFrequencyRelease.net_pnl || 0) < 0 ? "negative" : ""} />
         </div>
       </div>
       <div className="panel">

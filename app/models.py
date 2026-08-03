@@ -385,6 +385,9 @@ class TradingConfig(BaseModel):
     market_tsmom_live_hard_stop_reserve_usdt: float = Field(default=0.50, ge=0, le=100)
     market_tsmom_execution_fallback_enabled: bool = True
     market_tsmom_bootstrap_current_day_enabled: bool = True
+    market_tsmom_frequency_challenger_enabled: bool = True
+    market_tsmom_frequency_challenger_stop_pct: float = Field(default=15.0, ge=1, le=30)
+    market_tsmom_frequency_challenger_max_hold_hours: int = Field(default=72, ge=24, le=240)
     auto_risk_by_equity: bool = True
     stage_routing_enabled: bool = True
     stage_manual_mode: str = "auto"
