@@ -5,7 +5,7 @@ import math
 import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import median
 from typing import Any, Callable
@@ -20,7 +20,9 @@ from app.telemetry import record_event_throttled
 
 
 STRATEGY_FAMILY = "market_tsmom_consensus"
-STRATEGY_VERSION = "s0_market_tsmom_28_56_trailing_v3"
+STRATEGY_VERSION = "s0_market_tsmom_bnb_28_56_time5_v4"
+LEGACY_STRATEGY_VERSIONS = frozenset({"s0_market_tsmom_28_56_trailing_v3"})
+LIVE_SYMBOL = "BNBUSDT"
 _THREAD: threading.Thread | None = None
 _LOCK = threading.Lock()
 
@@ -210,6 +212,43 @@ def build_market_tsmom_live_decision(
             "risk": {"allowed": False, "reason": "max_open_positions"},
             "candidate": candidate,
         }
+    if not config.get("market_tsmom_live_new_entries_enabled", True):
+        return {
+            **base,
+            "action": "WAIT",
+            "reason": "market_tsmom_new_entries_disabled",
+            "risk": {
+                "allowed": False,
+                "reason": "market_tsmom_new_entries_disabled",
+            },
+            "candidate": candidate,
+        }
+    entry_boundary_value = candidate.get("signal_boundary") or (
+        candidate.get("research_context") or {}
+    ).get("signal_boundary")
+    try:
+        entry_boundary = datetime.fromisoformat(
+            str(entry_boundary_value or "").replace("Z", "+00:00")
+        )
+        if entry_boundary.tzinfo is None:
+            entry_boundary = entry_boundary.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        entry_boundary = None
+    entry_window_hours = max(
+        1,
+        min(6, int(config.get("market_tsmom_bnb_entry_window_hours", 2))),
+    )
+    if entry_boundary is None or current > entry_boundary + timedelta(hours=entry_window_hours):
+        return {
+            **base,
+            "action": "WAIT",
+            "reason": "market_tsmom_entry_window_expired",
+            "risk": {
+                "allowed": False,
+                "reason": "market_tsmom_entry_window_expired",
+            },
+            "candidate": candidate,
+        }
     if state.get("s0_daily_profit_lock_active"):
         return {
             **base,
@@ -259,9 +298,7 @@ def build_market_tsmom_live_decision(
     options = dict(candidate.get("execution_options") or {})
     if not options:
         options = {str(candidate.get("symbol") or "BTCUSDT"): candidate}
-    preferred = ["BTCUSDT"]
-    if bool(config.get("market_tsmom_execution_fallback_enabled", True)):
-        preferred.append("ETHUSDT")
+    preferred = [str(candidate.get("live_symbol") or LIVE_SYMBOL).upper()]
     selected_option = None
     sizing = None
     sizing_attempts = {}
@@ -317,16 +354,17 @@ def build_market_tsmom_live_decision(
         "leverage": leverage,
         "margin_pct": margin_fraction * 100,
         "decision_reason": (
-            "28/56-day market trend consensus live takeover; BTC preferred, "
-            "ETH used only when BTC minimum contract exceeds the risk budget"
+            "28/56-day market trend consensus with the preregistered BNB "
+            "five-day holding rule and a fixed 10% exchange stop"
         ),
     }
     signal["take_profit"] = entry * 2.0
     signal["protection_profile"] = {
         **dict(signal.get("protection_profile") or {}),
-        "protection_version": "market_tsmom_daily_v3",
-        "max_hold_seconds": int(config.get("market_tsmom_shadow_max_hold_hours", 480)) * 3600,
+        "protection_version": "market_tsmom_bnb_time5_v4",
+        "max_hold_seconds": int(config.get("market_tsmom_bnb_max_hold_hours", 120)) * 3600,
         "runtime_intraday_trailing_enabled": False,
+        "daily_stop_audit_enabled": False,
     }
     live_candidate["signal"] = signal
     return {
@@ -341,14 +379,14 @@ def build_market_tsmom_live_decision(
             "max_notional": sizing["max_notional"],
             "max_margin": sizing["max_margin"],
             "required_notional": sizing["required_notional"],
-            "execution_fallback_used": symbol != "BTCUSDT",
+            "execution_fallback_used": False,
             "attempts": sizing_attempts,
         },
         "quantity": quantity,
         "estimated_notional": notional,
         "risk_pct": actual_risk_pct,
         "leverage": leverage,
-        "entry_type": "market_tsmom_28_56_trailing",
+        "entry_type": "market_tsmom_bnb_28_56_time5",
         "decision_reason": live_candidate["decision_reason"],
         "candidate": live_candidate,
         "protection_plan": {
@@ -538,6 +576,44 @@ def _build_execution_option(
     }
 
 
+def _build_bnb_time5_execution_option(
+    snapshot: dict[str, Any],
+    daily: dict[str, Any],
+    exchange_info: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, Any] | None:
+    ticker = (read_snapshot().get("tickers") or {}).get(LIVE_SYMBOL) or (
+        snapshot.get("tickers") or {}
+    ).get(LIVE_SYMBOL) or {}
+    entry = float(ticker.get("lastPrice") or 0)
+    if entry <= 0:
+        return None
+    stop_pct = float(config.get("market_tsmom_bnb_stop_pct", 10.0)) / 100
+    initial_stop = entry * (1.0 - stop_pct)
+    return {
+        "symbol": LIVE_SYMBOL,
+        "ticker": {"last": entry},
+        "execution_constraints": _option_constraints(exchange_info, LIVE_SYMBOL),
+        "signal": {
+            "signal": "LONG",
+            "last_price": entry,
+            "atr": float(daily["atr_10"]),
+            "stop": initial_stop,
+            "take_profit": entry * 2.0,
+            "protection_profile": {
+                "stop_pct": stop_pct * 100,
+                "take_profit_mode": "distant_exchange_safety_time_exit_primary",
+                "max_hold_seconds": int(
+                    config.get("market_tsmom_bnb_max_hold_hours", 120)
+                )
+                * 3600,
+                "runtime_intraday_trailing_enabled": False,
+                "daily_stop_audit_enabled": False,
+            },
+        },
+    }
+
+
 def build_market_tsmom_shadow_candidate(
     client: BinanceFuturesClient,
     snapshot: dict[str, Any],
@@ -621,12 +697,16 @@ def build_market_tsmom_shadow_candidate(
             "status": "missing_eth_daily_history",
             "reason": "ETH daily history is unavailable for ATR trailing protection",
         }
-    stop_pct = float(config.get("market_tsmom_shadow_stop_pct", 15.0)) / 100
-    atr_multiple = float(config.get("market_tsmom_shadow_atr_multiple", 3.0))
-    hold_hours = int(config.get("market_tsmom_shadow_max_hold_hours", 480))
+    bnb_daily = completed_daily_series(
+        client.klines(LIVE_SYMBOL, "1d", 60), boundary_ms
+    )
+    if not bnb_daily:
+        return None, {
+            **context,
+            "status": "missing_bnb_daily_history",
+            "reason": "BNB daily history is unavailable for the fixed five-day rule",
+        }
     risk_pct = float(config.get("market_tsmom_shadow_reference_risk_pct", 10.0))
-    trailing_stop = float(btc_daily["last_close"]) - atr_multiple * float(btc_daily["atr_10"])
-    initial_stop = max(entry * (1.0 - stop_pct), trailing_stop)
     execution_options = {
         symbol: option
         for symbol, daily in (("BTCUSDT", btc_daily), ("ETHUSDT", eth_daily))
@@ -636,11 +716,16 @@ def build_market_tsmom_shadow_candidate(
             )
         )
     }
-    if len(execution_options) < 2:
+    bnb_option = _build_bnb_time5_execution_option(
+        snapshot, bnb_daily, exchange_info, config
+    )
+    if bnb_option:
+        execution_options[LIVE_SYMBOL] = bnb_option
+    if len(execution_options) < 3:
         return None, {
             **context,
             "status": "missing_execution_price",
-            "reason": "BTC/ETH realtime prices are unavailable",
+            "reason": "BNB/BTC/ETH realtime prices are unavailable",
         }
     reference_equity = float(
         config.get("market_tsmom_shadow_execution_equity_usdt", 15.153)
@@ -667,25 +752,13 @@ def build_market_tsmom_shadow_candidate(
         )
         for symbol, option in execution_options.items()
     }
-    shadow_symbol = next(
-        (
-            symbol
-            for symbol in ("BTCUSDT", "ETHUSDT")
-            if reference_attempts.get(symbol, {}).get("eligible")
-        ),
-        "ETHUSDT",
-    )
+    shadow_symbol = LIVE_SYMBOL
     shadow_option = execution_options[shadow_symbol]
-    entry = float(shadow_option["signal"]["last_price"])
-    initial_stop = float(shadow_option["signal"]["stop"])
-    trailing_stop = float(
-        shadow_option["signal"]["protection_profile"]["daily_trailing_stop"]
-    )
     day = boundary.date().isoformat()
     candidate = {
         "symbol": shadow_symbol,
         "direction": "LONG",
-        "entry_type": "market_tsmom_28_56_trailing",
+        "entry_type": "market_tsmom_bnb_28_56_time5",
         "mode": "research_shadow",
         "strategy": "market_tsmom_consensus_shadow",
         "strategy_family": STRATEGY_FAMILY,
@@ -696,7 +769,10 @@ def build_market_tsmom_shadow_candidate(
         "shadow_force_eligible": True,
         "shadow_single_position": True,
         "shadow_disable_take_profit": True,
-        "shadow_max_hold_minutes": hold_hours * 60,
+        "shadow_max_hold_minutes": int(
+            config.get("market_tsmom_bnb_max_hold_hours", 120)
+        )
+        * 60,
         "shadow_dedupe_key": f"{STRATEGY_VERSION}:{day}",
         "score": 100.0,
         "passed": False,
@@ -706,24 +782,26 @@ def build_market_tsmom_shadow_candidate(
         "signal": shadow_option["signal"],
         "execution_constraints": shadow_option["execution_constraints"],
         "execution_options": execution_options,
+        "live_symbol": LIVE_SYMBOL,
+        "signal_boundary": boundary.isoformat(),
         "reference_execution_attempts": reference_attempts,
         "opportunity_id": f"{STRATEGY_VERSION}:{day}",
         "event_id": f"{STRATEGY_VERSION}:{day}",
         "parameter_fingerprint": (
             f"{STRATEGY_VERSION}:fast=28:slow=56:threshold={threshold:.6f}:"
-            f"stop={stop_pct:.4f}:atr10x={atr_multiple:.2f}:hold={hold_hours}:risk={risk_pct:.2f}"
+            f"symbol={LIVE_SYMBOL}:stop=0.1000:hold=120:risk={risk_pct:.2f}"
         ),
         "research_context": {
             **context,
             "status": "candidate_ready",
             "symbol": shadow_symbol,
-            "preferred_symbol": "BTCUSDT",
-            "fallback_symbol": "ETHUSDT",
+            "preferred_symbol": LIVE_SYMBOL,
+            "fallback_symbol": None,
             "direction": "LONG",
             "reference_risk_pct": risk_pct,
             "max_risk_cap_pct": 30.0,
             "gate_policy": "isolated_shadow_no_live_effect",
-            "exit_policy": "daily_atr10x3_trailing_or_market_signal_off_or_20d",
+            "exit_policy": "fixed_10pct_exchange_stop_or_5d_time_exit",
         },
     }
     return candidate, candidate["research_context"]

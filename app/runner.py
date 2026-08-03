@@ -19,6 +19,7 @@ from app.live_reaction import sync_live_reaction_from_binance
 from app.local_circuit import record_v4_live_open
 from app.market_stream import start_market_stream_thread
 from app.market_tsmom_consensus_shadow import (
+    LEGACY_STRATEGY_VERSIONS as MARKET_TSMOM_LEGACY_VERSIONS,
     STRATEGY_FAMILY as MARKET_TSMOM_FAMILY,
     STRATEGY_VERSION as MARKET_TSMOM_VERSION,
     build_market_tsmom_live_decision,
@@ -486,13 +487,15 @@ def manage_market_tsmom_live_position(
             (key, item)
             for key, item in tracked.items()
             if str(item.get("strategy_family") or "") == MARKET_TSMOM_FAMILY
-            and str(item.get("strategy_version") or "") == MARKET_TSMOM_VERSION
+            and str(item.get("strategy_version") or "")
+            in ({MARKET_TSMOM_VERSION} | set(MARKET_TSMOM_LEGACY_VERSIONS))
         ),
         None,
     )
     if tracked_entry is None:
         return {"managed": False, "reason": "no_tracked_market_tsmom_position"}
     tracked_key, tracked_item = tracked_entry
+    tracked_version = str(tracked_item.get("strategy_version") or "")
     symbol = str(tracked_key).split(":", 1)[0].upper()
     position = next(
         (
@@ -530,9 +533,11 @@ def manage_market_tsmom_live_position(
             "info",
             "market_tsmom_live_exit",
             f"28/56 日市场趋势仓达到最长持仓时间，已退出 {symbol} 趋势仓位。",
-            {"strategy_version": MARKET_TSMOM_VERSION, "result": result},
+            {"strategy_version": tracked_version, "result": result},
         )
         return {"managed": True, "closed": True, "reason": "max_hold", "result": result}
+    if tracked_version == MARKET_TSMOM_VERSION:
+        return {"managed": True, "closed": False, "reason": "fixed_time_hold_active"}
     status = market_tsmom_consensus_status()
     try:
         boundary = datetime.fromisoformat(
@@ -554,7 +559,7 @@ def manage_market_tsmom_live_position(
             "info",
             "market_tsmom_live_exit",
             f"28/56 日市场趋势共振关闭，已退出对应 {symbol} 趋势仓位。",
-            {"strategy_version": MARKET_TSMOM_VERSION, "result": result},
+            {"strategy_version": tracked_version, "result": result},
         )
         return {"managed": True, "closed": True, "reason": "market_signal_off", "result": result}
     candidate = current_market_tsmom_candidate()
@@ -573,7 +578,7 @@ def manage_market_tsmom_live_position(
         "info",
         "market_tsmom_live_stop",
         "28/56 日市场趋势共振完成每日 ATR 止损审计。",
-        {"strategy_version": MARKET_TSMOM_VERSION, "result": result},
+        {"strategy_version": tracked_version, "result": result},
     )
     return {"managed": True, "closed": False, "reason": "daily_stop_audit", "result": result}
 

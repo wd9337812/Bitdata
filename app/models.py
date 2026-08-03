@@ -374,6 +374,10 @@ class TradingConfig(BaseModel):
     market_tsmom_shadow_reference_risk_pct: float = Field(default=10.0, ge=0.01, le=30)
     market_tsmom_shadow_execution_equity_usdt: float = Field(default=15.153, ge=5, le=10000)
     market_tsmom_live_enabled: bool = False
+    market_tsmom_live_new_entries_enabled: bool = True
+    market_tsmom_bnb_stop_pct: float = Field(default=10.0, ge=1, le=30)
+    market_tsmom_bnb_max_hold_hours: int = Field(default=120, ge=24, le=240)
+    market_tsmom_bnb_entry_window_hours: int = Field(default=2, ge=1, le=6)
     market_tsmom_live_risk_pct: float = Field(default=15.0, ge=0.01, le=30)
     market_tsmom_live_leverage: int = Field(default=2, ge=1, le=3)
     market_tsmom_live_margin_pct: float = Field(default=90.0, ge=5, le=95)

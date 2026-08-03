@@ -1312,7 +1312,7 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
   ) || {};
   const marketTsmomRelease = (data.by_release || []).find(
     (row: any) => row.strategy_family === "market_tsmom_consensus"
-      && row.strategy_version === String(marketTsmom.strategy_version || "s0_market_tsmom_28_56_trailing_v3"),
+      && row.strategy_version === String(marketTsmom.strategy_version || "s0_market_tsmom_bnb_28_56_time5_v4"),
   ) || {};
   const hasChallenger = Boolean(challenger.strategy_version);
   const activeStrategyLabel = String(active.strategy_version || "v5.2").toUpperCase();
@@ -1892,15 +1892,15 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("xmom_shadow_min_onboard_age_days", "动量研究最低币龄", "默认 30 天；历史审计显示刚上市币种拖累结果，仅影响独立研究影子")}
           {toggle("adaptive_30d_shadow_enabled", "30 日动量未来研究", "每天一次抓取最多 150 个高流动性币的连续小时数据；只做独立未来影子，不影响实盘")}
           {number("adaptive_30d_shadow_symbol_limit", "30 日研究币种上限", "默认 150；REST 请求只走后台预算，交易与保护请求始终优先")}
-          {toggle("market_tsmom_shadow_enabled", "28/56 日趋势共振影子", "每天一次构造 20 币市场指数；BTC 优先、ETH 仅作最小合约回退，版本证据独立")}
+          {toggle("market_tsmom_shadow_enabled", "BNB 28/56 日趋势影子", "每天一次构造 20 币市场指数；市场趋势共振时只验证 BNB 固定规则，版本证据独立")}
           {number("market_tsmom_shadow_prefetch_symbols", "趋势共振预选币数", "默认 40；仅每日读取 60 根日线，按近 30 日成交额选 20 个构造市场指数")}
           {number("market_tsmom_shadow_top_third_threshold_pct", "28 日历史上三分位门槛%", "默认 10.65%；来自冻结历史样本，不随短期输赢自动漂移")}
           {number("market_tsmom_shadow_reference_risk_pct", "趋势共振参考风险%", "默认 10%；影子只记录结果，不会真实下单")}
-          {number("market_tsmom_shadow_atr_multiple", "日线移动止损 ATR 倍数", "默认 3 倍 ATR(10)；止损只会向盈利方向收紧")}
-          {number("market_tsmom_shadow_max_hold_hours", "最长持仓小时", "默认 480 小时（20 天）；趋势关闭会提前退出")}
-          {toggle("market_tsmom_live_enabled", "允许趋势共振接管 S0 实盘", "高风险专家开关，默认关闭；开启后 S0 执行 28/56 日趋势共振，不再执行原短打策略")}
-          {toggle("market_tsmom_execution_fallback_enabled", "允许 ETH 最小合约回退", "推荐开启；只在 BTC 最小合约会超过风险预算时使用 ETH，不改变市场方向判断")}
-          {number("market_tsmom_live_risk_pct", "趋势实盘单笔风险%", "小账户默认 15%，硬上限 30%；用于满足 20U 最小合约并按真实止损距离验算")}
+          {number("market_tsmom_bnb_stop_pct", "BNB 固定止损%", "默认 10%；新仓成交后立即在 Binance 放置交易所端止损")}
+          {number("market_tsmom_bnb_max_hold_hours", "BNB 最长持仓小时", "默认 120 小时（5 天）；到期按市价退出，不用短期噪声追踪止损")}
+          {number("market_tsmom_bnb_entry_window_hours", "日线信号入场窗口小时", "默认 2 小时；错过 UTC 日线信号后的执行窗口就等下一天，避免追入过期信号")}
+          {toggle("market_tsmom_live_enabled", "允许 BNB 趋势规则接管 S0 实盘", "开启后只在 28/56 日市场趋势共振时执行 BNB 五日规则，不再执行原短打策略")}
+          {number("market_tsmom_live_risk_pct", "BNB 实盘单笔风险%", "默认 15%，硬上限 30%；系统仍按真实止损距离、可用余额和合约步长向下取整")}
           {number("market_tsmom_live_min_equity_usdt", "趋势实盘最低权益 U", "默认 10U；低于该值或距离 5U 硬停止不足时不会开仓")}
           {number("shadow_min_candidate_score", "影子交易最低候选分", "默认 70；只记录值得研究的机会")}
           {number("shadow_dedupe_minutes", "影子信号去重分钟", "同币、同方向、同信号在窗口内只算一笔")}

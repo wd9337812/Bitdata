@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import app.market_tsmom_consensus_shadow as market_tsmom_module
+import app.runner as runner_module
 from app.market_tsmom_consensus_shadow import (
     STRATEGY_FAMILY,
     STRATEGY_VERSION,
@@ -80,6 +81,7 @@ def _snapshot(now: datetime) -> dict:
         "tickers": {
             "BTCUSDT": _ticker(now, 50_000),
             "ETHUSDT": _ticker(now, 2_000),
+            "BNBUSDT": _ticker(now, 600),
             **{f"ALT{index}USDT": _ticker(now, 100 + index) for index in range(30)},
         }
     }
@@ -119,19 +121,19 @@ def test_builds_contract_executable_long_shadow() -> None:
     assert candidate is not None
     assert candidate["strategy_family"] == STRATEGY_FAMILY
     assert candidate["strategy_version"] == STRATEGY_VERSION
-    assert candidate["symbol"] == "ETHUSDT"
-    assert set(candidate["execution_options"]) == {"BTCUSDT", "ETHUSDT"}
+    assert candidate["symbol"] == "BNBUSDT"
+    assert set(candidate["execution_options"]) == {"BNBUSDT", "BTCUSDT", "ETHUSDT"}
     assert candidate["reference_execution_attempts"]["BTCUSDT"]["eligible"] is False
-    assert candidate["reference_execution_attempts"]["ETHUSDT"]["eligible"] is True
+    assert candidate["reference_execution_attempts"]["BNBUSDT"]["eligible"] is True
     assert candidate["direction"] == "LONG"
     assert candidate["passed"] is False
     assert candidate["evidence_type"] == "independent_realtime"
     assert candidate["shadow_disable_take_profit"] is True
     assert candidate["research_context"]["reference_risk_pct"] == 10.0
     assert candidate["research_context"]["max_risk_cap_pct"] == 30.0
-    assert candidate["signal"]["protection_profile"]["atr_days"] == 10
-    assert candidate["signal"]["protection_profile"]["atr_multiple"] == 3.0
-    assert candidate["shadow_max_hold_minutes"] == 20 * 24 * 60
+    assert candidate["signal"]["protection_profile"]["stop_pct"] == 10.0
+    assert candidate["signal"]["protection_profile"]["daily_stop_audit_enabled"] is False
+    assert candidate["shadow_max_hold_minutes"] == 5 * 24 * 60
 
 
 def test_no_candidate_when_fast_momentum_is_below_threshold() -> None:
@@ -328,13 +330,14 @@ def test_live_takeover_decision_requires_headroom_and_preserves_daily_profile(
         now,
     )
     assert decision["action"] == "OPEN_LONG"
-    assert decision["symbol"] == "ETHUSDT"
-    assert decision["risk"]["execution_fallback_used"] is True
+    assert decision["symbol"] == "BNBUSDT"
+    assert decision["risk"]["execution_fallback_used"] is False
     assert decision["strategy_version"] == STRATEGY_VERSION
     assert decision["risk_pct"] <= 10.0
     assert decision["estimated_notional"] >= 10.0
     assert decision["signal"]["protection_profile"]["runtime_intraday_trailing_enabled"] is False
-    assert decision["signal"]["protection_profile"]["protection_version"] == "market_tsmom_daily_v3"
+    assert decision["signal"]["protection_profile"]["protection_version"] == "market_tsmom_bnb_time5_v4"
+    assert decision["signal"]["protection_profile"]["max_hold_seconds"] == 5 * 24 * 3600
 
     preferred = build_market_tsmom_live_decision(
         {
@@ -350,25 +353,8 @@ def test_live_takeover_decision_requires_headroom_and_preserves_daily_profile(
         now,
     )
     assert preferred["action"] == "OPEN_LONG"
-    assert preferred["symbol"] == "BTCUSDT"
+    assert preferred["symbol"] == "BNBUSDT"
     assert preferred["risk"]["execution_fallback_used"] is False
-
-    no_fallback = build_market_tsmom_live_decision(
-        {
-            "hard_stop_equity": 5.0,
-            "market_tsmom_live_min_equity_usdt": 10.0,
-            "market_tsmom_live_risk_pct": 10.0,
-            "market_tsmom_live_leverage": 2,
-            "market_tsmom_live_margin_pct": 90.0,
-            "effective_min_order_notional_usdt": 10.0,
-            "market_tsmom_execution_fallback_enabled": False,
-        },
-        {},
-        {"equity": 20.0, "available_balance": 20.0, "positions": []},
-        now,
-    )
-    assert no_fallback["action"] == "WAIT"
-    assert no_fallback["reason"] == "market_tsmom_no_contract_safe_execution"
 
     duplicate = build_market_tsmom_live_decision(
         {
@@ -381,3 +367,140 @@ def test_live_takeover_decision_requires_headroom_and_preserves_daily_profile(
     )
     assert duplicate["action"] == "WAIT"
     assert duplicate["reason"] == "market_tsmom_signal_already_traded_today"
+
+
+def test_live_takeover_can_disable_new_entries_without_masking_open_position(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
+    candidate, _ = build_market_tsmom_shadow_candidate(
+        FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None
+    )
+    assert candidate is not None
+    monkeypatch.setattr(
+        market_tsmom_module,
+        "current_market_tsmom_candidate",
+        lambda _now=None: candidate,
+    )
+    config = {"market_tsmom_live_new_entries_enabled": False}
+
+    blocked = build_market_tsmom_live_decision(
+        config,
+        {},
+        {"equity": 20.0, "available_balance": 20.0, "positions": []},
+        now,
+    )
+    assert blocked["action"] == "WAIT"
+    assert blocked["reason"] == "market_tsmom_new_entries_disabled"
+
+    occupied = build_market_tsmom_live_decision(
+        config,
+        {},
+        {
+            "equity": 20.0,
+            "available_balance": 10.0,
+            "positions": [{"symbol": "ETHUSDT", "positionAmt": "0.01"}],
+        },
+        now,
+    )
+    assert occupied["action"] == "WAIT"
+    assert occupied["reason"] == "market_tsmom_position_already_open"
+
+
+def test_live_takeover_rejects_a_stale_daily_entry(monkeypatch) -> None:
+    signal_time = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
+    candidate, _ = build_market_tsmom_shadow_candidate(
+        FakeClient(signal_time),
+        _snapshot(signal_time),
+        {},
+        signal_time,
+        sleep_fn=lambda _: None,
+    )
+    assert candidate is not None
+    monkeypatch.setattr(
+        market_tsmom_module,
+        "current_market_tsmom_candidate",
+        lambda _now=None: candidate,
+    )
+
+    decision = build_market_tsmom_live_decision(
+        {},
+        {},
+        {"equity": 20.0, "available_balance": 20.0, "positions": []},
+        signal_time + timedelta(hours=3),
+    )
+
+    assert decision["action"] == "WAIT"
+    assert decision["reason"] == "market_tsmom_entry_window_expired"
+
+
+def test_current_fixed_hold_position_is_not_managed_with_legacy_trailing(
+    monkeypatch,
+) -> None:
+    now = datetime.now(timezone.utc)
+    state = {
+        "runtime_protection_positions": {
+            "BNBUSDT:LONG": {
+                "opened_at": now.isoformat(),
+                "max_hold_seconds": 5 * 24 * 3600,
+                "strategy_family": STRATEGY_FAMILY,
+                "strategy_version": STRATEGY_VERSION,
+            }
+        }
+    }
+
+    result = runner_module.manage_market_tsmom_live_position(
+        object(),
+        {"market_tsmom_live_enabled": True},
+        state,
+        {"positions": [{"symbol": "BNBUSDT", "positionAmt": "0.02"}]},
+    )
+
+    assert result == {
+        "managed": True,
+        "closed": False,
+        "reason": "fixed_time_hold_active",
+    }
+
+
+def test_legacy_position_remains_managed_after_v4_release(monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
+    saved = []
+    monkeypatch.setattr(
+        runner_module,
+        "market_tsmom_consensus_status",
+        lambda: {
+            "status": "no_signal",
+            "signal_boundary": now.replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ).isoformat(),
+        },
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "close_rotation_position",
+        lambda _client, position: {"closed": position["symbol"]},
+    )
+    monkeypatch.setattr(runner_module, "record_event", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner_module, "save_state", lambda payload: saved.append(payload))
+    state = {
+        "runtime_protection_positions": {
+            "ETHUSDT:LONG": {
+                "opened_at": now.isoformat(),
+                "max_hold_seconds": 20 * 24 * 3600,
+                "strategy_family": STRATEGY_FAMILY,
+                "strategy_version": "s0_market_tsmom_28_56_trailing_v3",
+            }
+        }
+    }
+
+    result = runner_module.manage_market_tsmom_live_position(
+        object(),
+        {"market_tsmom_live_enabled": True},
+        state,
+        {"positions": [{"symbol": "ETHUSDT", "positionAmt": "0.01"}]},
+    )
+
+    assert result["closed"] is True
+    assert result["reason"] == "market_signal_off"
+    assert saved[-1] == {"runtime_protection_positions": {}}

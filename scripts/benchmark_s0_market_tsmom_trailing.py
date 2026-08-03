@@ -122,6 +122,7 @@ def simulate(
             disaster_stop,
             float(frame.iloc[index].close) - variant.atr_multiple * atr,
         )
+        entry_initial_stop = trailing_stop
         exit_index = min(
             entry_index + variant.max_hold_days,
             len(frame) - 1,
@@ -163,10 +164,10 @@ def simulate(
                 "entry_day": entry.day,
                 "exit_day": exit.day,
                 "entry_price": entry_price,
-                "initial_stop": trailing_stop,
+                "initial_stop": entry_initial_stop,
                 "initial_stop_pct": max(
                     0.0,
-                    (entry_price - trailing_stop) / entry_price,
+                    (entry_price - entry_initial_stop) / entry_price,
                 ),
                 "exit_price": exit_price,
                 "gross_return": exit_price / entry_price - 1.0,
