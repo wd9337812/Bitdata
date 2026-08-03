@@ -1900,7 +1900,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("market_tsmom_shadow_max_hold_hours", "最长持仓小时", "默认 480 小时（20 天）；趋势关闭会提前退出")}
           {toggle("market_tsmom_live_enabled", "允许趋势共振接管 S0 实盘", "高风险专家开关，默认关闭；开启后 S0 执行 28/56 日趋势共振，不再执行原短打策略")}
           {toggle("market_tsmom_execution_fallback_enabled", "允许 ETH 最小合约回退", "推荐开启；只在 BTC 最小合约会超过风险预算时使用 ETH，不改变市场方向判断")}
-          {number("market_tsmom_live_risk_pct", "趋势实盘单笔风险%", "默认 10%，硬上限 30%；按止损距离计算实际仓位")}
+          {number("market_tsmom_live_risk_pct", "趋势实盘单笔风险%", "小账户默认 15%，硬上限 30%；用于满足 20U 最小合约并按真实止损距离验算")}
           {number("market_tsmom_live_min_equity_usdt", "趋势实盘最低权益 U", "默认 10U；低于该值或距离 5U 硬停止不足时不会开仓")}
           {number("shadow_min_candidate_score", "影子交易最低候选分", "默认 70；只记录值得研究的机会")}
           {number("shadow_dedupe_minutes", "影子信号去重分钟", "同币、同方向、同信号在窗口内只算一笔")}

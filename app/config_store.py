@@ -967,7 +967,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "market_tsmom_shadow_reference_risk_pct": 10.0,
     "market_tsmom_shadow_execution_equity_usdt": 15.153,
     "market_tsmom_live_enabled": False,
-    "market_tsmom_live_risk_pct": 10.0,
+    "market_tsmom_live_risk_pct": 15.0,
     "market_tsmom_live_leverage": 2,
     "market_tsmom_live_margin_pct": 90.0,
     "market_tsmom_live_min_equity_usdt": 10.0,

@@ -25,9 +25,10 @@ from scripts.benchmark_s0_market_tsmom_trailing import Variant, simulate
 
 OUTPUT = ROOT / "data" / "research" / "s0_market_tsmom_executable"
 VARIANT = Variant(10, 3.0, 0.15, 20)
+SELECTED_RISK = 0.15
 SYMBOL_RULES = {
-    "BTCUSDT": {"min_qty": 0.001, "qty_step": 0.001},
-    "ETHUSDT": {"min_qty": 0.001, "qty_step": 0.001},
+    "BTCUSDT": {"min_qty": 0.001, "qty_step": 0.001, "min_notional": 50.0},
+    "ETHUSDT": {"min_qty": 0.001, "qty_step": 0.001, "min_notional": 20.0},
 }
 
 
@@ -121,6 +122,8 @@ def executable_metrics(
             if qty < symbol_rules["min_qty"]:
                 return 0.0, 0.0, 0.0
             notional = qty * entry
+            if notional < symbol_rules["min_notional"]:
+                return 0.0, 0.0, 0.0
             actual_risk = notional * stop_pct
             return qty, notional, actual_risk
 
@@ -203,7 +206,7 @@ def main() -> None:
         for symbol, frame in trades.items()
     }
     scenarios = {}
-    for risk_pct in (0.10, 0.30):
+    for risk_pct in (0.10, 0.15, 0.30):
         for max_leverage in (2.0, 3.0, 5.0):
             key = f"risk{int(risk_pct * 100)}_lev{int(max_leverage)}"
             scenarios[f"btc_{key}"] = executable_metrics(
@@ -224,29 +227,32 @@ def main() -> None:
             )
     preferred = "BTCUSDT"
     fallback = "ETHUSDT"
-    validation: dict[str, Any] = {}
+    validation_by_risk: dict[str, dict[str, Any]] = {}
     periods = {
         "train_2020_2023": (2020, 2023),
         "oos_2024_2026": (2024, 2026),
         **{str(year): (year, year) for year in range(2020, 2027)},
     }
-    for name, (start_year, end_year) in periods.items():
-        sliced = {
-            symbol: frame.loc[
-                pd.to_datetime(frame.entry_day, utc=True).dt.year.between(
-                    start_year, end_year
-                )
-            ].reset_index(drop=True)
-            for symbol, frame in trades.items()
-        }
-        validation[name] = executable_metrics(
-            sliced,
-            preferred_symbol=preferred,
-            fallback_symbol=fallback,
-            starting_equity=15.153,
-            risk_pct=0.10,
-            max_leverage=2.0,
-        )
+    for risk_pct in (0.10, SELECTED_RISK):
+        validation: dict[str, Any] = {}
+        for name, (start_year, end_year) in periods.items():
+            sliced = {
+                symbol: frame.loc[
+                    pd.to_datetime(frame.entry_day, utc=True).dt.year.between(
+                        start_year, end_year
+                    )
+                ].reset_index(drop=True)
+                for symbol, frame in trades.items()
+            }
+            validation[name] = executable_metrics(
+                sliced,
+                preferred_symbol=preferred,
+                fallback_symbol=fallback,
+                starting_equity=15.153,
+                risk_pct=risk_pct,
+                max_leverage=2.0,
+            )
+        validation_by_risk[f"{int(risk_pct * 100)}pct"] = validation
     delay_validation = {}
     for delay in (0, 1, 2):
         delayed = {
@@ -269,7 +275,7 @@ def main() -> None:
             preferred_symbol=preferred,
             fallback_symbol=fallback,
             starting_equity=15.153,
-            risk_pct=0.10,
+            risk_pct=SELECTED_RISK,
             max_leverage=2.0,
         )
     output = {
@@ -282,7 +288,9 @@ def main() -> None:
         "starting_equity": 15.153,
         "scenarios": scenarios,
         "selected_operational_rule": "BTC preferred; ETH only when BTC minimum contract cannot be sized",
-        "selected_validation": validation,
+        "conservative_10pct_validation": validation_by_risk["10pct"],
+        "selected_validation": validation_by_risk["15pct"],
+        "selected_risk_pct": SELECTED_RISK * 100,
         "selected_oos_execution_delays": delay_validation,
     }
     OUTPUT.mkdir(parents=True, exist_ok=True)
