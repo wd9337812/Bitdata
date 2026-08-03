@@ -561,7 +561,7 @@ def manage_market_tsmom_live_position(
             "info",
             "market_tsmom_live_migration",
             f"旧版市场趋势持仓 {symbol} 已退出，准备切换到新鲜且可执行的 "
-            f"{replacement.get('symbol')} V4 信号。",
+            f"{replacement.get('symbol')} 当前版本信号。",
             {
                 "from_strategy_version": tracked_version,
                 "to_strategy_version": MARKET_TSMOM_VERSION,

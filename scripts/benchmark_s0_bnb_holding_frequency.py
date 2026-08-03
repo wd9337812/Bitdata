@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
@@ -12,25 +13,35 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.benchmark_s0_executable_major_rotation import (
-    ExitProfile,
-    bootstrap_net_return,
-    build_features,
-    executable_metrics,
+from scripts.audit_s0_bnb_fixed_gate_hourly import (
+    COSTS,
+    CURRENT_THRESHOLD,
+    DEFAULT_DATA,
+    fixed_consensus_state,
+    load_hourly_symbol,
+    market_state,
     period_report,
-    simulate_rotation,
+    simulate_hourly_reentry,
 )
 from scripts.benchmark_s0_market_tsmom_28d import (
-    DEFAULT_DATA,
     STRESS_ONE_WAY_COST,
     build_daily_panel,
-    market_state,
 )
-from scripts.benchmark_s0_market_tsmom_consensus import consensus_state
 
 
 OUTPUT = ROOT / "data" / "research" / "s0_bnb_holding_frequency"
-TRAIN_END_YEAR = 2023
+DEVELOPMENT_END_YEAR = 2022
+VALIDATION_YEAR = 2023
+DELAYS = (0, 1, 2, 4)
+
+
+@dataclass(frozen=True)
+class ExitProfile:
+    name: str
+    stop_pct: float
+    max_hold_days: int
+
+
 PROFILES = tuple(
     ExitProfile(
         f"time{hold_days}_stop{stop_pct:g}",
@@ -55,105 +66,115 @@ def selection_score(report: dict[str, Any]) -> tuple[int, float, float, float]:
     )
 
 
-def cost_stress_report(
+def slice_years(
     trades: pd.DataFrame,
-    *,
-    starting_equity: float = 15.0,
-    risk_pct: float = 0.15,
-) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for multiplier in (1.0, 1.5, 2.0):
-        stressed = trades.copy()
-        stressed["net_return"] = stressed.net_return - (
-            2.0 * STRESS_ONE_WAY_COST * (multiplier - 1.0)
-        )
-        result[f"{multiplier:g}x"] = {
-            "metrics": executable_metrics(
-                stressed,
-                starting_equity=starting_equity,
-                risk_pct=risk_pct,
-            ),
-            "bootstrap": bootstrap_net_return(stressed),
-        }
-    return result
+    start: int | None,
+    end: int | None,
+) -> pd.DataFrame:
+    years = pd.to_datetime(trades.entry_time, utc=True).dt.year
+    mask = pd.Series(True, index=trades.index)
+    if start is not None:
+        mask &= years.ge(start)
+    if end is not None:
+        mask &= years.le(end)
+    return trades.loc[mask].reset_index(drop=True)
 
 
 def main() -> None:
     OUTPUT.mkdir(parents=True, exist_ok=True)
     panel = build_daily_panel(DEFAULT_DATA)
-    features = build_features(panel)
-    state = consensus_state(market_state(panel), 56)
+    hourly = load_hourly_symbol(DEFAULT_DATA)
+    state = fixed_consensus_state(market_state(panel), CURRENT_THRESHOLD)
     candidates: dict[str, Any] = {}
     trades_by_name: dict[str, pd.DataFrame] = {}
+
     for profile in PROFILES:
-        trades = simulate_rotation(
-            panel,
-            features,
+        trades = simulate_hourly_reentry(
+            hourly,
             state,
-            "fixed_BNBUSDT",
-            profile,
+            execution_delay_hours=0,
+            stop_pct=profile.stop_pct,
+            max_hold_hours=profile.max_hold_days * 24,
         )
-        years = pd.to_datetime(trades.entry_day, utc=True).dt.year
-        train = trades.loc[years.le(TRAIN_END_YEAR)].copy()
-        oos = trades.loc[years.gt(TRAIN_END_YEAR)].copy()
         candidates[profile.name] = {
-            "train": period_report(train, 15.0, 0.15),
-            "oos": period_report(oos, 15.0, 0.15),
+            "parameters": asdict(profile),
+            "development": period_report(
+                slice_years(trades, None, DEVELOPMENT_END_YEAR),
+                one_way_cost=STRESS_ONE_WAY_COST,
+            ),
+            "validation": period_report(
+                slice_years(trades, VALIDATION_YEAR, VALIDATION_YEAR),
+                one_way_cost=STRESS_ONE_WAY_COST,
+            ),
+            "oos": period_report(
+                slice_years(trades, VALIDATION_YEAR + 1, None),
+                one_way_cost=STRESS_ONE_WAY_COST,
+            ),
         }
         trades_by_name[profile.name] = trades
 
     selected = max(
         candidates,
-        key=lambda name: selection_score(candidates[name]["train"]),
+        key=lambda name: selection_score(candidates[name]["development"]),
     )
     selected_profile = next(profile for profile in PROFILES if profile.name == selected)
     selected_trades = trades_by_name[selected]
-    selected_years = pd.to_datetime(selected_trades.entry_day, utc=True).dt.year
-    selected_oos = selected_trades.loc[selected_years.gt(TRAIN_END_YEAR)].copy()
+    selected_oos = slice_years(selected_trades, VALIDATION_YEAR + 1, None)
     selected_trades.to_parquet(OUTPUT / "selected_trades.parquet", index=False)
 
     delays: dict[str, Any] = {}
-    for delay in (0, 1, 2):
-        trades = simulate_rotation(
-            panel,
-            features,
+    for delay in DELAYS:
+        trades = simulate_hourly_reentry(
+            hourly,
             state,
-            "fixed_BNBUSDT",
-            selected_profile,
-            delay_days=delay,
+            execution_delay_hours=delay,
+            stop_pct=selected_profile.stop_pct,
+            max_hold_hours=selected_profile.max_hold_days * 24,
         )
-        years = pd.to_datetime(trades.entry_day, utc=True).dt.year
         delays[str(delay)] = period_report(
-            trades.loc[years.gt(TRAIN_END_YEAR)],
-            15.0,
-            0.15,
+            slice_years(trades, VALIDATION_YEAR + 1, None),
+            one_way_cost=STRESS_ONE_WAY_COST,
         )
 
     result = {
         "experiment": "s0_bnb_holding_frequency",
         "asset": "BNBUSDT",
         "market_gate": "frozen_28d_56d_consensus_threshold_10.65pct",
-        "selection_period": "2020-2023 only",
+        "path_model": (
+            "hourly stop path with next-daily-signal re-entry after an early exit"
+        ),
+        "selection_period": "2020-2022 development only",
+        "validation_period": "2023",
+        "out_of_sample_period": "2024+",
         "selection_rule": (
-            "maximize positive training years, then worst annual return, "
+            "maximize positive development years, then worst annual return, "
             "then PF and total return"
         ),
         "stress_one_way_cost_pct": STRESS_ONE_WAY_COST * 100.0,
         "selected": selected,
         "selected_result": candidates[selected],
-        "selected_oos_cost_stress": cost_stress_report(selected_oos),
-        "selected_oos_entry_delay_days": delays,
+        "selected_oos_cost_stress": {
+            label: period_report(selected_oos, one_way_cost=cost)
+            for label, cost in COSTS.items()
+        },
+        "selected_oos_entry_delay_hours": delays,
         "candidates": candidates,
         "warning": (
-            "The 2024-2026 period is read once after the exit profile is selected. "
-            "Historical results do not guarantee future profit."
+            "The 2023 validation and 2024+ out-of-sample periods are not used "
+            "to select the exit profile. Historical results do not guarantee profit."
         ),
     }
     (OUTPUT / "report.json").write_text(
         json.dumps(result, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    print(json.dumps({key: value for key, value in result.items() if key != "candidates"}, ensure_ascii=False, indent=2))
+    print(
+        json.dumps(
+            {key: value for key, value in result.items() if key != "candidates"},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
 
 
 if __name__ == "__main__":

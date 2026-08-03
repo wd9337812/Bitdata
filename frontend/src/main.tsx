@@ -1312,7 +1312,7 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
   ) || {};
   const marketTsmomRelease = (data.by_release || []).find(
     (row: any) => row.strategy_family === "market_tsmom_consensus"
-      && row.strategy_version === String(marketTsmom.strategy_version || "s0_market_tsmom_bnb_28_56_time5_v4"),
+      && row.strategy_version === String(marketTsmom.strategy_version || "s0_market_tsmom_bnb_28_56_time5_stop15_v5"),
   ) || {};
   const marketTsmomFrequencyRelease = (data.by_release || []).find(
     (row: any) => row.strategy_family === "market_tsmom_consensus"
@@ -1349,8 +1349,8 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
       <div className="panel">
         <div className="panel-head">
           <div>
-            <h2>BNB 28/56 日趋势共振 V4</h2>
-            <p>每天用高流动性永续币构造市场指数。28 日动量超过冻结门槛且 56 日趋势向上时，只执行冻结回测选出的 BNB 五日规则；三日版本仅同步做影子对照。</p>
+            <h2>BNB 28/56 日趋势共振 V5</h2>
+            <p>每天用高流动性永续币构造市场指数。28 日动量超过冻结门槛且 56 日趋势向上时，只执行冻结回测选出的 BNB 五日规则；风险不变，使用更宽止损和更小名义仓位减少趋势内噪声止损。</p>
           </div>
           <span className={marketTsmom.live_effect === "s0_takeover" ? "pill ok" : "pill"}>{marketTsmom.live_effect === "s0_takeover" ? "当前 S0 实盘" : "仅影子验证"}</span>
         </div>
@@ -1358,7 +1358,7 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
           <MetricCard title="今日共振" value={marketTsmom.status === "candidate_ready" ? `已建立 ${marketTsmom.symbol || marketTsmom.candidate?.symbol || "可执行"} 多头影子` : marketTsmom.status === "no_signal" ? "趋势条件未同时满足" : marketTsmom.status === "insufficient_history" ? "连续日线不足" : marketTsmom.status === "error" ? "研究线程异常" : marketTsmom.enabled === false ? "已关闭" : "等待每日窗口"} sub={marketTsmom.reason || "UTC 00:03-00:50 评估；新版本部署当天允许一次补评估"} tone={marketTsmom.status === "error" ? "negative" : marketTsmom.status === "candidate_ready" ? "positive" : ""} />
           <MetricCard title="市场趋势" value={`28日 ${fmt(marketTsmom.market_momentum_28d_pct, 2)}%`} sub={`门槛 ${fmt(marketTsmom.top_third_threshold_pct, 2)}% · 56日 ${fmt(marketTsmom.market_momentum_56d_pct, 2)}%`} />
           <MetricCard title="市场样本" value={`${fmt(marketTsmom.market_symbols, 0)} 个币`} sub={`预选 ${fmt(marketTsmom.universe_size, 0)} · 可用 ${fmt(marketTsmom.usable_universe_size, 0)} · 限流让路 ${fmt(marketTsmom.rate_limit_retries, 0)} 次`} />
-          <MetricCard title="当前实盘规则" value={marketTsmom.candidate?.symbol || "等待信号"} sub="信号后 2 小时内入场 · 固定 10% 止损 · 最长持有 5 天" />
+          <MetricCard title="当前实盘规则" value={marketTsmom.candidate?.symbol || "等待信号"} sub="信号后 2 小时内入场 · 固定 15% 止损 · 最长持有 5 天" />
           <MetricCard title="风险说明" value="配置 15% · 硬上限 30%" sub="按真实止损距离、合约步长和可用保证金向下取整；5U 硬停止与交易所保护单始终生效" />
           <MetricCard title="五日实盘同版影子" value={`${fmt(marketTsmomRelease.closed, 0)} 笔`} sub={`${pfLabel(marketTsmomRelease.profit_factor, marketTsmomRelease.closed)} · 净收益 ${fmt(marketTsmomRelease.net_pnl, 4)} U · 成本 ${fmt(marketTsmomRelease.cost, 4)} U`} tone={Number(marketTsmomRelease.net_pnl || 0) > 0 ? "positive" : Number(marketTsmomRelease.net_pnl || 0) < 0 ? "negative" : ""} />
           <MetricCard title="三日高频挑战影子" value={`${fmt(marketTsmomFrequencyRelease.closed, 0)} 笔`} sub={`${pfLabel(marketTsmomFrequencyRelease.profit_factor, marketTsmomFrequencyRelease.closed)} · 净收益 ${fmt(marketTsmomFrequencyRelease.net_pnl, 4)} U · 固定 15% 止损；不参与实盘`} tone={Number(marketTsmomFrequencyRelease.net_pnl || 0) > 0 ? "positive" : Number(marketTsmomFrequencyRelease.net_pnl || 0) < 0 ? "negative" : ""} />
@@ -1903,8 +1903,8 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("market_tsmom_shadow_enabled", "BNB 28/56 日趋势影子", "每天一次构造 20 币市场指数；市场趋势共振时只验证 BNB 固定规则，版本证据独立")}
           {number("market_tsmom_shadow_prefetch_symbols", "趋势共振预选币数", "默认 40；仅每日读取 60 根日线，按近 30 日成交额选 20 个构造市场指数")}
           {number("market_tsmom_shadow_top_third_threshold_pct", "28 日历史上三分位门槛%", "默认 10.65%；来自冻结历史样本，不随短期输赢自动漂移")}
-          {number("market_tsmom_shadow_reference_risk_pct", "趋势共振参考风险%", "默认 10%；影子只记录结果，不会真实下单")}
-          {number("market_tsmom_bnb_stop_pct", "BNB 固定止损%", "默认 10%；新仓成交后立即在 Binance 放置交易所端止损")}
+          {number("market_tsmom_shadow_reference_risk_pct", "趋势共振参考风险%", "默认 15%；与当前实盘风险预算同口径，影子仍不会真实下单")}
+          {number("market_tsmom_bnb_stop_pct", "BNB 固定止损%", "默认 15%；系统会同步缩小名义仓位，使账户计划风险仍不超过配置上限")}
           {number("market_tsmom_bnb_max_hold_hours", "BNB 最长持仓小时", "默认 120 小时（5 天）；到期按市价退出，不用短期噪声追踪止损")}
           {number("market_tsmom_bnb_entry_window_hours", "日线信号入场窗口小时", "默认 2 小时；错过 UTC 日线信号后的执行窗口就等下一天，避免追入过期信号")}
           {toggle("market_tsmom_live_enabled", "允许 BNB 趋势规则接管 S0 实盘", "开启后只在 28/56 日市场趋势共振时执行 BNB 五日规则，不再执行原短打策略")}

@@ -131,9 +131,9 @@ def test_builds_contract_executable_long_shadow() -> None:
     assert candidate["passed"] is False
     assert candidate["evidence_type"] == "independent_realtime"
     assert candidate["shadow_disable_take_profit"] is True
-    assert candidate["research_context"]["reference_risk_pct"] == 10.0
+    assert candidate["research_context"]["reference_risk_pct"] == 15.0
     assert candidate["research_context"]["max_risk_cap_pct"] == 30.0
-    assert candidate["signal"]["protection_profile"]["stop_pct"] == 10.0
+    assert candidate["signal"]["protection_profile"]["stop_pct"] == 15.0
     assert candidate["signal"]["protection_profile"]["daily_stop_audit_enabled"] is False
     assert candidate["shadow_max_hold_minutes"] == 5 * 24 * 60
 
@@ -196,7 +196,7 @@ def test_live_profile_and_frequency_challenger_open_as_separate_shadows(
         market_tsmom_module.FREQUENCY_CHALLENGER_VERSION,
     }
     assert len({row[1] for row in rows}) == 2
-    assert len({round(float(row[2]), 8) for row in rows}) == 2
+    assert len({round(float(row[2]), 8) for row in rows}) == 1
 
 
 def test_no_candidate_when_fast_momentum_is_below_threshold() -> None:
@@ -435,7 +435,7 @@ def test_live_takeover_decision_requires_headroom_and_preserves_daily_profile(
     assert decision["risk_pct"] <= 10.0
     assert decision["estimated_notional"] >= 10.0
     assert decision["signal"]["protection_profile"]["runtime_intraday_trailing_enabled"] is False
-    assert decision["signal"]["protection_profile"]["protection_version"] == "market_tsmom_bnb_time5_v4"
+    assert decision["signal"]["protection_profile"]["protection_version"] == "market_tsmom_bnb_time5_stop15_v5"
     assert decision["signal"]["protection_profile"]["max_hold_seconds"] == 5 * 24 * 3600
 
     preferred = build_market_tsmom_live_decision(
@@ -562,7 +562,16 @@ def test_current_fixed_hold_position_is_not_managed_with_legacy_trailing(
     }
 
 
-def test_legacy_position_remains_managed_after_v4_release(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    "legacy_version",
+    [
+        "s0_market_tsmom_28_56_trailing_v3",
+        "s0_market_tsmom_bnb_28_56_time5_v4",
+    ],
+)
+def test_legacy_position_remains_managed_after_v5_release(
+    monkeypatch, legacy_version
+) -> None:
     now = datetime.now(timezone.utc)
     saved = []
     monkeypatch.setattr(
@@ -588,7 +597,7 @@ def test_legacy_position_remains_managed_after_v4_release(monkeypatch) -> None:
                 "opened_at": now.isoformat(),
                 "max_hold_seconds": 20 * 24 * 3600,
                 "strategy_family": STRATEGY_FAMILY,
-                "strategy_version": "s0_market_tsmom_28_56_trailing_v3",
+                "strategy_version": legacy_version,
             }
         }
     }
