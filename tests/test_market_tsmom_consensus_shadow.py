@@ -8,6 +8,7 @@ from app.market_tsmom_consensus_shadow import (
     build_market_tsmom_shadow_candidate,
     completed_daily_series,
     market_consensus_metrics,
+    status_has_current_day_evaluation,
 )
 from app.models import TradingConfig
 from app.shadow_trading import manage_shadow_strategy_positions, update_shadow_trades
@@ -161,6 +162,24 @@ def test_new_release_can_bootstrap_after_daily_window() -> None:
     assert blocked_status["status"] == "outside_daily_window"
     assert candidate is not None
     assert status["status"] == "candidate_ready"
+
+
+def test_current_day_status_survives_same_version_restart() -> None:
+    now = datetime(2026, 8, 1, 3, 5, tzinfo=timezone.utc)
+    current = {
+        "strategy_version": STRATEGY_VERSION,
+        "status": "candidate_ready",
+        "signal_boundary": "2026-08-01T00:00:00+00:00",
+        "candidate": {"symbol": "ETHUSDT"},
+    }
+
+    assert status_has_current_day_evaluation(current, now) is True
+    assert status_has_current_day_evaluation(
+        {**current, "signal_boundary": "2026-07-31T00:00:00+00:00"}, now
+    ) is False
+    assert status_has_current_day_evaluation(
+        {**current, "strategy_version": "old"}, now
+    ) is False
 
 
 def test_candidate_opens_only_as_isolated_shadow_without_fixed_take_profit(

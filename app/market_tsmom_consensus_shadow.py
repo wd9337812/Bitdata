@@ -53,6 +53,28 @@ def market_tsmom_consensus_status() -> dict[str, Any]:
         }
 
 
+def status_has_current_day_evaluation(
+    status: dict[str, Any],
+    now: datetime | None = None,
+) -> bool:
+    current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
+    if str(status.get("strategy_version") or "") != STRATEGY_VERSION:
+        return False
+    if status.get("status") not in {"candidate_ready", "no_signal"}:
+        return False
+    try:
+        boundary = datetime.fromisoformat(
+            str(status.get("signal_boundary") or "").replace("Z", "+00:00")
+        )
+        if boundary.tzinfo is None:
+            boundary = boundary.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return False
+    return boundary.date() == current.date()
+
+
 def current_market_tsmom_candidate(
     now: datetime | None = None,
 ) -> dict[str, Any] | None:
@@ -730,9 +752,14 @@ def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
                 _write_status({**base, "status": "disabled", "reason": "配置已关闭"})
             elif day != evaluated_day:
                 previous = market_tsmom_consensus_status()
+                if status_has_current_day_evaluation(previous, now):
+                    evaluated_day = day
+                    _write_status({**previous, **base})
+                    time.sleep(10)
+                    continue
                 bootstrap = bool(
                     config.get("market_tsmom_bootstrap_current_day_enabled", True)
-                ) and str(previous.get("strategy_version") or "") != STRATEGY_VERSION
+                )
                 candidate, status = build_market_tsmom_shadow_candidate(
                     BinanceFuturesClient(
                         str(config.get("api_key") or ""),
