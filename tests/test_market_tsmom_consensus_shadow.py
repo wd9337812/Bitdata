@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 import app.market_tsmom_consensus_shadow as market_tsmom_module
 import app.runner as runner_module
 from app.market_tsmom_consensus_shadow import (
@@ -243,6 +245,42 @@ def test_current_day_status_survives_same_version_restart() -> None:
     assert status_has_current_day_evaluation(
         {**current, "strategy_version": "old"}, now
     ) is False
+
+
+def test_restart_backfills_missing_frequency_challenger(monkeypatch) -> None:
+    now = datetime.now(timezone.utc)
+    active, _ = build_market_tsmom_shadow_candidate(
+        FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None,
+        allow_outside_window=True,
+    )
+    assert active is not None
+    previous = {
+        "strategy_version": STRATEGY_VERSION,
+        "status": "candidate_ready",
+        "signal_boundary": now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(),
+        "candidate": active,
+    }
+    writes = []
+    opened = []
+    monkeypatch.setattr(market_tsmom_module, "market_tsmom_consensus_status", lambda: previous)
+    monkeypatch.setattr(market_tsmom_module, "_write_status", writes.append)
+    monkeypatch.setattr(
+        market_tsmom_module,
+        "update_shadow_trades",
+        lambda candidates, config: opened.extend(candidates) or {"opened": len(candidates)},
+    )
+    monkeypatch.setattr(
+        market_tsmom_module.time,
+        "sleep",
+        lambda _: (_ for _ in ()).throw(SystemExit),
+    )
+
+    with pytest.raises(SystemExit):
+        market_tsmom_module._run(lambda: {})
+
+    assert len(opened) == 1
+    assert opened[0]["strategy_version"] == market_tsmom_module.FREQUENCY_CHALLENGER_VERSION
+    assert writes[-1]["frequency_challenger"]["strategy_version"] == opened[0]["strategy_version"]
 
 
 def test_candidate_opens_only_as_isolated_shadow_without_fixed_take_profit(

@@ -529,3 +529,4 @@ This file tracks local verification for the two-stage futures system.
 - 修正五日影子每日错误上移止损的问题，使影子、实盘和冻结回测均使用入场固定止损与时间退出。
 - 定向测试 `21 passed`；完整后端测试 `662 passed`，仅有 5 条既有 sklearn 收敛警告。
 - 前端 `npm run build` 通过，Dashboard 已改为显示当前 BNB V4 五日实盘同版影子和三日高频挑战影子。
+- 补充同日重启回填：若五日候选已经评估但三日挑战影子尚未创建，重启后立即补建，不再等待下一 UTC 日；定向测试 `22 passed`，完整后端测试 `664 passed`。

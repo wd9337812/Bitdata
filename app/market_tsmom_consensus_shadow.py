@@ -894,6 +894,18 @@ def _run(config_provider: Callable[[], dict[str, Any]]) -> None:
             elif day != evaluated_day:
                 previous = market_tsmom_consensus_status()
                 if status_has_current_day_evaluation(previous, now):
+                    active = previous.get("candidate")
+                    challenger = previous.get("frequency_challenger")
+                    if isinstance(active, dict) and not isinstance(challenger, dict):
+                        challenger = build_frequency_challenger_candidate(active, config)
+                        if challenger:
+                            previous = {
+                                **previous,
+                                "frequency_challenger": challenger,
+                                "frequency_challenger_shadow_result": update_shadow_trades(
+                                    [challenger], config
+                                ),
+                            }
                     evaluated_day = day
                     _write_status({**previous, **base})
                     time.sleep(10)
