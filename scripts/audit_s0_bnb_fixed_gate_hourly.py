@@ -95,7 +95,10 @@ def simulate_hourly_reentry(
     execution_delay_hours: int,
     stop_pct: float = STOP_PCT,
     max_hold_hours: int = MAX_HOLD_HOURS,
+    direction: int = 1,
 ) -> pd.DataFrame:
+    if direction not in {-1, 1}:
+        raise ValueError("direction must be -1 or 1")
     bars = hourly.sort_values("time").reset_index(drop=True).copy()
     times = pd.DatetimeIndex(bars.time)
     signal_days = pd.to_datetime(
@@ -121,7 +124,7 @@ def simulate_hourly_reentry(
         if not math.isfinite(entry_price) or entry_price <= 0:
             continue
 
-        stop_price = entry_price * (1.0 - float(stop_pct))
+        stop_price = entry_price * (1.0 - float(stop_pct) * direction)
         planned_exit = entry_time + pd.Timedelta(hours=int(max_hold_hours))
         exit_boundary = int(times.searchsorted(planned_exit, side="left"))
         if exit_boundary >= len(bars):
@@ -134,14 +137,21 @@ def simulate_hourly_reentry(
         for path_index in range(entry_index, exit_boundary):
             bar = bars.iloc[path_index]
             bar_open = float(bar.open)
-            bar_low = float(bar.low)
-            if bar_open <= stop_price:
+            stop_crossed_at_open = (
+                bar_open <= stop_price if direction > 0 else bar_open >= stop_price
+            )
+            stop_crossed_intrabar = (
+                float(bar.low) <= stop_price
+                if direction > 0
+                else float(bar.high) >= stop_price
+            )
+            if stop_crossed_at_open:
                 exit_index = path_index
                 exit_time = pd.Timestamp(bar.time)
                 exit_price = bar_open
                 exit_reason = "gap_stop"
                 break
-            if bar_low <= stop_price:
+            if stop_crossed_intrabar:
                 exit_index = path_index
                 exit_time = pd.Timestamp(bar.time)
                 exit_price = stop_price
@@ -156,7 +166,8 @@ def simulate_hourly_reentry(
                 "entry_price": entry_price,
                 "exit_price": exit_price,
                 "initial_stop_pct": float(stop_pct),
-                "gross_return": exit_price / entry_price - 1.0,
+                "direction": int(direction),
+                "gross_return": (exit_price / entry_price - 1.0) * direction,
                 "exit_reason": exit_reason,
                 "hold_hours": max(
                     0.0, (exit_time - entry_time).total_seconds() / 3600.0

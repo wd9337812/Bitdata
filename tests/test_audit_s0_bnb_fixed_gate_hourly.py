@@ -90,6 +90,50 @@ def test_hourly_execution_delay_moves_entry_without_stale_fill() -> None:
     assert trades.iloc[0].entry_price == pytest.approx(128.0)
 
 
+def test_short_path_uses_high_for_stop_and_inverts_return() -> None:
+    times = pd.date_range("2024-01-02", periods=3, freq="h", tz="UTC")
+    hourly = pd.DataFrame(
+        {
+            "time": times,
+            "open": [100.0, 100.0, 115.0],
+            "high": [101.0, 116.0, 115.0],
+            "low": [99.0, 98.0, 114.0],
+            "close": [100.0, 115.0, 114.0],
+        }
+    )
+    state = pd.DataFrame(
+        {
+            "day": pd.to_datetime(["2024-01-01"], utc=True),
+            "signal": [True],
+        }
+    )
+
+    trades = simulate_hourly_reentry(
+        hourly,
+        state,
+        execution_delay_hours=0,
+        stop_pct=0.15,
+        max_hold_hours=2,
+        direction=-1,
+    )
+
+    assert len(trades) == 1
+    assert trades.iloc[0].direction == -1
+    assert trades.iloc[0].exit_reason == "stop"
+    assert trades.iloc[0].exit_price == pytest.approx(115.0)
+    assert trades.iloc[0].gross_return == pytest.approx(-0.15)
+
+
+def test_invalid_direction_is_rejected() -> None:
+    with pytest.raises(ValueError, match="direction"):
+        simulate_hourly_reentry(
+            pd.DataFrame(),
+            pd.DataFrame(),
+            execution_delay_hours=0,
+            direction=0,
+        )
+
+
 def test_executable_metrics_apply_contract_rounding_cost_and_hard_stop_headroom() -> None:
     trades = pd.DataFrame(
         {
