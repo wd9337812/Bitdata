@@ -1411,6 +1411,21 @@ function StrategyLabPanel({ data }: { data: ShadowData }) {
           <MetricCard title="当前版本独立影子" value={`${fmt(adaptive30dRelease.closed, 0)} 笔`} sub={`${pfLabel(adaptive30dRelease.profit_factor, adaptive30dRelease.closed)} · 净收益 ${fmt(adaptive30dRelease.net_pnl, 4)} U · 只用于滚动方向门，不混入旧V策略`} tone={Number(adaptive30dRelease.net_pnl || 0) > 0 ? "positive" : Number(adaptive30dRelease.net_pnl || 0) < 0 ? "negative" : ""} />
         </div>
       </div>
+      <div className="panel">
+        <div className="panel-head">
+          <div>
+            <h2>S0 事件接管状态</h2>
+            <p>事件通道优先级高于底仓：事件机会通过全部验证后，系统平掉底仓并接管仓位；当前无合格事件候选，通道未启用。</p>
+          </div>
+          <span className="pill">未启用（待验证）</span>
+        </div>
+        <div className="metrics">
+          <MetricCard title="底仓层" value="30日山寨动量" sub={`风险 ${fmt(config.adaptive_30d_live_risk_pct || 20, 0)}% · 杠杆 ${fmt(config.adaptive_30d_live_leverage || 2, 0)}x · 3.5R · 5天`} />
+          <MetricCard title="事件通道" value="无合格候选" sub="新币动量/资金费反转/量价爆发/OI/泵回落均已拒绝或数据不足" tone="negative" />
+          <MetricCard title="接管规则" value="事件 > 底仓" sub="浮盈≥1.5R默认不接管；接管成本≥2倍预期净收益才执行" />
+          <MetricCard title="数据源" value="Binance 免费数据" sub="官方归档/资金费/OI/taker/盘口，无外部付费源" />
+        </div>
+      </div>
       {hasChallenger && <div className="panel table-wrap">
         <h2>{activeStrategyLabel} 候选晋级清单</h2>
         <table>

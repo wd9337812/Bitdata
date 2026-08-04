@@ -726,3 +726,9 @@ This file tracks local verification for the two-stage futures system.
 - 新增 `scripts/audit_s0_new_listing_momentum_long.py`，扫描 679 个历史币种；开发期选出的 `stop15_tp30` 样本外压力 PF 1.055、去掉头部 3 币后 0.981 转负，2025 盲测 0.78。
 - 第一版选型偷看全部窗口导致“合格”，修正为只用 2020-2022 开发期后判定不合格；结论：拒绝新币动量延续通道。
 - 完整留档见 `docs/s0-new-listing-momentum-long-rejection-2026-08-04.md`。
+
+## 2026-08-04 事件候选证据盘点 + 前端事件接管状态卡
+
+- 盘点全部事件候选：资金费反转（2026 仅半年数据，不合格）、量价/盘口流/OI/泵回落/基差均被拒；结论：事件通道暂无合格候选。
+- 前端 v0.31.7 新增“S0 事件接管状态”卡片：底仓层参数、事件通道状态、接管规则、数据源；纯展示，不影响交易逻辑。
+- 留档见 `docs/s0-event-candidates-evidence-audit-2026-08-04.md`。
