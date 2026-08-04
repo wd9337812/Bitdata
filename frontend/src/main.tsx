@@ -1916,7 +1916,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {number("adaptive_30d_shadow_symbol_limit", "30 日山寨扫描上限", "默认 150；REST 请求只走后台预算，交易与保护请求始终优先")}
           {toggle("adaptive_30d_live_enabled", "30 日山寨动量作为 S0 主路线", "开启后山寨动量优先，只有当天无可执行山寨候选时才检查 BNB 后备")}
           {toggle("adaptive_30d_live_bnb_fallback_enabled", "允许 BNB 正期望后备", "推荐开启；它不会挤掉新鲜山寨候选")}
-          {number("adaptive_30d_live_risk_pct", "山寨主路线计划风险%", "默认 15%；历史压力测试显示 30% 会显著增加触发 5U 硬停止的概率")}
+          {number("adaptive_30d_live_risk_pct", "山寨主路线计划风险%", "默认 20%；20% 按年重启均未触发 5U 硬停止，25%/30% 在 2026 年触发硬停止被拒")}
           {number("adaptive_30d_live_direction_min_profit_factor", "滚动方向门最低 PF", "默认 1.25；多空分别计算，当前版本影子结果逐步替换冻结历史种子")}
           {number("adaptive_30d_live_entry_window_hours", "日线候选入场窗口小时", "默认 2 小时；过期不追价，等待下一次完整日线")}
           {toggle("market_tsmom_shadow_enabled", "BNB 28/56 日趋势影子", "每天一次构造 20 币市场指数；市场趋势共振时只验证 BNB 固定规则，版本证据独立")}

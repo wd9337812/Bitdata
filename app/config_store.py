@@ -380,7 +380,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "adaptive_30d_live_direction_window": 8,
     "adaptive_30d_live_direction_min_trades": 3,
     "adaptive_30d_live_direction_min_profit_factor": 1.25,
-    "adaptive_30d_live_risk_pct": 15.0,
+    "adaptive_30d_live_risk_pct": 20.0,
     "adaptive_30d_live_leverage": 2,
     "adaptive_30d_live_margin_pct": 90.0,
     "adaptive_30d_live_min_equity_usdt": 10.0,

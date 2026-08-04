@@ -39,5 +39,32 @@ def test_report_requires_positive_years_and_rejects_ruinous_risk():
     report = build_report(rows)
 
     assert report["trades"] == 2
-    assert report["decision"]["selected_risk_pct"] == 15.0
+    assert report["decision"]["selected_risk_pct"] == 20.0
     assert report["decision"]["live_qualified"] is True
+
+
+def test_risk20_promotion_and_risk25_rejection():
+    rows = pd.DataFrame(
+        [
+            {
+                "entry_ms": 1704067200000,
+                "exit_ms": 1704153600000,
+                "symbol": "AUSDT",
+                "direction": "LONG",
+                "net_pct": 44.4,
+                "cost_pct": 0.6,
+            },
+            {
+                "entry_ms": 1735689600000,
+                "exit_ms": 1735776000000,
+                "symbol": "BUSDT",
+                "direction": "SHORT",
+                "net_pct": 20.0,
+                "cost_pct": 0.6,
+            },
+        ]
+    )
+    report = build_report(rows)
+
+    assert report["decision"]["risk20_promoted"] is True
+    assert report["equity_stress"]["20"]["hard_stop_hit"] is False

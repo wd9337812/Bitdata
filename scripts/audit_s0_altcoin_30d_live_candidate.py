@@ -58,7 +58,7 @@ def build_report(
             risk_pct=float(risk),
             hard_stop=hard_stop,
         )
-        for risk in (15, 20, 30)
+        for risk in (15, 20, 22, 25, 30)
     }
     by_year: dict[str, Any] = {}
     ordered["year"] = pd.to_datetime(ordered["entry_ms"], unit="ms", utc=True).dt.year
@@ -74,7 +74,7 @@ def build_report(
                     risk_pct=float(risk),
                     hard_stop=hard_stop,
                 )
-                for risk in (15, 20, 30)
+                for risk in (15, 20, 22, 25, 30)
             },
         }
     by_direction = {
@@ -97,17 +97,25 @@ def build_report(
         "by_direction": by_direction,
         "equity_stress": results,
         "decision": {
-            "selected_risk_pct": 15.0,
-            "risk20_promoted": False,
+            "selected_risk_pct": 20.0,
+            "risk20_promoted": bool(
+                not results["20"]["hard_stop_hit"]
+                and all(not item["risk20"]["hard_stop_hit"] for item in by_year.values())
+                and results["20"]["final_equity"] > results["15"]["final_equity"]
+            ),
             "risk30_rejected": bool(
                 results["30"]["hard_stop_hit"]
                 or any(item["risk30"]["hard_stop_hit"] for item in by_year.values())
             ),
+            "risk25_rejected": bool(
+                results["25"]["hard_stop_hit"]
+                or any(item["risk25"]["hard_stop_hit"] for item in by_year.values())
+            ),
             "live_qualified": bool(
                 profit_factor(ordered["net_pct"]) > 1.25
                 and all(item["net_pct_points"] > 0 for item in by_year.values())
-                and all(not item["risk15"]["hard_stop_hit"] for item in by_year.values())
-                and not results["15"]["hard_stop_hit"]
+                and all(not item["risk20"]["hard_stop_hit"] for item in by_year.values())
+                and not results["20"]["hard_stop_hit"]
             ),
         },
     }

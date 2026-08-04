@@ -600,3 +600,11 @@ This file tracks local verification for the two-stage futures system.
 - Dashboard 显示“30日山寨动量主路线 / BNB趋势后备”，与实盘策略一致。
 - README 同步为 `v0.31.1` 并新增“S0 当前主路线：30日山寨动量”章节，替换旧 28/56 市场趋势 V3 描述。
 - 完整检查点留档见 `docs/v0.31.1-s0-altcoin-30d-live-checkpoint-2026-08-04.md`。
+
+## 2026-08-04 v0.31.2 / 30日山寨动量风险预算 20% 升级
+
+- 在冻结的 96 笔、0.60% 压力成本数据上重新做风险敏感性：15% 终值 632.58U，20% 终值 1128.76U，22% 终值 1312.61U，25%/30% 在 2026 年按年重启触发 5U 硬停止。
+- 20% 在 2021-2026 每年从 15U 重启均未触发 5U，因此把 `adaptive_30d_live_risk_pct` 默认值从 15% 提升到 20%；22% 因安全边际变薄不采用，25%/30% 明确拒绝。
+- BNB 后备 `market_tsmom_live_risk_pct` 同步为 20%（v0.30.8 已审计；VPS 配置此前残留 15%）。
+- 更新 `scripts/audit_s0_altcoin_30d_live_candidate.py` 决策逻辑（risk20_promoted / risk25_rejected）与定向测试，前端文案、README 和默认配置同步。
+- 完整留档见 `docs/v0.31.2-s0-altcoin-30d-risk20-promotion-2026-08-04.md`。

@@ -363,7 +363,7 @@ class TradingConfig(BaseModel):
     adaptive_30d_live_direction_window: int = Field(default=8, ge=3, le=50)
     adaptive_30d_live_direction_min_trades: int = Field(default=3, ge=3, le=50)
     adaptive_30d_live_direction_min_profit_factor: float = Field(default=1.25, ge=0, le=10)
-    adaptive_30d_live_risk_pct: float = Field(default=15.0, ge=0.01, le=20)
+    adaptive_30d_live_risk_pct: float = Field(default=20.0, ge=0.01, le=20)
     adaptive_30d_live_leverage: int = Field(default=2, ge=1, le=5)
     adaptive_30d_live_margin_pct: float = Field(default=90.0, ge=5, le=95)
     adaptive_30d_live_min_equity_usdt: float = Field(default=10.0, ge=5, le=10000)
