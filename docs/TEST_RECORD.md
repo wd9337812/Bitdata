@@ -752,3 +752,9 @@ This file tracks local verification for the two-stage futures system.
 - 新增 `scripts/research_s0_tail_event_mfe.py`：全市场 2020-2026 每日候选，未来 120h MFE ≥24.5% 标签，特征含动量/量能冲击/ATR/资金费。
 - 规则基线：量能冲击 top10% 与 30 日动量 top10% 相对全市场命中率提升有限且跨年不稳定（2022 动量 top 低于基线）。
 - 结论：单一规则不足，下一步 LightGBM 排序模型；数据产物 `s0_tail_event_mfe/candidates.parquet`。
+
+## 2026-08-05 尾部事件 LightGBM v1：方向无关标签不可交易
+
+- 新增 `scripts/research_s0_tail_event_lgbm.py`：7 特征、训练 2020-2023、2024/2025/2026 样本外。
+- 模型对“大波动”排序有效（2026 top1% 命中 91.7%），但方向规则（24h 动量符号）与方向无关标签错配，top1% 交易 PF 0.765、触发 5U。
+- 结论：v1 拒绝；下一版方向性标签（LONG/SHORT 分别建模）。留档 `docs/s0-tail-event-lgbm-v1-result-2026-08-05.md`。

@@ -119,11 +119,35 @@ def extract_candidates(panel: pd.DataFrame) -> pd.DataFrame:
                 continue
             window_high = highs[i + 1 : i + 1 + FORWARD_HOURS]
             window_low = lows[i + 1 : i + 1 + FORWARD_HOURS]
+            window_close = closes[i + 1 : i + 1 + FORWARD_HOURS]
             if len(window_high) < FORWARD_HOURS:
                 continue
             mfe_up = float(window_high.max() / entry - 1.0)
             mfe_down = float(1.0 - window_low.min() / entry)
             mfe_max = max(mfe_up, mfe_down)
+            direction = "LONG" if ret24[i] >= 0 else "SHORT"
+            sign = 1.0 if direction == "LONG" else -1.0
+            stop_price = entry * (1.0 - sign * STOP_PCT)
+            take_price = entry * (1.0 + sign * 3.0 * STOP_PCT)
+            exit_price = float(window_close[-1])
+            outcome = "time"
+            for j in range(FORWARD_HOURS):
+                if sign > 0:
+                    stop_hit = window_low[j] <= stop_price
+                    take_hit = window_high[j] >= take_price
+                else:
+                    stop_hit = window_high[j] >= stop_price
+                    take_hit = window_low[j] <= take_price
+                if stop_hit:
+                    exit_price = float(stop_price)
+                    outcome = "stop"
+                    break
+                if take_hit:
+                    exit_price = float(take_price)
+                    outcome = "take"
+                    break
+            gross_trade_pct = sign * (exit_price / entry - 1.0) * 100
+            net_trade_pct = gross_trade_pct - ROUND_TRIP_COST_PCT * 100
             trailing_24h = float(qv[max(0, i - 23) : i + 1].sum())
             trailing_480h = float(qv[max(0, i - 479) : i + 1].sum())
             volume_shock = trailing_24h / max(trailing_480h / max(1, len(qv[max(0, i - 479) : i + 1])), 1e-9)
@@ -141,6 +165,9 @@ def extract_candidates(panel: pd.DataFrame) -> pd.DataFrame:
                     "mfe_down_pct": mfe_down * 100,
                     "mfe_max_pct": mfe_max * 100,
                     "label": int(mfe_max * 100 >= LABEL_THRESHOLD_PCT * 100),
+                    "direction": direction,
+                    "outcome": outcome,
+                    "trade_return_pct": net_trade_pct,
                 }
             )
     return pd.DataFrame(rows)
