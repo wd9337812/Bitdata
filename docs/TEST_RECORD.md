@@ -739,3 +739,10 @@ This file tracks local verification for the two-stage futures system.
 - 性能：runner CPU 33.8%/112MiB、心跳 0.19s、磁盘 40%（18G 剩余）、WAL 235MB 由维护定时器处理。
 - API：权重 62/2400（2.58%）、订单 2/1200、无冷却无 429。
 - 完整留档见 `docs/s0-audit-bug-perf-api-2026-08-04.md`。
+
+## 2026-08-05 资金费拥挤反转跨年审计拒绝
+
+- 补齐 2020-2025 Binance 官方资金费历史（2020-2023 54.4 万行、2024-2025 131 万行、0 失败）。
+- 新增 `scripts/audit_s0_funding_crowding_reversal.py`：冻结 8 档案、开发期选型、样本外验证；2024 PF 0.684、2025 PF 0.660、2026 PF 0.298，去头部 3 币后仍负。
+- 结论：拒绝资金费拥挤反转通道；规则型事件候选全部被拒，Phase 1 剩余路径为尾部事件 MFE 模型。
+- 完整留档见 `docs/s0-funding-crowding-reversal-rejection-2026-08-05.md`。
