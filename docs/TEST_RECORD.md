@@ -770,3 +770,9 @@ This file tracks local verification for the two-stage futures system.
 - v4 回踩限价入场（固定止盈/追踪两个变体）：2024 PF 0.60/0.90、2025 PF 0.41/0.26、2026 PF 1.17/1.17，合并均触发硬停止。
 - Phase 1 规则 + ML 共 7 个候选全部拒绝；结论：当前特征与执行下无合格事件通道，不放行任何候选。
 - 下一步选项：数据增强（OI/taker/盘口）、暂停 Phase 1、人工观察名单，待用户决定。留档 `docs/s0-tail-event-v4-result-and-phase1-conclusion-2026-08-05.md`。
+
+## 2026-08-05 数据增强启动：OI/taker daily metrics 跨年下载
+
+- 用户选择数据增强；新增 `scripts/download_s0_cross_year_metrics.py`。
+- 启动 100 个最活跃币 × 2021-2026 daily metrics（OI、持仓量、taker 长空量比等，204,400 任务）后台下载，每币完成即落盘、manifest 断点续传。
+- 完成后把 OI 变化/taker 比率接入 MFE 特征并训练 v5。
