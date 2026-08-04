@@ -342,6 +342,32 @@ def summarize(taken: list[CandidateTrade], curve: pd.DataFrame) -> dict[str, Any
     }
 
 
+def _group_metrics(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame(
+            columns=["group", "trades", "win_rate_pct", "profit_factor", "net_pct"]
+        )
+    pnl = frame["pnl_equity_pct"].astype(float)
+    wins = pnl[pnl > 0]
+    losses = pnl[pnl < 0]
+    return pd.DataFrame(
+        {
+            "trades": len(pnl),
+            "win_rate_pct": round(float((pnl > 0).mean() * 100.0), 4),
+            "profit_factor": round(
+                float(
+                    wins.sum() / abs(losses.sum())
+                    if len(losses) and losses.sum()
+                    else (999.0 if len(wins) else 0.0)
+                ),
+                4,
+            ),
+            "net_pct": round(float(pnl.sum()), 4),
+        },
+        index=[0],
+    )
+
+
 def main() -> None:
     args = parse_args()
     if not args.data.is_dir():
@@ -390,10 +416,38 @@ def main() -> None:
     curve, taken = simulate_equity(all_trades, args.initial_equity, args.max_trades)
     summary = summarize(taken, curve)
     args.output.mkdir(parents=True, exist_ok=True)
+    trades_frame = pd.DataFrame([vars(trade) for trade in taken])
     with gzip.open(args.output / "trades.csv.gz", "wt", encoding="utf-8") as handle:
         if taken:
-            pd.DataFrame([vars(trade) for trade in taken]).to_csv(handle, index=False)
+            trades_frame.to_csv(handle, index=False)
     curve.to_csv(args.output / "equity_curve.csv", index=False)
+    if not trades_frame.empty:
+        year = pd.to_datetime(trades_frame.exit_time, unit="ms", utc=True).dt.year
+        by_year = (
+            trades_frame.assign(year=year)
+            .groupby("year", sort=True)
+            .apply(_group_metrics, include_groups=False)
+            .reset_index()
+        )
+        by_symbol = (
+            trades_frame.groupby("symbol", sort=True)
+            .apply(_group_metrics, include_groups=False)
+            .reset_index()
+        )
+        by_year = by_year.drop(
+            columns=[column for column in by_year.columns if column.startswith("level_")]
+        )
+        by_symbol = by_symbol.drop(
+            columns=[column for column in by_symbol.columns if column.startswith("level_")]
+        )
+        by_year.to_csv(args.output / "by_year.csv", index=False)
+        by_symbol.to_csv(args.output / "by_symbol.csv", index=False)
+        summary["by_year"] = json.loads(by_year.to_json(orient="records"))
+        summary["by_symbol_top"] = json.loads(
+            by_symbol.sort_values("net_pct", ascending=False)
+            .head(20)
+            .to_json(orient="records")
+        )
     (args.output / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
