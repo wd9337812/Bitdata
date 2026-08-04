@@ -746,3 +746,9 @@ This file tracks local verification for the two-stage futures system.
 - 新增 `scripts/audit_s0_funding_crowding_reversal.py`：冻结 8 档案、开发期选型、样本外验证；2024 PF 0.684、2025 PF 0.660、2026 PF 0.298，去头部 3 币后仍负。
 - 结论：拒绝资金费拥挤反转通道；规则型事件候选全部被拒，Phase 1 剩余路径为尾部事件 MFE 模型。
 - 完整留档见 `docs/s0-funding-crowding-reversal-rejection-2026-08-05.md`。
+
+## 2026-08-05 尾部事件 MFE 数据管线与规则基线
+
+- 新增 `scripts/research_s0_tail_event_mfe.py`：全市场 2020-2026 每日候选，未来 120h MFE ≥24.5% 标签，特征含动量/量能冲击/ATR/资金费。
+- 规则基线：量能冲击 top10% 与 30 日动量 top10% 相对全市场命中率提升有限且跨年不稳定（2022 动量 top 低于基线）。
+- 结论：单一规则不足，下一步 LightGBM 排序模型；数据产物 `s0_tail_event_mfe/candidates.parquet`。
