@@ -720,3 +720,9 @@ This file tracks local verification for the two-stage futures system.
 - 按周块 bootstrap 500 次：20% 基线无硬停止概率 86.6%，20/22 档 86.2%，20/25 档 85.8%，均低于 90% 门槛；正终值概率同理。
 - 结论：不部署 25% 档；已上线的 22% 阶梯回退为 20% 固定（默认关闭阶梯），杠杆维持 2x。
 - 审计脚本 `scripts/audit_s0_altcoin_30d_risk_tier.py` 与产物 `risk_tier_audit.json`；完整留档见 `docs/s0-risk-tier-overfit-audit-2026-08-04.md`。
+
+## 2026-08-04 新币上市 72h 动量延续审计拒绝（防过拟合修正）
+
+- 新增 `scripts/audit_s0_new_listing_momentum_long.py`，扫描 679 个历史币种；开发期选出的 `stop15_tp30` 样本外压力 PF 1.055、去掉头部 3 币后 0.981 转负，2025 盲测 0.78。
+- 第一版选型偷看全部窗口导致“合格”，修正为只用 2020-2022 开发期后判定不合格；结论：拒绝新币动量延续通道。
+- 完整留档见 `docs/s0-new-listing-momentum-long-rejection-2026-08-04.md`。
