@@ -704,3 +704,7 @@ This file tracks local verification for the two-stage futures system.
 - 3.5R 升级上线时决定“不改现有持仓”；本轮按同一审计结论把 AKE 现有止盈从 2.5R（触发 0.0057691）升级到 3.5R（触发 0.0063019）。
 - 操作：先撤旧 TP（algo 4000001810602974）→ 挂新 TP（algo 4000001811145380，reduce-only closePosition）→ 更新 state 档案（take_profit_order_id、take_profit_atr=8.75）→ 重启 runner 加载；止损单（4000001810602971，0.0039052）全程未动。
 - 交易所复验：TP 0.0063019 + STOP 0.0039052 均在；状态备份 `/opt/bitdata/backups/state-ake-tp35-20260804T063606Z.json`。
+
+## 2026-08-04 S0 权益跟踪表
+
+- 新增 `docs/S0_EQUITY_TRACK.md`，记录每次实盘快照：2026-08-04 14:01 UTC 权益 14.12U、AKE 未实现 -1.00U、距止损约 8%。
