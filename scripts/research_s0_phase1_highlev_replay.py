@@ -70,11 +70,20 @@ def load_bars(path: Path) -> pd.DataFrame | None:
     needed = {"open_time", "open", "high", "low", "close", "volume"}
     if not needed.issubset(frame.columns):
         return None
-    frame = frame[["open_time", "open", "high", "low", "close", "volume"]].copy()
+    keep = ["open_time", "open", "high", "low", "close", "volume"]
+    if "quote_volume" in frame.columns:
+        keep.append("quote_volume")
+    frame = frame[keep].copy()
     frame = frame.sort_values("open_time").reset_index(drop=True)
     frame["open_time"] = frame["open_time"].astype("int64")
     for column in ("open", "high", "low", "close", "volume"):
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    if "quote_volume" not in frame.columns:
+        frame["quote_volume"] = frame.volume * frame.close
+    else:
+        frame["quote_volume"] = pd.to_numeric(
+            frame["quote_volume"], errors="coerce"
+        )
     return frame.dropna(subset=["open", "high", "low", "close"]).reset_index(
         drop=True
     )

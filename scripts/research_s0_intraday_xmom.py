@@ -58,6 +58,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--maintenance-margin-pct", type=float, default=0.5)
     parser.add_argument("--initial-equity", type=float, default=14.0)
     parser.add_argument("--allow-short", action="store_true")
+    parser.add_argument(
+        "--only-short",
+        action="store_true",
+        help="Reversal mode: always pick the weakest (most negative) liquid alt.",
+    )
     parser.add_argument("--max-trades", type=int, default=0)
     return parser.parse_args()
 
@@ -135,6 +140,7 @@ def select_best(
     allow_short: bool,
     decision_bar: int,
     lookback: int,
+    only_short: bool = False,
 ) -> list[tuple[int, str, int, float]]:
     """Return (decision_close_ms, symbol, direction, ret)."""
     candidates: list[tuple[int, str, int, float]] = []
@@ -161,10 +167,14 @@ def select_best(
                 continue
             if vol < min_volume or int(arrays["onboard"]) > decision_time:
                 continue
-            if ret >= min_ret and ret > best_long_ret:
-                best_long, best_long_ret = symbol, ret
-            elif allow_short and ret <= -min_ret and ret < best_short_ret:
-                best_short, best_short_ret = symbol, ret
+            if only_short:
+                if ret <= -min_ret and ret < best_short_ret:
+                    best_short, best_short_ret = symbol, ret
+            else:
+                if ret >= min_ret and ret > best_long_ret:
+                    best_long, best_long_ret = symbol, ret
+                elif allow_short and ret <= -min_ret and ret < best_short_ret:
+                    best_short, best_short_ret = symbol, ret
         if best_long is not None:
             candidates.append((decision_time, best_long, 1, best_long_ret))
         elif best_short is not None:
@@ -361,9 +371,10 @@ def main() -> None:
         grid,
         args.min_ret_pct / 100.0,
         args.min_21d_volume_usdt,
-        args.allow_short,
+        args.allow_short or args.only_short,
         args.decision_bar,
         args.lookback,
+        args.only_short,
     )
     trades = build_trades(
         selections,
