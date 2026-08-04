@@ -678,3 +678,8 @@ This file tracks local verification for the two-stage futures system.
 
 - 新增 `scripts/track_s0_live_vs_baseline.py`：读取 VPS SQLite，输出 30 日动量影子闭合统计（多空分开）、最新权益/未实现盈亏和 85 笔 PF 1.80 基线参照。
 - 首次运行：权益 14.39U、AKE 持仓未实现 -0.74U、影子仅 1 笔闭合亏损；继续积累样本后再做实盘/基线对照。
+
+## 2026-08-04 S0 实盘运行手册
+
+- 新增 `docs/S0_LIVE_OPERATIONS.md`：固化当前配置、健康检查清单、基线参照、触发条件与已否决候选清单，供后续每轮直接复用。
+- 首次体检：AKE 距止损约 9%、标记价 0.0042656、清算价 0.00093、两张 reduce-only 保护单完好；权益 14.44U。
