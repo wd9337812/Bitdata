@@ -698,3 +698,9 @@ This file tracks local verification for the two-stage futures system.
 
 - 补齐持仓天数盲区（此前只测 5/7 天）：3.5R/2.5ATR/3 天 PF 1.32 且触发硬停止，4 天 PF 1.52、终值 53.04U，均明显差于 5 天的 177.51U；3R 的 3/4 天同样更差。
 - 结论：5 天最长持仓仍是优解，维持不变；数据缺口已闭合。
+
+## 2026-08-04 AKE 现有持仓止盈升级为 3.5R
+
+- 3.5R 升级上线时决定“不改现有持仓”；本轮按同一审计结论把 AKE 现有止盈从 2.5R（触发 0.0057691）升级到 3.5R（触发 0.0063019）。
+- 操作：先撤旧 TP（algo 4000001810602974）→ 挂新 TP（algo 4000001811145380，reduce-only closePosition）→ 更新 state 档案（take_profit_order_id、take_profit_atr=8.75）→ 重启 runner 加载；止损单（4000001810602971，0.0039052）全程未动。
+- 交易所复验：TP 0.0063019 + STOP 0.0039052 均在；状态备份 `/opt/bitdata/backups/state-ake-tp35-20260804T063606Z.json`。
