@@ -758,3 +758,9 @@ This file tracks local verification for the two-stage futures system.
 - 新增 `scripts/research_s0_tail_event_lgbm.py`：7 特征、训练 2020-2023、2024/2025/2026 样本外。
 - 模型对“大波动”排序有效（2026 top1% 命中 91.7%），但方向规则（24h 动量符号）与方向无关标签错配，top1% 交易 PF 0.765、触发 5U。
 - 结论：v1 拒绝；下一版方向性标签（LONG/SHORT 分别建模）。留档 `docs/s0-tail-event-lgbm-v1-result-2026-08-05.md`。
+
+## 2026-08-05 尾部事件 LightGBM v2/v3 拒绝
+
+- v2 方向性标签：2025 top1% PF 0.114、合并 PF 1.13 且触发 5U。
+- v3 方向性标签 + 2R 保本/5R 追踪：合并 PF 1.272 但 2025 PF 0.248、2026 PF 0.978，仍触发 5U。
+- 结论：当前特征与次根市价入场下无合格尾部通道；下一步 v4 回踩限价入场。留档 `docs/s0-tail-event-lgbm-v2v3-result-2026-08-05.md`。

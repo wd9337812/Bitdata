@@ -126,28 +126,79 @@ def extract_candidates(panel: pd.DataFrame) -> pd.DataFrame:
             mfe_down = float(1.0 - window_low.min() / entry)
             mfe_max = max(mfe_up, mfe_down)
             direction = "LONG" if ret24[i] >= 0 else "SHORT"
-            sign = 1.0 if direction == "LONG" else -1.0
-            stop_price = entry * (1.0 - sign * STOP_PCT)
-            take_price = entry * (1.0 + sign * 3.0 * STOP_PCT)
-            exit_price = float(window_close[-1])
-            outcome = "time"
-            for j in range(FORWARD_HOURS):
-                if sign > 0:
-                    stop_hit = window_low[j] <= stop_price
-                    take_hit = window_high[j] >= take_price
-                else:
-                    stop_hit = window_high[j] >= stop_price
-                    take_hit = window_low[j] <= take_price
-                if stop_hit:
-                    exit_price = float(stop_price)
-                    outcome = "stop"
-                    break
-                if take_hit:
-                    exit_price = float(take_price)
-                    outcome = "take"
-                    break
-            gross_trade_pct = sign * (exit_price / entry - 1.0) * 100
-            net_trade_pct = gross_trade_pct - ROUND_TRIP_COST_PCT * 100
+            def trade_outcome(side: str) -> tuple[float, str]:
+                sign = 1.0 if side == "LONG" else -1.0
+                stop_price = entry * (1.0 - sign * STOP_PCT)
+                take_price = entry * (1.0 + sign * 3.0 * STOP_PCT)
+                exit_price = float(window_close[-1])
+                outcome = "time"
+                for j in range(FORWARD_HOURS):
+                    if sign > 0:
+                        stop_hit = window_low[j] <= stop_price
+                        take_hit = window_high[j] >= take_price
+                    else:
+                        stop_hit = window_high[j] >= stop_price
+                        take_hit = window_low[j] <= take_price
+                    if stop_hit:
+                        exit_price = float(stop_price)
+                        outcome = "stop"
+                        break
+                    if take_hit:
+                        exit_price = float(take_price)
+                        outcome = "take"
+                        break
+                gross_trade_pct = sign * (exit_price / entry - 1.0) * 100
+                return gross_trade_pct - ROUND_TRIP_COST_PCT * 100, outcome
+
+            def trailing_outcome(side: str) -> tuple[float, str]:
+                sign = 1.0 if side == "LONG" else -1.0
+                stop_price = entry * (1.0 - sign * STOP_PCT)
+                take_r2 = entry * (1.0 + sign * 2.0 * STOP_PCT)
+                take_r5 = entry * (1.0 + sign * 5.0 * STOP_PCT)
+                trail_distance = 1.5 * STOP_PCT * entry
+                exit_price = float(window_close[-1])
+                outcome = "time"
+                breakeven_armed = False
+                trailing_armed = False
+                peak = entry
+                for j in range(FORWARD_HOURS):
+                    high = float(window_high[j])
+                    low = float(window_low[j])
+                    if sign > 0:
+                        peak = max(peak, high)
+                        if high >= take_r5:
+                            trailing_armed = True
+                        if high >= take_r2:
+                            breakeven_armed = True
+                        if trailing_armed:
+                            stop_price = max(stop_price, peak - trail_distance)
+                        elif breakeven_armed:
+                            stop_price = max(stop_price, entry)
+                        stop_hit = low <= stop_price
+                    else:
+                        peak = min(peak, low)
+                        if low <= take_r5:
+                            trailing_armed = True
+                        if low <= take_r2:
+                            breakeven_armed = True
+                        if trailing_armed:
+                            stop_price = min(stop_price, peak + trail_distance)
+                        elif breakeven_armed:
+                            stop_price = min(stop_price, entry)
+                        stop_hit = high >= stop_price
+                    if stop_hit:
+                        exit_price = float(stop_price)
+                        outcome = "trailing_stop"
+                        break
+                gross_trade_pct = sign * (exit_price / entry - 1.0) * 100
+                return gross_trade_pct - ROUND_TRIP_COST_PCT * 100, outcome
+
+            long_return, long_outcome = trade_outcome("LONG")
+            short_return, short_outcome = trade_outcome("SHORT")
+            long_trail, long_trail_outcome = trailing_outcome("LONG")
+            short_trail, short_trail_outcome = trailing_outcome("SHORT")
+            net_trade_pct = long_return if direction == "LONG" else short_return
+            outcome = long_outcome if direction == "LONG" else short_outcome
             trailing_24h = float(qv[max(0, i - 23) : i + 1].sum())
             trailing_480h = float(qv[max(0, i - 479) : i + 1].sum())
             volume_shock = trailing_24h / max(trailing_480h / max(1, len(qv[max(0, i - 479) : i + 1])), 1e-9)
@@ -168,6 +219,14 @@ def extract_candidates(panel: pd.DataFrame) -> pd.DataFrame:
                     "direction": direction,
                     "outcome": outcome,
                     "trade_return_pct": net_trade_pct,
+                    "long_trade_return_pct": long_return,
+                    "long_outcome": long_outcome,
+                    "short_trade_return_pct": short_return,
+                    "short_outcome": short_outcome,
+                    "long_trailing_return_pct": long_trail,
+                    "long_trailing_outcome": long_trail_outcome,
+                    "short_trailing_return_pct": short_trail,
+                    "short_trailing_outcome": short_trail_outcome,
                 }
             )
     return pd.DataFrame(rows)
