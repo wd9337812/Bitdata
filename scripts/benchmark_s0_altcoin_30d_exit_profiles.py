@@ -90,16 +90,20 @@ def simulate_exit(
     second_r: float | None = None,
     trail_r: float | None = None,
     breakeven_after_first: bool = False,
+    stop_atr: float | None = None,
+    hold_hours: int | None = None,
     cost_pct: float = BASE_COST_PCT,
 ) -> pd.DataFrame:
     trades: list[dict[str, Any]] = []
+    effective_stop_atr = float(stop_atr if stop_atr is not None else profile.stop_atr)
+    effective_hold = int(hold_hours if hold_hours is not None else profile.hold_hours)
     for signal in signals.itertuples(index=False):
         scoped = bars.get(signal.symbol)
         entry_bar_available_ms = int(signal.available_ms) + 3_600_000
         if scoped is None or entry_bar_available_ms not in scoped.index:
             continue
         start_position = int(scoped.index.searchsorted(entry_bar_available_ms))
-        path = scoped.iloc[start_position : start_position + profile.hold_hours]
+        path = scoped.iloc[start_position : start_position + effective_hold]
         if path.empty:
             continue
         entry = float(path.iloc[0].open)
@@ -107,7 +111,10 @@ def simulate_exit(
         if not np.isfinite(entry) or not np.isfinite(atr) or entry <= 0 or atr <= 0:
             continue
         sign = 1.0 if signal.direction == "LONG" else -1.0
-        stop_distance = min(profile.stop_atr * atr, entry * profile.max_stop_pct / 100.0)
+        stop_distance = min(
+            effective_stop_atr * atr,
+            entry * profile.max_stop_pct / 100.0,
+        )
         stop = entry - sign * stop_distance
         first_target = entry + sign * stop_distance * first_r
         second_target = (
@@ -267,6 +274,35 @@ EXIT_PROFILES = {
         "breakeven_after_first": True,
     },
     "trail_1_5_then_1R": {"first_r": 1.5, "first_fraction": 0.5, "trail_r": 1.0},
+    "full_3_5R_stop2_hold120": {"first_r": 3.5, "first_fraction": 1.0, "stop_atr": 2.0},
+    "full_3_5R_stop3_hold120": {"first_r": 3.5, "first_fraction": 1.0, "stop_atr": 3.0},
+    "full_3_5R_stop2_hold168": {
+        "first_r": 3.5,
+        "first_fraction": 1.0,
+        "stop_atr": 2.0,
+        "hold_hours": 168,
+    },
+    "full_3_5R_stop2_5_hold168": {
+        "first_r": 3.5,
+        "first_fraction": 1.0,
+        "hold_hours": 168,
+    },
+    "full_3_5R_stop3_hold168": {
+        "first_r": 3.5,
+        "first_fraction": 1.0,
+        "stop_atr": 3.0,
+        "hold_hours": 168,
+    },
+    "full_3R_stop2_5_hold168": {
+        "first_r": 3.0,
+        "first_fraction": 1.0,
+        "hold_hours": 168,
+    },
+    "full_4R_stop2_5_hold168": {
+        "first_r": 4.0,
+        "first_fraction": 1.0,
+        "hold_hours": 168,
+    },
 }
 
 

@@ -630,3 +630,9 @@ This file tracks local verification for the two-stage futures system.
 - 新增实盘独立参数 `adaptive_30d_live_stop_atr=2.5`、`adaptive_30d_live_reward_r=3.5`、`adaptive_30d_live_max_stop_pct=12`，仅影响新入场保护单；现有 AKE 持仓保护单不改。
 - 新增 `scripts/benchmark_s0_altcoin_30d_exit_profiles.py` 与实盘 3.5R 定向测试；前端、README、默认配置同步。
 - 完整留档见 `docs/v0.31.4-s0-altcoin-30d-tp35-promotion-2026-08-04.md`。
+
+## 2026-08-04 30日山寨动量止盈/止损/持仓天数敏感性网格
+
+- 扩展 `scripts/benchmark_s0_altcoin_30d_exit_profiles.py`：在 3.5R 周围测试 2.0/2.5/3.0 ATR 止损和 5/7 天持仓共 8 个组合。
+- 上线组合（3.5R / 2.5 ATR / 5 天）终值 177.18U、PF 1.80，网格中最高；3.0 ATR 止损 5 天触发硬停止，7 天持仓各组合全部更低。
+- 结论：当前实盘参数已是该网格最优点，不继续调参；敏感性结果并入 v0.31.4 留档。
