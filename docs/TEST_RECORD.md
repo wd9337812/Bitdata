@@ -683,3 +683,7 @@ This file tracks local verification for the two-stage futures system.
 
 - 新增 `docs/S0_LIVE_OPERATIONS.md`：固化当前配置、健康检查清单、基线参照、触发条件与已否决候选清单，供后续每轮直接复用。
 - 首次体检：AKE 距止损约 9%、标记价 0.0042656、清算价 0.00093、两张 reduce-only 保护单完好；权益 14.44U。
+
+## 2026-08-04 AKE 入场执行质量核对
+
+- 信号参考价 0.0044378，实际成交 0.0044365，滑点约 -0.03%，远好于基线 0.60% 单边成本假设；执行质量正常，基线对照前提成立。
