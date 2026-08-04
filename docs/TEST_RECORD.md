@@ -608,3 +608,11 @@ This file tracks local verification for the two-stage futures system.
 - BNB 后备 `market_tsmom_live_risk_pct` 同步为 20%（v0.30.8 已审计；VPS 配置此前残留 15%）。
 - 更新 `scripts/audit_s0_altcoin_30d_live_candidate.py` 决策逻辑（risk20_promoted / risk25_rejected）与定向测试，前端文案、README 和默认配置同步。
 - 完整留档见 `docs/v0.31.2-s0-altcoin-30d-risk20-promotion-2026-08-04.md`。
+
+## 2026-08-04 v0.31.3 / 30日山寨动量阶梯风险（20% → 22%）
+
+- 新增权益阶梯：低于 30U 用 20%，达到 30U 自动升到 22%；全序列终值 1256.75U（平 20% 为 1128.76U），按年重启均未触发 5U。
+- 22% 在 2 倍杠杆、90% 保证金下可执行（12.5% 止损约需 1.76 倍名义仓位）；25% 超出保证金上限且触发硬停止，继续拒绝。
+- 新增 `adaptive_30d_live_risk_tier_enabled / risk_tier_equity / risk_tier2_pct` 配置，`build_adaptive_30d_live_decision` 按当前权益选择风险档，前端显示当前生效档并可在专家设置调整。
+- 新增 `scripts/audit_s0_altcoin_30d_risk_tier.py` 与定向测试；README、前端文案和 TEST_RECORD 同步。
+- 完整留档见 `docs/v0.31.3-s0-altcoin-30d-risk-tier-2026-08-04.md`。

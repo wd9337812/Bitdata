@@ -318,9 +318,12 @@ function App() {
         ...baseStageRoute,
         label: "30日山寨动量主路线",
         strategy_family: "adaptive_30d_momentum",
-        risk_pct: Number(config.adaptive_30d_live_risk_pct || 15),
+        risk_pct: config.adaptive_30d_live_risk_tier_enabled
+          && Number(account.equity || 0) >= Number(config.adaptive_30d_live_risk_tier_equity || 30)
+          ? Number(config.adaptive_30d_live_risk_tier2_pct || 22)
+          : Number(config.adaptive_30d_live_risk_pct || 20),
         leverage: Number(config.adaptive_30d_live_leverage || 2),
-        summary: "S0 每日山寨动量主路线；BNB 仅在无可执行山寨候选时后备",
+        summary: "S0 每日山寨动量主路线；权益达到升档线后自动提高风险档，BNB 仅在无可执行山寨候选时后备",
         runtime_status: adaptive30dRuntime.status,
       }
     : baseStageRoute;
@@ -1917,6 +1920,9 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("adaptive_30d_live_enabled", "30 日山寨动量作为 S0 主路线", "开启后山寨动量优先，只有当天无可执行山寨候选时才检查 BNB 后备")}
           {toggle("adaptive_30d_live_bnb_fallback_enabled", "允许 BNB 正期望后备", "推荐开启；它不会挤掉新鲜山寨候选")}
           {number("adaptive_30d_live_risk_pct", "山寨主路线计划风险%", "默认 20%；20% 按年重启均未触发 5U 硬停止，25%/30% 在 2026 年触发硬停止被拒")}
+          {toggle("adaptive_30d_live_risk_tier_enabled", "权益阶梯风险", "权益低于升档线用第一档，达到升档线自动用第二档；小底池先守，筹码变大再进攻")}
+          {number("adaptive_30d_live_risk_tier_equity", "风险升档权益线 U", "默认 30U；达到该权益后按第二档风险执行")}
+          {number("adaptive_30d_live_risk_tier2_pct", "第二档风险%", "默认 22%；2 倍杠杆 90% 保证金下可执行，历史每年重启均未触发 5U")}
           {number("adaptive_30d_live_direction_min_profit_factor", "滚动方向门最低 PF", "默认 1.25；多空分别计算，当前版本影子结果逐步替换冻结历史种子")}
           {number("adaptive_30d_live_entry_window_hours", "日线候选入场窗口小时", "默认 2 小时；过期不追价，等待下一次完整日线")}
           {toggle("market_tsmom_shadow_enabled", "BNB 28/56 日趋势影子", "每天一次构造 20 币市场指数；市场趋势共振时只验证 BNB 固定规则，版本证据独立")}

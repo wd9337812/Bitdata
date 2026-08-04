@@ -491,8 +491,21 @@ def build_adaptive_30d_live_decision(
             "equity": equity,
         }
     requested_risk_pct = min(
-        20.0, max(0.01, float(config.get("adaptive_30d_live_risk_pct", 15.0)))
+        20.0, max(0.01, float(config.get("adaptive_30d_live_risk_pct", 20.0)))
     )
+    risk_tier_enabled = bool(config.get("adaptive_30d_live_risk_tier_enabled", False))
+    if risk_tier_enabled:
+        tier_equity = max(
+            1.0, float(config.get("adaptive_30d_live_risk_tier_equity", 30.0))
+        )
+        if equity >= tier_equity:
+            requested_risk_pct = min(
+                22.0,
+                max(
+                    requested_risk_pct,
+                    float(config.get("adaptive_30d_live_risk_tier2_pct", 22.0)),
+                ),
+            )
     leverage = max(1, min(5, int(config.get("adaptive_30d_live_leverage", 2))))
     margin_fraction = min(
         0.95,

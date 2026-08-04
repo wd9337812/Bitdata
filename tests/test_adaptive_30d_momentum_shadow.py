@@ -164,7 +164,7 @@ def test_live_decision_sizes_long_with_hard_stop_headroom():
 
     assert decision["action"] == "OPEN_LONG"
     assert decision["strategy_version"] == LIVE_STRATEGY_VERSION
-    assert 0 < decision["risk_pct"] <= 15.0
+    assert 0 < decision["risk_pct"] <= 20.0
     assert decision["estimated_notional"] >= 10.0
     assert decision["candidate"]["direction_gate"]["allowed"] is True
     assert decision["signal"]["stop"] < decision["signal"]["last_price"]
@@ -208,3 +208,37 @@ def test_live_decision_refuses_equity_without_hard_stop_reserve():
 
     assert decision["action"] == "WAIT"
     assert decision["reason"] == "adaptive_30d_insufficient_hard_stop_headroom"
+
+
+def test_live_decision_risk_tier_upgrades_above_equity_threshold():
+    now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
+    candidate, _ = build_adaptive_30d_shadow_candidate(
+        FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None
+    )
+    config = {
+        "adaptive_30d_live_risk_pct": 20.0,
+        "adaptive_30d_live_risk_tier_enabled": True,
+        "adaptive_30d_live_risk_tier_equity": 30.0,
+        "adaptive_30d_live_risk_tier2_pct": 22.0,
+    }
+    small = build_adaptive_30d_live_decision(
+        config,
+        {},
+        {"equity": 15.0, "available_balance": 15.0, "positions": []},
+        now,
+        candidate=candidate,
+        closed_net_pcts=[10, 10, 10],
+    )
+    grown = build_adaptive_30d_live_decision(
+        config,
+        {},
+        {"equity": 60.0, "available_balance": 60.0, "positions": []},
+        now,
+        candidate=candidate,
+        closed_net_pcts=[10, 10, 10],
+    )
+
+    assert small["action"] == "OPEN_LONG"
+    assert small["candidate"]["base_risk_pct"] == 20.0
+    assert grown["action"] == "OPEN_LONG"
+    assert grown["candidate"]["base_risk_pct"] == 22.0
