@@ -43,6 +43,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data", type=Path, default=DEFAULT_DATA)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--symbols", nargs="*", default=None)
+    parser.add_argument("--universe-json", type=Path, default=None)
     parser.add_argument("--start", default="2020-01-01")
     parser.add_argument("--end", default="2026-08-06")
     parser.add_argument("--rule", default="breakout", choices=RULES)
@@ -372,9 +373,15 @@ def main() -> None:
     args = parse_args()
     if not args.data.is_dir():
         raise SystemExit(f"data dir not found: {args.data}")
-    symbols = args.symbols or sorted(
-        path.stem for path in args.data.glob("*.parquet")
-    )
+    if args.symbols:
+        symbols = [symbol.upper() for symbol in args.symbols]
+    elif args.universe_json is not None:
+        if not args.universe_json.exists():
+            raise SystemExit(f"universe json not found: {args.universe_json}")
+        manifest = json.loads(args.universe_json.read_text(encoding="utf-8"))
+        symbols = [str(item["symbol"]).upper() for item in manifest.get("symbols", [])]
+    else:
+        symbols = sorted(path.stem for path in args.data.glob("*.parquet"))
     all_trades: list[CandidateTrade] = []
     for symbol in symbols:
         path = args.data / f"{symbol}.parquet"
