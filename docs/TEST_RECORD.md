@@ -653,3 +653,9 @@ This file tracks local verification for the two-stage futures system.
 - 测试 24 小时内止损后按下一根小时 K 线重入同一币种同方向：基线 87 笔、PF 1.75、终值 148.07U；重入后 112 笔、PF 1.52、终值 74.41U。
 - 118 个重入候选自身 PF 仅 1.052，基本没有正期望；决策 `reject`，实盘继续一天一信号、不追重。
 - 新增 `scripts/benchmark_s0_altcoin_30d_reentry.py`；完整留档见 `docs/s0-altcoin-30d-same-day-reentry-rejection-2026-08-04.md`。
+
+## 2026-08-04 BNB 后备加止盈审计拒绝
+
+- 在 15% 止损/5 天持有路径上测试 1R/1.5R/2R/3R 止盈：无 TP 样本外 PF 1.988、20% 风险终值 44.06U；1R/1.5R 明显更差，2R 略低，3R 与无 TP 相同。
+- BNB 趋势骑乘同样依赖让赢家跑完持有窗口，结论：继续“15% 止损 + 5 天持有、无止盈”。
+- 新增 `scripts/benchmark_s0_bnb_take_profit.py`；完整留档见 `docs/s0-bnb-take-profit-rejection-2026-08-04.md`。
