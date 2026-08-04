@@ -781,3 +781,9 @@ This file tracks local verification for the two-stage futures system.
 
 - `research_s0_tail_event_mfe.py` 新增 load_metrics/attach_metrics：OI 24h 变化、taker 长空量比、toptrader 多空比。
 - `research_s0_tail_event_lgbm_v2.py` 新增 `--enriched`（v5）特征集与报告名；下载完成 60/100，待完成重跑管线并训练 v5。
+
+## 2026-08-05 v5（OI/taker 增强）拒绝
+
+- OI 24h 变化、taker 长空量比、toptrader 多空比特征重要性仅 127/142/191（动量类 1000-1300）。
+- v5 基础合并 PF 1.16、v5+回踩+追踪 PF 1.13，均触发 5U；去头部 3 币后转负或 <1。
+- 结论：数据增强未修复事件通道；Phase 1 全部拒绝，事件通道保持未启用。留档 `docs/s0-tail-event-v5-enriched-rejection-2026-08-05.md`。
