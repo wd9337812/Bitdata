@@ -673,3 +673,8 @@ This file tracks local verification for the two-stage futures system.
 - 结果：85 笔（多头 45 / 空头 40）、PF 1.802、净 +338.85 点、阶梯终值 177.51U，逐年为正且无 5U 硬停止。
 - 该基线用于后续实盘对照；若实盘明显差于 PF 1.80 路径，优先查执行缺口而不是改参数。
 - 完整留档见 `docs/s0-live-config-baseline-2026-08-04.md`。
+
+## 2026-08-04 实盘 vs 基线追踪脚本
+
+- 新增 `scripts/track_s0_live_vs_baseline.py`：读取 VPS SQLite，输出 30 日动量影子闭合统计（多空分开）、最新权益/未实现盈亏和 85 笔 PF 1.80 基线参照。
+- 首次运行：权益 14.39U、AKE 持仓未实现 -0.74U、影子仅 1 笔闭合亏损；继续积累样本后再做实盘/基线对照。
