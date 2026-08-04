@@ -40,6 +40,12 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--funding", type=Path, default=DEFAULT_FUNDING)
+    parser.add_argument(
+        "--universe",
+        type=Path,
+        default=ROOT / "data" / "research" / "s0_public_1m" / "universe.json",
+        help="Liquid-symbol manifest (quote-volume sorted); preferred over funding counts.",
+    )
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--top", type=int, default=100)
     parser.add_argument("--symbols", nargs="*", default=None)
@@ -134,11 +140,20 @@ def build_symbol_parquet(
 
 def main() -> None:
     args = parse_args()
-    symbols = (
-        [symbol.upper() for symbol in args.symbols]
-        if args.symbols
-        else top_symbols(args.funding, args.top)
-    )
+    if args.symbols:
+        symbols = [symbol.upper() for symbol in args.symbols]
+    elif args.universe.exists():
+        manifest = json.loads(args.universe.read_text(encoding="utf-8"))
+        symbols = [
+            str(item["symbol"]).upper()
+            for item in manifest.get("symbols", [])
+        ][: args.top]
+        print(
+            f"universe: {args.universe} (quote-volume sorted, top {len(symbols)})",
+            flush=True,
+        )
+    else:
+        symbols = top_symbols(args.funding, args.top)
     months = month_range(args.start, args.end)
     args.output.mkdir(parents=True, exist_ok=True)
     manifest_path = args.output / "manifest.json"
@@ -232,6 +247,12 @@ def main() -> None:
             )
         else:
             completed[symbol] = entry
+            print(
+                f"done {symbol}: rows={rows} ok={len(ok_months)} "
+                f"missing={len(missing)} failed={len(failed)} "
+                f"completed={len(completed)}/{len(symbols)}",
+                flush=True,
+            )
         manifest["completed"] = completed
         manifest["summary"] = {
             "source": "https://data.binance.vision USD-M monthly 1m klines",
@@ -244,12 +265,6 @@ def main() -> None:
             encoding="utf-8",
         )
         tmp_manifest.replace(manifest_path)
-        print(
-            f"done {symbol}: rows={rows} ok={len(ok_months)} "
-            f"missing={len(missing)} failed={len(failed)} "
-            f"completed={len(completed)}/{len(symbols)}",
-            flush=True,
-        )
     total_rows = sum(int(item["rows"]) for item in completed.values())
     print(
         json.dumps(

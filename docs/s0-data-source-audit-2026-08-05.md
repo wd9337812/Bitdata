@@ -48,3 +48,17 @@
 - 下载进度：`data/research/binance_um_1m_cross_year/manifest.json`
 - 日志：`download.out.log` / `download.err.log`
 - 数据源优先级：Binance Vision（主）→ Bybit 官方公开（交叉验证）→ OKX（有限，仅做参考）
+
+## 选币口径修正（2026-08-05 03:10）
+
+首轮 100 币选币用了 `binance_um_point_in_time_funding` 的行数排序，但这个目录只覆盖
+2026-01~06，且部分币有重复 funding 记录，导致选出的“top 100”几乎全是次新 meme 币，
+BTC/ETH/SOL/DOGE/XRP/BNB 等全部漏掉。
+
+修正：
+
+- 下载器默认改读 `data/research/s0_public_1m/universe.json`（按真实 24h 成交量排序的 120 币清单），
+  支持 `--universe` 显式指定，`--funding` 仅作兜底。
+- 已启动 top 60 流动性币的 1m 跨年下载（与首轮 100 币合并，断点续传）。
+- 影响说明：v5 增强（OI/taker/toptrader）是在 meme-skewed 100 币上训练的，其拒绝结论仍然有效
+  （增强特征重要性低）；后续如重做增强，必须用修正后的流动性币宇宙重新下载 metrics。
