@@ -222,7 +222,16 @@ def main() -> None:
             existing = pd.read_parquet(target, columns=["open_time"])
             entry["first_open_time"] = int(existing.open_time.min())
             entry["last_open_time"] = int(existing.open_time.max())
-        completed[symbol] = entry
+        if failed:
+            entry["status"] = "partial"
+            manifest.setdefault("partial", {})[symbol] = entry
+            print(
+                f"partial {symbol}: rows={rows} ok={len(ok_months)} "
+                f"missing={len(missing)} failed={failed} -> retry next run",
+                flush=True,
+            )
+        else:
+            completed[symbol] = entry
         manifest["completed"] = completed
         manifest["summary"] = {
             "source": "https://data.binance.vision USD-M monthly 1m klines",
