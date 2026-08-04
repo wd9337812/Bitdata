@@ -622,3 +622,11 @@ This file tracks local verification for the two-stage futures system.
 - 重建每日 top-2 候选（612 条信号、608 条路径）后对比：单仓 20% 为 89 笔、PF 1.689、终值 152.00U；双仓各 20% 在 2024 年按年重启触发 5U 硬停止；双仓各 10%（总敞口等于单仓 20%）终值仅 66.11U、PF 1.370。
 - 第二名候选显著稀释组合质量，决策 `reject_two_position_not_robust`，实盘继续单仓。
 - 新增 `scripts/audit_s0_altcoin_30d_two_position.py` 与定向测试；完整留档见 `docs/s0-altcoin-30d-two-position-rejection-2026-08-04.md`。
+
+## 2026-08-04 v0.31.4 / 30日山寨动量止盈 3.5R 升级
+
+- 退出档案审计（top-1 冻结信号、0.60% 压力成本、20% 风险、15U 逐年重启）：2.5R 终值 43.46U、PF 1.42；3.5R 终值 177.18U、PF 1.80，逐年全部为正且无 5U 硬停止；4R 终值 189.48U 但 2021 年仅剩 15.07U，安全边际薄，不采用。
+- 分批止盈/保本后追/1R 追踪止损变体 PF 0.96-1.00 且部分触发硬停止，全部拒绝；策略利润来自大赢家，提前分仓伤害收益。
+- 新增实盘独立参数 `adaptive_30d_live_stop_atr=2.5`、`adaptive_30d_live_reward_r=3.5`、`adaptive_30d_live_max_stop_pct=12`，仅影响新入场保护单；现有 AKE 持仓保护单不改。
+- 新增 `scripts/benchmark_s0_altcoin_30d_exit_profiles.py` 与实盘 3.5R 定向测试；前端、README、默认配置同步。
+- 完整留档见 `docs/v0.31.4-s0-altcoin-30d-tp35-promotion-2026-08-04.md`。

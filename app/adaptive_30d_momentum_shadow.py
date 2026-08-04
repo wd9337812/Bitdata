@@ -476,6 +476,32 @@ def build_adaptive_30d_live_decision(
             "risk": {"allowed": False, "reason": "adaptive_30d_direction_gate_blocked"},
             "candidate": {**candidate, "direction_gate": gate},
         }
+    signal = dict(candidate.get("signal") or {})
+    entry = float(signal.get("last_price") or candidate.get("ticker", {}).get("last") or 0)
+    atr = float(signal.get("atr") or 0)
+    live_stop_atr = float(config.get("adaptive_30d_live_stop_atr", 2.5))
+    live_reward_r = float(config.get("adaptive_30d_live_reward_r", 3.5))
+    live_max_stop_pct = float(config.get("adaptive_30d_live_max_stop_pct", 12.0))
+    if entry > 0 and atr > 0:
+        sign = 1.0 if direction == "LONG" else -1.0
+        stop_distance = min(
+            live_stop_atr * atr,
+            entry * live_max_stop_pct / 100.0,
+        )
+        stop = entry - sign * stop_distance
+        take = entry + sign * stop_distance * live_reward_r
+        hold_hours = int(config.get("adaptive_30d_shadow_max_hold_hours", 120))
+        signal["stop"] = stop
+        signal["take_profit"] = take
+        signal["protection_profile"] = {
+            "protection_version": "adaptive_30d_daily_v1",
+            "stop_atr": live_stop_atr,
+            "take_profit_atr": live_stop_atr * live_reward_r,
+            "max_hold_seconds": hold_hours * 3600,
+            "runtime_intraday_trailing_enabled": False,
+            "daily_stop_audit_enabled": False,
+        }
+        candidate = {**candidate, "signal": signal}
     equity = float(account.get("equity") or 0)
     available = max(0.0, float(account.get("available_balance") or equity))
     hard_stop = float(config.get("hard_stop_equity", 5.0))
@@ -535,7 +561,6 @@ def build_adaptive_30d_live_decision(
             "candidate": candidate,
             "equity": equity,
         }
-    signal = dict(candidate.get("signal") or {})
     live_candidate = {
         **candidate,
         "mode": "adaptive_30d_momentum",

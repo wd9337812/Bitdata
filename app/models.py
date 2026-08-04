@@ -366,6 +366,9 @@ class TradingConfig(BaseModel):
     adaptive_30d_live_risk_pct: float = Field(default=20.0, ge=0.01, le=20)
     adaptive_30d_live_leverage: int = Field(default=2, ge=1, le=5)
     adaptive_30d_live_margin_pct: float = Field(default=90.0, ge=5, le=95)
+    adaptive_30d_live_stop_atr: float = Field(default=2.5, ge=0.1, le=10)
+    adaptive_30d_live_reward_r: float = Field(default=3.5, ge=0.1, le=10)
+    adaptive_30d_live_max_stop_pct: float = Field(default=12.0, ge=0.1, le=30)
     adaptive_30d_live_risk_tier_enabled: bool = True
     adaptive_30d_live_risk_tier_equity: float = Field(default=30.0, ge=1, le=10000)
     adaptive_30d_live_risk_tier2_pct: float = Field(default=22.0, ge=0.01, le=22)

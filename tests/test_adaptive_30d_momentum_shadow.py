@@ -242,3 +242,29 @@ def test_live_decision_risk_tier_upgrades_above_equity_threshold():
     assert small["candidate"]["base_risk_pct"] == 20.0
     assert grown["action"] == "OPEN_LONG"
     assert grown["candidate"]["base_risk_pct"] == 22.0
+
+
+def test_live_decision_uses_live_3_5r_take_profit():
+    now = datetime(2026, 8, 1, 0, 5, tzinfo=timezone.utc)
+    candidate, _ = build_adaptive_30d_shadow_candidate(
+        FakeClient(now), _snapshot(now), {}, now, sleep_fn=lambda _: None
+    )
+    config = {
+        "adaptive_30d_live_stop_atr": 2.5,
+        "adaptive_30d_live_reward_r": 3.5,
+        "adaptive_30d_live_max_stop_pct": 12.0,
+    }
+    decision = build_adaptive_30d_live_decision(
+        config,
+        {},
+        {"equity": 60.0, "available_balance": 60.0, "positions": []},
+        now,
+        candidate=candidate,
+        closed_net_pcts=[10, 10, 10],
+    )
+
+    assert decision["action"] == "OPEN_LONG"
+    profile = decision["signal"]["protection_profile"]
+    assert profile["stop_atr"] == 2.5
+    assert abs(profile["take_profit_atr"] - 8.75) < 1e-9
+    assert decision["signal"]["take_profit"] > decision["signal"]["last_price"]
