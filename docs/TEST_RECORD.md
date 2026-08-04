@@ -577,3 +577,26 @@ This file tracks local verification for the two-stage futures system.
 - 项目 `.venv` 完整后端回归 `684 passed`，仅有5条既有 ElasticNet 收敛警告；前端生产构建通过（452个模块）。
 - 本地 FastAPI `0.31.0` 首页、OpenAPI 及5个生产哈希静态资源逐项请求均返回 HTTP 200。
 - 部署验收后补充 `0.31.1` 展示修正：每日候选窗口外仍明确标识“30日山寨动量主路线已启用”，S0 阶段卡片不再误显示旧 V5 路由与30%风险。
+
+## 2026-08-04 30日动量“更快退出”跨年审计拒绝
+
+- 新增 `scripts/audit_s0_30d_fast_exit_cross_year.py`：保留30日截面选币，改用 2ATR止损/1.5R止盈/最长72小时的快速退出，按 0/5/15 分钟延迟和 0.36%/0.60% 成本重放 2021-2026 真实1分钟K线。
+- 多数场景 PF 低于1.2、去掉头部3币后转负；仅 15分钟/0.36% 单场景表面为正，但 0.60% 成本压力下消失，且 2021 年大幅为负。
+- 决策 `reject_fast_exit_not_cross_year_robust`：实盘继续使用冻结的 3ATR止损/3R止盈/最长7天。
+- 定向测试 `2 passed`；完整留档见 `docs/s0-30d-fast-exit-rejection-2026-08-04.md`。
+
+## 2026-08-04 7日动量 + 市场宽度带跨年审计拒绝
+
+- 新增 `scripts/audit_s0_7d_breadth_cross_year.py`：7日形成、持有1日、2ATR止损/2R止盈，叠加 1.5%-7.5% 绝对市场宽度带，2021-2025 独立审计、2026 仅作上下文。
+- 0.60% 压力成本下独立期整体 PF 0.878、净收益 -172.18 点数、bootstrap 正概率 0.175；去掉头部3币后 PF 0.727，2022-2025 逐年为负。
+- 决策 `reject_before_minute_replay`：不进入分钟级重放，也不参与实盘准入。
+- 定向测试 `2 passed`；完整留档见 `docs/s0-7d-breadth-rejection-2026-08-04.md`。
+
+## 2026-08-04 v0.31.1 S0 30日山寨动量主路线上线检查点
+
+- 2026-08-04 UTC 00:02 首笔 `s0_xmom_30d_live_v1` 实盘开仓：`AKEUSDT LONG`，初始计划风险约 15%、2倍杠杆，交易所 `STOP_MARKET` 止损与 `TAKE_PROFIT_MARKET` 止盈均已挂出，保护档案 `adaptive_30d_daily_v1`（2.5ATR止损/6.25ATR止盈/最长5天）。
+- Runner 保持 `running`，最新决策 `WAIT / adaptive_30d_position_already_open`，不会重复开仓；`adaptive_30d_live_effect=s0_primary`。
+- 账户快照：总钱包约 `15.13U`、保证金余额约 `14.41U`、未实现盈亏约 `-0.73U`；目标起点 `15.137U`。
+- Dashboard 显示“30日山寨动量主路线 / BNB趋势后备”，与实盘策略一致。
+- README 同步为 `v0.31.1` 并新增“S0 当前主路线：30日山寨动量”章节，替换旧 28/56 市场趋势 V3 描述。
+- 完整检查点留档见 `docs/v0.31.1-s0-altcoin-30d-live-checkpoint-2026-08-04.md`。
