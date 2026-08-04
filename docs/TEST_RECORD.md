@@ -666,3 +666,10 @@ This file tracks local verification for the two-stage futures system.
 - 把冻结全样本（多空各 48 笔）写入 `HISTORICAL_DIRECTION_SEED`，方向门改为：影子证据不足 8 笔时用冻结全样本放行（多空都交易），达到 8 笔后用最近 8 笔影子滚动接管。
 - 空头沿用同一套风控（20%/22% 阶梯、2.5 ATR 止损、3.5R 止盈、5 天、5U 硬停止）；历史 96 笔压力测试已覆盖空头，按年重启无 5U 触发。
 - 完整留档见 `docs/v0.31.6-s0-altcoin-30d-short-gate-align-2026-08-04.md`。
+
+## 2026-08-04 S0 当前实盘配置历史等价基线
+
+- 新增 `scripts/audit_s0_altcoin_30d_live_config.py`，用当前线上参数（3.5R、2.5 ATR、5 天、多空、20%/22% 阶梯、0.60% 成本）重放 2021-2026。
+- 结果：85 笔（多头 45 / 空头 40）、PF 1.802、净 +338.85 点、阶梯终值 177.51U，逐年为正且无 5U 硬停止。
+- 该基线用于后续实盘对照；若实盘明显差于 PF 1.80 路径，优先查执行缺口而不是改参数。
+- 完整留档见 `docs/s0-live-config-baseline-2026-08-04.md`。
