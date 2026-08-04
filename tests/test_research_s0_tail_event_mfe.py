@@ -29,6 +29,9 @@ def _panel() -> pd.DataFrame:
                 "ret_168h": 0.05,
                 "ret_720h": 0.10,
                 "funding_rate_pct": 0.01,
+                "oi_change_24h_pct": 0.0,
+                "taker_long_short_ratio": 1.0,
+                "toptrader_long_short_ratio": 1.0,
             }
         )
     return pd.DataFrame(rows)
