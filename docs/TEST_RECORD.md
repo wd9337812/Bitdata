@@ -687,3 +687,9 @@ This file tracks local verification for the two-stage futures system.
 ## 2026-08-04 AKE 入场执行质量核对
 
 - 信号参考价 0.0044378，实际成交 0.0044365，滑点约 -0.03%，远好于基线 0.60% 单边成本假设；执行质量正常，基线对照前提成立。
+
+## 2026-08-04 30日山寨动量资金费门槛审计拒绝
+
+- 测试信号时点过滤高 funding 候选：0.01%/0.03% 门槛把阶梯终值从 177.51U 压到 107.96U，0.05% 为 110.44U，0.10% 不触发。
+- funding 数据仅覆盖 2026 目录；高 funding 是热门动量的一部分而非独立风险，决策：不加资金费门槛。
+- 新增 `scripts/benchmark_s0_altcoin_30d_funding_filter.py`；完整留档见 `docs/s0-altcoin-30d-funding-filter-rejection-2026-08-04.md`。
