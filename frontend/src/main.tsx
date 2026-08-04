@@ -1776,7 +1776,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {toggle("opportunity_v44_full_bet_enabled", "启用 S0 单仓全进全出", "最多使用约 90% 新鲜可用保证金，只持有一个币种和一个方向")}
             {toggle("stage_s0_daily_loss_stop_enabled", "S0 普通日亏损停牌", "默认关闭；5U 权益硬停止、每仓止盈止损和运行安全保护仍始终生效")}
             {toggle("stage_s0_daily_profit_lock_enabled", "S0 当日净利润锁", "默认开启；达到目标后不强平受保护持仓，空仓后停止当天新开仓")}
-            {number("stage_s0_daily_profit_target_pct", "S0 当日净利润目标%", "默认 40%；按 UTC 当日初始权益计算，次日自动恢复")}
+          {number("stage_s0_daily_profit_target_pct", "S0 当日净利润目标%", "默认 200%；历史回测未模拟当日锁仓，200% 让实盘与审计口径对齐，同时保留极端连赢的安全上限")}
             {number("runtime_protection_supervisor_seconds", "持仓快速保护检查秒数", "默认 5 秒；独立于完整扫描周期，WebSocket 最新价优先")}
             {toggle("s0_moe_shadow_enabled", "启用 MoE 研究影子", "本地训练模型在线只做推理并记录结果，不参与实盘准入、仓位或止盈止损")}
             {number("s0_moe_online_window_hours", "MoE 线上统计窗口（小时）", "默认 24 小时；同时保留当前策略版本的全量统计")}

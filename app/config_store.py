@@ -407,7 +407,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "stage_s0_daily_loss_limit_pct": 30.0,
     "stage_s0_daily_loss_stop_enabled": False,
     "stage_s0_daily_profit_lock_enabled": True,
-    "stage_s0_daily_profit_target_pct": 40.0,
+    "stage_s0_daily_profit_target_pct": 200.0,
     "stage_s1_risk_pct": 7.0,
     "stage_s1_margin_pct": 85.0,
     "stage_s1_max_leverage": 5.0,

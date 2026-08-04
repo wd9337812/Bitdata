@@ -421,7 +421,7 @@ class TradingConfig(BaseModel):
     stage_s0_daily_loss_limit_pct: float = Field(default=30.0, ge=0.1, le=100)
     stage_s0_daily_loss_stop_enabled: bool = False
     stage_s0_daily_profit_lock_enabled: bool = True
-    stage_s0_daily_profit_target_pct: float = Field(default=40.0, ge=1, le=500)
+    stage_s0_daily_profit_target_pct: float = Field(default=200.0, ge=1, le=500)
     stage_s1_risk_pct: float = Field(default=7.0, ge=0.01, le=100)
     stage_s1_margin_pct: float = Field(default=85.0, ge=1, le=100)
     stage_s1_max_leverage: float = Field(default=5.0, ge=1, le=50)
