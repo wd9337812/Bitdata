@@ -732,3 +732,10 @@ This file tracks local verification for the two-stage futures system.
 - 盘点全部事件候选：资金费反转（2026 仅半年数据，不合格）、量价/盘口流/OI/泵回落/基差均被拒；结论：事件通道暂无合格候选。
 - 前端 v0.31.7 新增“S0 事件接管状态”卡片：底仓层参数、事件通道状态、接管规则、数据源；纯展示，不影响交易逻辑。
 - 留档见 `docs/s0-event-candidates-evidence-audit-2026-08-04.md`。
+
+## 2026-08-04 Bug/性能/API 频控审计
+
+- Bug：699 测试通过、24h 零错误/零重启、持仓与保护单一致、前端 200。
+- 性能：runner CPU 33.8%/112MiB、心跳 0.19s、磁盘 40%（18G 剩余）、WAL 235MB 由维护定时器处理。
+- API：权重 62/2400（2.58%）、订单 2/1200、无冷却无 429。
+- 完整留档见 `docs/s0-audit-bug-perf-api-2026-08-04.md`。
