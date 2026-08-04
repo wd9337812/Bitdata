@@ -369,9 +369,9 @@ class TradingConfig(BaseModel):
     adaptive_30d_live_stop_atr: float = Field(default=2.5, ge=0.1, le=10)
     adaptive_30d_live_reward_r: float = Field(default=3.5, ge=0.1, le=10)
     adaptive_30d_live_max_stop_pct: float = Field(default=12.0, ge=0.1, le=30)
-    adaptive_30d_live_risk_tier_enabled: bool = True
+    adaptive_30d_live_risk_tier_enabled: bool = False
     adaptive_30d_live_risk_tier_equity: float = Field(default=30.0, ge=1, le=10000)
-    adaptive_30d_live_risk_tier2_pct: float = Field(default=22.0, ge=0.01, le=22)
+    adaptive_30d_live_risk_tier2_pct: float = Field(default=20.0, ge=0.01, le=22)
     adaptive_30d_live_min_equity_usdt: float = Field(default=10.0, ge=5, le=10000)
     adaptive_30d_live_hard_stop_reserve_usdt: float = Field(default=0.50, ge=0, le=100)
     adaptive_30d_live_bnb_fallback_enabled: bool = True

@@ -714,3 +714,9 @@ This file tracks local verification for the two-stage futures system.
 - 用户恢复目标并授权“发现更好策略可变更当前持仓”；执行市场探针：BTC 24h +0.66%、217 个高流动性永续中位 +1.0%，broad_up 方向未变。
 - 当日信号 AKE LONG 与 broad_up 方向一致；无证据支持切换到其他标的（最强 CYS +80% 为 24h 脉冲，不构成 30 日动量证据）。
 - 决策：继续持有 AKE，等待止损/止盈/时间退出；下一次正式评估 UTC 08-05 00:02。
+
+## 2026-08-04 风险阶梯过拟合审计：22%/25% 档不通过
+
+- 按周块 bootstrap 500 次：20% 基线无硬停止概率 86.6%，20/22 档 86.2%，20/25 档 85.8%，均低于 90% 门槛；正终值概率同理。
+- 结论：不部署 25% 档；已上线的 22% 阶梯回退为 20% 固定（默认关闭阶梯），杠杆维持 2x。
+- 审计脚本 `scripts/audit_s0_altcoin_30d_risk_tier.py` 与产物 `risk_tier_audit.json`；完整留档见 `docs/s0-risk-tier-overfit-audit-2026-08-04.md`。

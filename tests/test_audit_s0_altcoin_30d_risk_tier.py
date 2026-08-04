@@ -48,6 +48,6 @@ def test_tier_report_promotes_only_when_no_yearly_hard_stop():
     )
     report = build_tier_report(rows)
 
-    assert report["tiered_20_22"]["hard_stop_hit"] is False
-    assert report["tiered_20_22"]["final_equity"] > report["flat20"]["final_equity"]
+    assert report["tiered"]["hard_stop_hit"] is False
+    assert report["tiered"]["final_equity"] > report["flat20"]["final_equity"]
     assert report["promoted"] is True
