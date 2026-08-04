@@ -80,13 +80,20 @@ def build_premium(
             continue
         bybit = pd.read_parquet(
             bybit_path, columns=["open_time", "open", "high", "low", "close"]
+        ).rename(
+            columns={
+                "open": "bybit_open",
+                "high": "bybit_high",
+                "low": "bybit_low",
+                "close": "bybit_close",
+            }
         )
         binance = pd.read_parquet(
             binance_path,
             columns=["open_time", "open", "high", "low", "close", "volume", "quote_volume"],
         )
         merged = binance.merge(
-            bybit[["open_time", "close"]].rename(columns={"close": "bybit_close"}),
+            bybit,
             on="open_time",
             how="inner",
         )
