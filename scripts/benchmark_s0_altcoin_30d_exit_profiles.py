@@ -303,6 +303,26 @@ EXIT_PROFILES = {
         "first_fraction": 1.0,
         "hold_hours": 168,
     },
+    "full_3R_stop2_5_hold72": {
+        "first_r": 3.0,
+        "first_fraction": 1.0,
+        "hold_hours": 72,
+    },
+    "full_3R_stop2_5_hold96": {
+        "first_r": 3.0,
+        "first_fraction": 1.0,
+        "hold_hours": 96,
+    },
+    "full_3_5R_stop2_5_hold72": {
+        "first_r": 3.5,
+        "first_fraction": 1.0,
+        "hold_hours": 72,
+    },
+    "full_3_5R_stop2_5_hold96": {
+        "first_r": 3.5,
+        "first_fraction": 1.0,
+        "hold_hours": 96,
+    },
 }
 
 

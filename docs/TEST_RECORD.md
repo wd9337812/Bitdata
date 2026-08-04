@@ -693,3 +693,8 @@ This file tracks local verification for the two-stage futures system.
 - 测试信号时点过滤高 funding 候选：0.01%/0.03% 门槛把阶梯终值从 177.51U 压到 107.96U，0.05% 为 110.44U，0.10% 不触发。
 - funding 数据仅覆盖 2026 目录；高 funding 是热门动量的一部分而非独立风险，决策：不加资金费门槛。
 - 新增 `scripts/benchmark_s0_altcoin_30d_funding_filter.py`；完整留档见 `docs/s0-altcoin-30d-funding-filter-rejection-2026-08-04.md`。
+
+## 2026-08-04 30日山寨动量 3/4 天持仓审计拒绝
+
+- 补齐持仓天数盲区（此前只测 5/7 天）：3.5R/2.5ATR/3 天 PF 1.32 且触发硬停止，4 天 PF 1.52、终值 53.04U，均明显差于 5 天的 177.51U；3R 的 3/4 天同样更差。
+- 结论：5 天最长持仓仍是优解，维持不变；数据缺口已闭合。
