@@ -776,3 +776,8 @@ This file tracks local verification for the two-stage futures system.
 - 用户选择数据增强；新增 `scripts/download_s0_cross_year_metrics.py`。
 - 启动 100 个最活跃币 × 2021-2026 daily metrics（OI、持仓量、taker 长空量比等，204,400 任务）后台下载，每币完成即落盘、manifest 断点续传。
 - 完成后把 OI 变化/taker 比率接入 MFE 特征并训练 v5。
+
+## 2026-08-05 v5 特征接入代码就绪
+
+- `research_s0_tail_event_mfe.py` 新增 load_metrics/attach_metrics：OI 24h 变化、taker 长空量比、toptrader 多空比。
+- `research_s0_tail_event_lgbm_v2.py` 新增 `--enriched`（v5）特征集与报告名；下载完成 60/100，待完成重跑管线并训练 v5。

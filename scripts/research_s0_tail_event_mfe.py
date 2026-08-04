@@ -32,6 +32,10 @@ FUNDING_DIRS = (
     ROOT / "data" / "research" / "binance_um_point_in_time_funding_2024_2025",
     ROOT / "data" / "research" / "binance_um_point_in_time_funding",
 )
+METRICS_DIRS = (
+    ROOT / "data" / "research" / "binance_um_metrics_cross_year",
+    ROOT / "data" / "research" / "binance_um_metrics_1h",
+)
 DEFAULT_OUTPUT = ROOT / "data" / "research" / "s0_tail_event_mfe"
 FORWARD_HOURS = 120
 STOP_PCT = 0.12
@@ -63,6 +67,43 @@ def load_funding(dirs: tuple[Path, ...]) -> dict[str, pd.DataFrame]:
     return frames
 
 
+def load_metrics(dirs: tuple[Path, ...]) -> dict[str, pd.DataFrame]:
+    frames: dict[str, pd.DataFrame] = {}
+    for directory in dirs:
+        if not directory.exists():
+            continue
+        for path in directory.glob("*-metrics.parquet"):
+            symbol = path.name.split("-metrics.parquet")[0].upper()
+            frame = pd.read_parquet(path)
+            if frame.empty or "timestamp_ms" not in frame.columns:
+                continue
+            frame = frame.sort_values("timestamp_ms").copy()
+            frame["oi"] = pd.to_numeric(frame.get("sum_open_interest"), errors="coerce")
+            frame["taker_ratio"] = pd.to_numeric(
+                frame.get("sum_taker_long_short_vol_ratio"), errors="coerce"
+            )
+            frame["toptrader_ratio"] = pd.to_numeric(
+                frame.get("sum_toptrader_long_short_ratio"), errors="coerce"
+            )
+            frame["oi_change_24h_pct"] = frame["oi"].pct_change() * 100
+            frame["metrics_available_ms"] = frame.timestamp_ms.astype("int64") + 60_000
+            keep = frame[
+                [
+                    "metrics_available_ms",
+                    "oi_change_24h_pct",
+                    "taker_ratio",
+                    "toptrader_ratio",
+                ]
+            ]
+            if symbol in frames:
+                frames[symbol] = pd.concat(
+                    [frames[symbol], keep], ignore_index=True
+                ).drop_duplicates("metrics_available_ms", keep="last")
+            else:
+                frames[symbol] = keep
+    return frames
+
+
 def attach_funding(panel: pd.DataFrame, funding: dict[str, pd.DataFrame]) -> pd.DataFrame:
     parts: list[pd.DataFrame] = []
     for symbol, scoped in panel.groupby("symbol", sort=False):
@@ -86,6 +127,42 @@ def attach_funding(panel: pd.DataFrame, funding: dict[str, pd.DataFrame]) -> pd.
     ).reset_index(drop=True)
 
 
+def attach_metrics(
+    panel: pd.DataFrame,
+    metrics: dict[str, pd.DataFrame],
+) -> pd.DataFrame:
+    parts: list[pd.DataFrame] = []
+    for symbol, scoped in panel.groupby("symbol", sort=False):
+        frame = metrics.get(symbol.upper())
+        if frame is None or frame.empty:
+            parts.append(
+                scoped.assign(
+                    oi_change_24h_pct=float("nan"),
+                    taker_long_short_ratio=float("nan"),
+                    toptrader_long_short_ratio=float("nan"),
+                )
+            )
+            continue
+        merged = pd.merge_asof(
+            scoped.sort_values("available_ms"),
+            frame.sort_values("metrics_available_ms"),
+            left_on="available_ms",
+            right_on="metrics_available_ms",
+            direction="backward",
+        )
+        merged = merged.rename(
+            columns={
+                "oi_change_24h_pct": "oi_change_24h_pct",
+                "taker_ratio": "taker_long_short_ratio",
+                "toptrader_ratio": "toptrader_long_short_ratio",
+            }
+        ).drop(columns=["metrics_available_ms"])
+        parts.append(merged)
+    return pd.concat(parts, ignore_index=True).sort_values(
+        ["available_ms", "symbol"]
+    ).reset_index(drop=True)
+
+
 def extract_candidates(panel: pd.DataFrame) -> pd.DataFrame:
     rows: list[dict[str, Any]] = []
     day_ms = 86_400_000
@@ -104,6 +181,9 @@ def extract_candidates(panel: pd.DataFrame) -> pd.DataFrame:
         ret168 = g.ret_168h.to_numpy(dtype="float64")
         ret720 = g.ret_720h.to_numpy(dtype="float64")
         funding = g.funding_rate_pct.to_numpy(dtype="float64")
+        oi_change = g.oi_change_24h_pct.to_numpy(dtype="float64")
+        taker_ratio = g.taker_long_short_ratio.to_numpy(dtype="float64")
+        toptrader_ratio = g.toptrader_long_short_ratio.to_numpy(dtype="float64")
         n = len(g)
         for i in range(n):
             if available[i] % day_ms != 0:
@@ -289,6 +369,21 @@ def extract_candidates(panel: pd.DataFrame) -> pd.DataFrame:
                     "atr_pct": float(atr[i] / entry) if np.isfinite(atr[i]) and atr[i] > 0 else float("nan"),
                     "volume_shock": volume_shock,
                     "funding_rate_pct": float(funding[i]) if np.isfinite(funding[i]) else float("nan"),
+                    "oi_change_24h_pct": (
+                        float(oi_change[i])
+                        if np.isfinite(oi_change[i])
+                        else float("nan")
+                    ),
+                    "taker_long_short_ratio": (
+                        float(taker_ratio[i])
+                        if np.isfinite(taker_ratio[i])
+                        else float("nan")
+                    ),
+                    "toptrader_long_short_ratio": (
+                        float(toptrader_ratio[i])
+                        if np.isfinite(toptrader_ratio[i])
+                        else float("nan")
+                    ),
                     "mfe_up_pct": mfe_up * 100,
                     "mfe_down_pct": mfe_down * 100,
                     "mfe_max_pct": mfe_max * 100,
@@ -335,6 +430,8 @@ def main() -> None:
     args = parser.parse_args()
     funding = load_funding(FUNDING_DIRS)
     print(f"funding symbols: {len(funding)}", flush=True)
+    metrics = load_metrics(METRICS_DIRS)
+    print(f"metrics symbols: {len(metrics)}", flush=True)
     parts: list[pd.DataFrame] = []
     for index, data_dir in enumerate(DATA_DIRS, start=1):
         starts, _ = load_manifest(data_dir)
@@ -348,6 +445,8 @@ def main() -> None:
     panel = pd.concat(parts, ignore_index=True).reset_index(drop=True)
     panel = attach_funding(panel, funding)
     print(f"merged panel rows: {len(panel)}", flush=True)
+    panel = attach_metrics(panel, metrics)
+    print(f"metrics-attached panel rows: {len(panel)}", flush=True)
     candidates = extract_candidates(panel)
     args.output.mkdir(parents=True, exist_ok=True)
     candidates.to_parquet(args.output / "candidates.parquet", index=False)

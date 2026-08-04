@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 DEFAULT_CANDIDATES = ROOT / "data" / "research" / "s0_tail_event_mfe" / "candidates.parquet"
 DEFAULT_OUTPUT = ROOT / "data" / "research" / "s0_tail_event_mfe"
-FEATURES = [
+BASE_FEATURES = [
     "ret_24h",
     "ret_168h",
     "ret_720h",
@@ -25,6 +25,11 @@ FEATURES = [
     "funding_rate_pct",
     "rank_720",
     "direction",
+]
+EXTRA_FEATURES = [
+    "oi_change_24h_pct",
+    "taker_long_short_ratio",
+    "toptrader_long_short_ratio",
 ]
 TRAIN_YEARS = {2020, 2021, 2022, 2023}
 OOS_YEARS = (2024, 2025, 2026)
@@ -112,7 +117,13 @@ def main() -> None:
         action="store_true",
         help="Use 0.5x-stop pullback limit entry (24h fill window) instead of next-open market entry.",
     )
+    parser.add_argument(
+        "--enriched",
+        action="store_true",
+        help="v5: include OI change / taker ratio / toptrader ratio features.",
+    )
     args = parser.parse_args()
+    FEATURES = BASE_FEATURES + (EXTRA_FEATURES if args.enriched else [])
     candidates = pd.read_parquet(args.candidates)
     candidates["year"] = pd.to_datetime(
         candidates.available_ms, unit="ms", utc=True
@@ -269,7 +280,15 @@ def main() -> None:
     )
     result = {
         "experiment": (
-            "s0_tail_event_lgbm_v4_directional_pullback_trailing"
+            "s0_tail_event_lgbm_v5_enriched_pullback_trailing"
+            if args.enriched and args.use_pullback and args.use_trailing
+            else "s0_tail_event_lgbm_v5_enriched_pullback"
+            if args.enriched and args.use_pullback
+            else "s0_tail_event_lgbm_v5_enriched_trailing"
+            if args.enriched and args.use_trailing
+            else "s0_tail_event_lgbm_v5_enriched"
+            if args.enriched
+            else "s0_tail_event_lgbm_v4_directional_pullback_trailing"
             if args.use_pullback and args.use_trailing
             else "s0_tail_event_lgbm_v4_directional_pullback"
             if args.use_pullback
@@ -291,7 +310,15 @@ def main() -> None:
         "warning": "Historical qualification is not live approval.",
     }
     report_name = (
-        "lgbm_v4_pullback_trailing_report.json"
+        "lgbm_v5_enriched_pullback_trailing_report.json"
+        if args.enriched and args.use_pullback and args.use_trailing
+        else "lgbm_v5_enriched_pullback_report.json"
+        if args.enriched and args.use_pullback
+        else "lgbm_v5_enriched_trailing_report.json"
+        if args.enriched and args.use_trailing
+        else "lgbm_v5_enriched_report.json"
+        if args.enriched
+        else "lgbm_v4_pullback_trailing_report.json"
         if args.use_pullback and args.use_trailing
         else "lgbm_v4_pullback_report.json"
         if args.use_pullback
