@@ -138,14 +138,27 @@ def test_skips_outside_fixed_daily_window():
     assert status["status"] == "outside_daily_window"
 
 
-def test_direction_gate_uses_audited_seed_and_blocks_weak_short_side():
+def test_direction_gate_uses_full_audited_seed_for_both_sides():
     long_gate = adaptive_30d_direction_gate("LONG", {})
     short_gate = adaptive_30d_direction_gate("SHORT", {})
 
     assert long_gate["allowed"] is True
-    assert long_gate["profit_factor"] > 2.4
+    assert long_gate["profit_factor"] > 2.5
+    assert short_gate["allowed"] is True
+    assert short_gate["profit_factor"] > 1.25
+
+
+def test_direction_gate_rolling_paper_history_replaces_seed_after_window():
+    losing_paper = [-15.0] * 8
+    short_gate = adaptive_30d_direction_gate("SHORT", {}, closed_net_pcts=losing_paper)
+    winning_paper = [10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0]
+    short_gate_win = adaptive_30d_direction_gate(
+        "SHORT", {}, closed_net_pcts=winning_paper
+    )
+
     assert short_gate["allowed"] is False
     assert short_gate["profit_factor"] < 1.25
+    assert short_gate_win["allowed"] is True
 
 
 def test_live_decision_sizes_long_with_hard_stop_headroom():

@@ -659,3 +659,10 @@ This file tracks local verification for the two-stage futures system.
 - 在 15% 止损/5 天持有路径上测试 1R/1.5R/2R/3R 止盈：无 TP 样本外 PF 1.988、20% 风险终值 44.06U；1R/1.5R 明显更差，2R 略低，3R 与无 TP 相同。
 - BNB 趋势骑乘同样依赖让赢家跑完持有窗口，结论：继续“15% 止损 + 5 天持有、无止盈”。
 - 新增 `scripts/benchmark_s0_bnb_take_profit.py`；完整留档见 `docs/s0-bnb-take-profit-rejection-2026-08-04.md`。
+
+## 2026-08-04 v0.31.6 / 空头方向门对齐冻结审计
+
+- 冻结审计本来包含 48 笔空头（PF 1.49、逐年为正），但旧 8 笔种子空头 PF 约 1.14，把空头长期挡在门外；实盘只运行了审计策略的一半。
+- 把冻结全样本（多空各 48 笔）写入 `HISTORICAL_DIRECTION_SEED`，方向门改为：影子证据不足 8 笔时用冻结全样本放行（多空都交易），达到 8 笔后用最近 8 笔影子滚动接管。
+- 空头沿用同一套风控（20%/22% 阶梯、2.5 ATR 止损、3.5R 止盈、5 天、5U 硬停止）；历史 96 笔压力测试已覆盖空头，按年重启无 5U 触发。
+- 完整留档见 `docs/v0.31.6-s0-altcoin-30d-short-gate-align-2026-08-04.md`。
