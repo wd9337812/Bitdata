@@ -616,3 +616,9 @@ This file tracks local verification for the two-stage futures system.
 - 新增 `adaptive_30d_live_risk_tier_enabled / risk_tier_equity / risk_tier2_pct` 配置，`build_adaptive_30d_live_decision` 按当前权益选择风险档，前端显示当前生效档并可在专家设置调整。
 - 新增 `scripts/audit_s0_altcoin_30d_risk_tier.py` 与定向测试；README、前端文案和 TEST_RECORD 同步。
 - 完整留档见 `docs/v0.31.3-s0-altcoin-30d-risk-tier-2026-08-04.md`。
+
+## 2026-08-04 30日山寨动量双仓并发审计拒绝
+
+- 重建每日 top-2 候选（612 条信号、608 条路径）后对比：单仓 20% 为 89 笔、PF 1.689、终值 152.00U；双仓各 20% 在 2024 年按年重启触发 5U 硬停止；双仓各 10%（总敞口等于单仓 20%）终值仅 66.11U、PF 1.370。
+- 第二名候选显著稀释组合质量，决策 `reject_two_position_not_robust`，实盘继续单仓。
+- 新增 `scripts/audit_s0_altcoin_30d_two_position.py` 与定向测试；完整留档见 `docs/s0-altcoin-30d-two-position-rejection-2026-08-04.md`。
