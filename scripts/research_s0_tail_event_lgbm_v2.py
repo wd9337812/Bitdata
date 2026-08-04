@@ -107,6 +107,11 @@ def main() -> None:
         action="store_true",
         help="Use 2R breakeven + 5R trailing-1.5R exit returns instead of fixed 36% TP.",
     )
+    parser.add_argument(
+        "--use-pullback",
+        action="store_true",
+        help="Use 0.5x-stop pullback limit entry (24h fill window) instead of next-open market entry.",
+    )
     args = parser.parse_args()
     candidates = pd.read_parquet(args.candidates)
     candidates["year"] = pd.to_datetime(
@@ -117,10 +122,26 @@ def main() -> None:
         pct=True
     )
 
-    long_return_col = "long_trailing_return_pct" if args.use_trailing else "long_trade_return_pct"
-    short_return_col = (
-        "short_trailing_return_pct" if args.use_trailing else "short_trade_return_pct"
-    )
+    if args.use_pullback:
+        long_return_col = (
+            "long_pullback_trailing_return_pct"
+            if args.use_trailing
+            else "long_pullback_return_pct"
+        )
+        short_return_col = (
+            "short_pullback_trailing_return_pct"
+            if args.use_trailing
+            else "short_pullback_return_pct"
+        )
+    else:
+        long_return_col = (
+            "long_trailing_return_pct" if args.use_trailing else "long_trade_return_pct"
+        )
+        short_return_col = (
+            "short_trailing_return_pct"
+            if args.use_trailing
+            else "short_trade_return_pct"
+        )
     long_rows = candidates.assign(
         direction=1,
         label=(candidates.mfe_up_pct >= LABEL_THRESHOLD_PCT).astype(int),
@@ -164,16 +185,29 @@ def main() -> None:
     )
     chosen["trade_return_pct"] = chosen.apply(
         lambda r: (
-            (r.long_trailing_return_pct if args.use_trailing else r.long_trade_return_pct)
+            (
+                r.long_pullback_trailing_return_pct
+                if args.use_pullback and args.use_trailing
+                else r.long_pullback_return_pct
+                if args.use_pullback
+                else r.long_trailing_return_pct
+                if args.use_trailing
+                else r.long_trade_return_pct
+            )
             if r.chosen_direction == "LONG"
             else (
-                r.short_trailing_return_pct
+                r.short_pullback_trailing_return_pct
+                if args.use_pullback and args.use_trailing
+                else r.short_pullback_return_pct
+                if args.use_pullback
+                else r.short_trailing_return_pct
                 if args.use_trailing
                 else r.short_trade_return_pct
             )
         ),
         axis=1,
     )
+    chosen = chosen.dropna(subset=["trade_return_pct"])
     chosen["direction"] = chosen.chosen_direction
 
     args.output.mkdir(parents=True, exist_ok=True)
@@ -235,7 +269,11 @@ def main() -> None:
     )
     result = {
         "experiment": (
-            "s0_tail_event_lgbm_v3_directional_trailing"
+            "s0_tail_event_lgbm_v4_directional_pullback_trailing"
+            if args.use_pullback and args.use_trailing
+            else "s0_tail_event_lgbm_v4_directional_pullback"
+            if args.use_pullback
+            else "s0_tail_event_lgbm_v3_directional_trailing"
             if args.use_trailing
             else "s0_tail_event_lgbm_v2_directional"
         ),
@@ -252,7 +290,15 @@ def main() -> None:
         ),
         "warning": "Historical qualification is not live approval.",
     }
-    report_name = "lgbm_v3_report.json" if args.use_trailing else "lgbm_v2_report.json"
+    report_name = (
+        "lgbm_v4_pullback_trailing_report.json"
+        if args.use_pullback and args.use_trailing
+        else "lgbm_v4_pullback_report.json"
+        if args.use_pullback
+        else "lgbm_v3_report.json"
+        if args.use_trailing
+        else "lgbm_v2_report.json"
+    )
     (args.output / report_name).write_text(
         json.dumps(result, ensure_ascii=False, indent=2),
         encoding="utf-8",

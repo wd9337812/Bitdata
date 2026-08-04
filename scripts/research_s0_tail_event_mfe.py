@@ -193,10 +193,87 @@ def extract_candidates(panel: pd.DataFrame) -> pd.DataFrame:
                 gross_trade_pct = sign * (exit_price / entry - 1.0) * 100
                 return gross_trade_pct - ROUND_TRIP_COST_PCT * 100, outcome
 
+            def pullback_outcome(side: str, trailing: bool) -> tuple[float, str] | None:
+                sign = 1.0 if side == "LONG" else -1.0
+                next_open = opens[i + 1]
+                limit_price = next_open * (1.0 - sign * 0.5 * STOP_PCT)
+                fill_index = None
+                for j in range(min(24, FORWARD_HOURS)):
+                    if sign > 0 and window_low[j] <= limit_price:
+                        fill_index = j
+                        break
+                    if sign < 0 and window_high[j] >= limit_price:
+                        fill_index = j
+                        break
+                if fill_index is None:
+                    return None
+                entry_price = float(limit_price)
+                stop_price = entry_price * (1.0 - sign * STOP_PCT)
+                take_r2 = entry_price * (1.0 + sign * 2.0 * STOP_PCT)
+                take_r5 = entry_price * (1.0 + sign * 5.0 * STOP_PCT)
+                trail_distance = 1.5 * STOP_PCT * entry_price
+                take_price = entry_price * (1.0 + sign * 3.0 * STOP_PCT)
+                exit_price = float(window_close[-1])
+                outcome = "time"
+                breakeven_armed = False
+                trailing_armed = False
+                peak = entry_price
+                for j in range(fill_index + 1, FORWARD_HOURS):
+                    high = float(window_high[j])
+                    low = float(window_low[j])
+                    if trailing:
+                        if sign > 0:
+                            peak = max(peak, high)
+                            if high >= take_r5:
+                                trailing_armed = True
+                            if high >= take_r2:
+                                breakeven_armed = True
+                            if trailing_armed:
+                                stop_price = max(stop_price, peak - trail_distance)
+                            elif breakeven_armed:
+                                stop_price = max(stop_price, entry_price)
+                            stop_hit = low <= stop_price
+                        else:
+                            peak = min(peak, low)
+                            if low <= take_r5:
+                                trailing_armed = True
+                            if low <= take_r2:
+                                breakeven_armed = True
+                            if trailing_armed:
+                                stop_price = min(stop_price, peak + trail_distance)
+                            elif breakeven_armed:
+                                stop_price = min(stop_price, entry_price)
+                            stop_hit = high >= stop_price
+                        if stop_hit:
+                            exit_price = float(stop_price)
+                            outcome = "trailing_stop"
+                            break
+                    else:
+                        if sign > 0:
+                            stop_hit = low <= stop_price
+                            take_hit = high >= take_price
+                        else:
+                            stop_hit = high >= stop_price
+                            take_hit = low <= take_price
+                        if stop_hit:
+                            exit_price = float(stop_price)
+                            outcome = "stop"
+                            break
+                        if take_hit:
+                            exit_price = float(take_price)
+                            outcome = "take"
+                            break
+                gross_trade_pct = sign * (exit_price / entry_price - 1.0) * 100
+                return gross_trade_pct - ROUND_TRIP_COST_PCT * 100, outcome
+
             long_return, long_outcome = trade_outcome("LONG")
             short_return, short_outcome = trade_outcome("SHORT")
             long_trail, long_trail_outcome = trailing_outcome("LONG")
             short_trail, short_trail_outcome = trailing_outcome("SHORT")
+            long_pull = pullback_outcome("LONG", trailing=False)
+            short_pull = pullback_outcome("SHORT", trailing=False)
+            long_pull_trail = pullback_outcome("LONG", trailing=True)
+            short_pull_trail = pullback_outcome("SHORT", trailing=True)
             net_trade_pct = long_return if direction == "LONG" else short_return
             outcome = long_outcome if direction == "LONG" else short_outcome
             trailing_24h = float(qv[max(0, i - 23) : i + 1].sum())
@@ -227,6 +304,26 @@ def extract_candidates(panel: pd.DataFrame) -> pd.DataFrame:
                     "long_trailing_outcome": long_trail_outcome,
                     "short_trailing_return_pct": short_trail,
                     "short_trailing_outcome": short_trail_outcome,
+                    "long_pullback_return_pct": (
+                        long_pull[0] if long_pull else float("nan")
+                    ),
+                    "long_pullback_outcome": long_pull[1] if long_pull else "no_fill",
+                    "short_pullback_return_pct": (
+                        short_pull[0] if short_pull else float("nan")
+                    ),
+                    "short_pullback_outcome": short_pull[1] if short_pull else "no_fill",
+                    "long_pullback_trailing_return_pct": (
+                        long_pull_trail[0] if long_pull_trail else float("nan")
+                    ),
+                    "long_pullback_trailing_outcome": (
+                        long_pull_trail[1] if long_pull_trail else "no_fill"
+                    ),
+                    "short_pullback_trailing_return_pct": (
+                        short_pull_trail[0] if short_pull_trail else float("nan")
+                    ),
+                    "short_pullback_trailing_outcome": (
+                        short_pull_trail[1] if short_pull_trail else "no_fill"
+                    ),
                 }
             )
     return pd.DataFrame(rows)

@@ -764,3 +764,9 @@ This file tracks local verification for the two-stage futures system.
 - v2 方向性标签：2025 top1% PF 0.114、合并 PF 1.13 且触发 5U。
 - v3 方向性标签 + 2R 保本/5R 追踪：合并 PF 1.272 但 2025 PF 0.248、2026 PF 0.978，仍触发 5U。
 - 结论：当前特征与次根市价入场下无合格尾部通道；下一步 v4 回踩限价入场。留档 `docs/s0-tail-event-lgbm-v2v3-result-2026-08-05.md`。
+
+## 2026-08-05 尾部事件 v4 拒绝与 Phase 1 收口
+
+- v4 回踩限价入场（固定止盈/追踪两个变体）：2024 PF 0.60/0.90、2025 PF 0.41/0.26、2026 PF 1.17/1.17，合并均触发硬停止。
+- Phase 1 规则 + ML 共 7 个候选全部拒绝；结论：当前特征与执行下无合格事件通道，不放行任何候选。
+- 下一步选项：数据增强（OI/taker/盘口）、暂停 Phase 1、人工观察名单，待用户决定。留档 `docs/s0-tail-event-v4-result-and-phase1-conclusion-2026-08-05.md`。
