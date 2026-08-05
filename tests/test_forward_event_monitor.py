@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import json
 
 from scripts.forward_event_monitor import (
+    check_milestones,
     close_expired,
     detect_new_listings,
     evaluate_volume,
@@ -220,3 +222,18 @@ def test_close_expired_new_listing_first_hour_rule(monkeypatch, tmp_path) -> Non
     assert closed[0]["first_hour_return_pct"] == 10.0
     assert closed[0]["first_hour_rule_traded"] is True
     assert closed[0]["first_hour_rule_pnl_pct"] == -15.0
+
+
+def test_check_milestones(tmp_path) -> None:
+    path = tmp_path / "records.jsonl"
+    with path.open("w", encoding="utf-8") as handle:
+        for index in range(30):
+            handle.write(
+                json.dumps(
+                    {"type": "new_listing", "symbol": f"S{index}", "raw_return_pct": 1.0}
+                )
+                + "\n"
+            )
+    reached = check_milestones(path)
+    assert "new_listing" in reached
+    assert check_milestones(tmp_path / "none.jsonl") == []

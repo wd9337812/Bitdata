@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from scripts.evaluate_forward_event_records import TARGETS  # noqa: E402
+
 DEFAULT_STATE = ROOT / "data" / "research" / "s0_forward_event_monitor" / "state.json"
 DEFAULT_RECORDS = ROOT / "data" / "research" / "s0_forward_event_monitor" / "records.jsonl"
 FALLBACK_SYMBOLS = (
@@ -411,8 +413,37 @@ def close_expired(
     return closed
 
 
+def check_milestones(records_path: Path) -> list[str]:
+    """Return event types that reached their forward-sample target."""
+    counts: dict[str, int] = {}
+    if records_path.exists():
+        with records_path.open(encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except Exception:
+                    continue
+                event_type = str(record.get("type", "unknown"))
+                counts[event_type] = counts.get(event_type, 0) + 1
+    reached = [
+        event_type
+        for event_type, target in TARGETS.items()
+        if counts.get(event_type, 0) >= target
+    ]
+    for event_type in reached:
+        print(
+            f"MILESTONE_REACHED type={event_type} closed={counts[event_type]}",
+            flush=True,
+        )
+    return reached
+
+
 def run_once(state: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     closed = close_expired(state, args, args.records)
+    check_milestones(args.records)
     events = evaluate_once(state, args)
     seen = set()
     for event in events:
