@@ -48,10 +48,13 @@ class OkxPublicClient(RegistrationFreeMarketClient):
 
     def last_price(self, symbol: str) -> float:
         payload = self._get(
-            "/api/v5/market/tickers",
-            {"instType": "SWAP", "instId": self.instrument(symbol)},
+            "/api/v5/market/ticker",
+            {"instId": self.instrument(symbol)},
         )
-        return float(payload["data"][0]["last"])
+        data = payload.get("data") or []
+        if not data:
+            raise RuntimeError(f"OKX ticker empty for {symbol}")
+        return float(data[0]["last"])
 
     def klines(
         self,

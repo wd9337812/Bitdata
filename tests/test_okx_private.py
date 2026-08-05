@@ -5,6 +5,7 @@ from typing import Any
 import pytest
 
 from app.okx_private import OkxPrivateClient, OkxPrivateConfig
+from app.okx_private import load_okx_config
 
 
 class _FakeResponse:
@@ -76,3 +77,22 @@ def test_okx_error_is_raised() -> None:
             client.balance()
     finally:
         monkeypatch.undo()
+
+
+def test_load_okx_config_from_file(tmp_path) -> None:
+    path = tmp_path / "okx.env"
+    path.write_text(
+        "OKX_API_KEY=file_key\n"
+        "OKX_API_SECRET=file_secret\n"
+        "OKX_API_PASSPHRASE=file_pass\n",
+        encoding="utf-8",
+    )
+    config = load_okx_config(
+        dry_run=True,
+        env={},
+        credentials_path=str(path),
+    )
+    assert config.api_key == "file_key"
+    assert config.api_secret == "file_secret"
+    assert config.passphrase == "file_pass"
+    assert config.dry_run is True

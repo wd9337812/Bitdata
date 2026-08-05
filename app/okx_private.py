@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -144,3 +145,38 @@ class OkxPrivateClient:
             + '"}'
         )
         return self._request("POST", "/api/v5/trade/order", body)
+
+
+def load_okx_config(
+    dry_run: bool = True,
+    env: dict[str, str] | None = None,
+    credentials_path: str | None = None,
+) -> OkxPrivateConfig:
+    """Load OKX credentials from environment or a chmod-600 file."""
+    env = env if env is not None else dict(os.environ)
+    key = env.get("OKX_API_KEY", "")
+    secret = env.get("OKX_API_SECRET", "")
+    passphrase = env.get("OKX_API_PASSPHRASE", "")
+    if (not key or not secret or not passphrase) and credentials_path:
+        path = credentials_path if isinstance(credentials_path, str) else str(credentials_path)
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    field, value = line.split("=", 1)
+                    field = field.strip()
+                    value = value.strip().strip("'\"")
+                    if field == "OKX_API_KEY" and not key:
+                        key = value
+                    elif field == "OKX_API_SECRET" and not secret:
+                        secret = value
+                    elif field == "OKX_API_PASSPHRASE" and not passphrase:
+                        passphrase = value
+    return OkxPrivateConfig(
+        api_key=key,
+        api_secret=secret,
+        passphrase=passphrase,
+        dry_run=dry_run,
+    )
