@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import requests
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.registration_free_market import client_for  # noqa: E402
 
 
 BYBIT_PUBLIC_BASE = "https://api.bybit.com"
@@ -119,8 +127,14 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--symbol", default="SOLUSDT")
-    parser.add_argument("--binance-price", type=float, required=True)
-    parser.add_argument("--bybit-price", type=float, required=True)
+    parser.add_argument(
+        "--venue",
+        default="okx",
+        choices=("okx", "gate", "kucoin"),
+        help="Registration-free second-venue data source.",
+    )
+    parser.add_argument("--binance-price", type=float, default=None)
+    parser.add_argument("--second-price", type=float, default=None)
     parser.add_argument("--equity", type=float, default=14.0)
     parser.add_argument("--leverage", type=float, default=5.0)
     return parser.parse_args()
@@ -129,7 +143,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     config = ExecutionConfig(leverage_per_leg=args.leverage)
-    premium = compute_premium(args.binance_price, args.bybit_price)
+    second_price = args.second_price
+    if second_price is None:
+        second_price = client_for(args.venue).last_price(args.symbol)
+    if args.binance_price is None:
+        raise SystemExit("--binance-price is required (or provide both prices)")
+    premium = compute_premium(args.binance_price, second_price)
     direction = -1 if premium > 0 else 1
     plan = build_pair_orders(
         args.symbol, direction, args.equity, config, premium
@@ -141,10 +160,12 @@ def main() -> None:
                 "premium_pct": round(premium, 4),
                 "direction_binance": plan.binance_side,
                 "direction_bybit": plan.bybit_side,
+                "second_venue": args.venue,
+                "second_price": second_price,
                 "notional_per_leg_usdt": plan.notional_per_leg,
                 "stop_distance_pct": plan.binance_stop,
                 "dry_run": True,
-                "note": "No orders placed; Bybit live execution requires API credentials.",
+                "note": "No orders placed; live execution on the second venue requires an account.",
             },
             ensure_ascii=False,
             indent=2,
