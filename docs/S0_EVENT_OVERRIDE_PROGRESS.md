@@ -42,6 +42,7 @@
 - [x] 双腿跨所套利压力测试：基准 PF 3.90 → Bybit 腿延迟 1 分钟 PF 0.63、成本 ×2 PF 0.36 → 同分钟成交伪影，拒绝（`docs/s0-cross-exchange-pair-rejection-2026-08-05.md`）
 - [x] 亚分钟验证（Binance 10s aggTrades + Bybit 逐笔，SOL/DOGE/ADA 2026-06）：10s 价差 std 0.015-0.048%、0.2% 事件为 0；低阈值双腿回测 PF 0.004 → 跨所家族正式关闭（`docs/s0-subminute-cross-exchange-validation-2026-08-05.md`）
 - [x] 阻塞期工程：前向影子晋级检查器（30 笔/8 币/压力 PF/去前三/bootstrap）与双腿执行脚手架（dry-run，无 API key 不误下单）→ `docs/s0-forward-shadow-gate-and-dual-leg-scaffold-2026-08-05.md`
+- [x] 30d 动量“让利润跑”（2.5 ATR / 3.5R-4R / 7 天）1m 路径跨年审计：小时级 PF 1.8-1.9 衰减为 1.5-1.7，年度稳定/去集中度/bootstrap 全部未过 → 拒绝（`docs/s0-30d-minute-letwin-rejection-2026-08-05.md`）
 - [x] VPS 前向影子检查：30d 动量 2 笔、24h 截面动量 18 笔（未达 30 笔/8 币门槛）
 - [ ] Phase 1 下一候选：30 日横截面动量（唯一历史正期望家族）高杠杆事件化：信号日 3x-10x、1m 快速入场 + 5U 硬止损 + 让利润跑（2020-2022 选型 / 2023+ 验证 / bootstrap / 影子盘）
 - [ ] Phase 1 下一候选：修正宇宙重拉 daily metrics（OI/taker/toptrader）→ 拥挤反转 + 1m 快速离场；空头与 ATR 自适应止损；大盘异动事件（2020-2022 选型 / 2023+ 验证 / bootstrap / 影子盘）
