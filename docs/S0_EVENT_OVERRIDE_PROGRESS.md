@@ -49,6 +49,7 @@
 - [x] 30d 动量 + 跨所价差方向过滤（免注册 Bybit 公共数据，Binance 单腿）：全样本 PF 1.16→1.77；严格切分后改善集中在 2024-2026（开发期去前三 0.51 负）→ 未过协议，研究状态（`docs/s0-30d-dislocation-filter-2026-08-05.md`）
 - [x] OKX 注册完成：key/secret 已验证（50105 仅缺 passphrase）；OKX v5 签名客户端 + 双腿执行接线 + 前向影子记录器就绪，运行手册 `docs/s0-okx-forward-shadow-runbook-2026-08-05.md`
 - [x] 回归事件研究主线：OKX 双腿套利降级为 Phase 2 备选；新增多事件实时前向影子（funding_extreme / volume_breakout / btc_impulse），公共数据、无资金、VPS 可启动（`docs/s0-forward-event-monitor-2026-08-05.md`）
+- [x] 1h 量价爆发延续（方案原定义：量 5 倍 + taker 失衡 0.15 + 30d 同向）：104 笔，2021/2022/2026 全负，2026 盲测 PF 0.69 → 拒绝（`docs/s0-volume-explosion-rejection-2026-08-05.md`）
 - [x] Phase 1 穷尽审计总档：30+ 家族全部拒绝，唯一正期望家族仅前向影子（`docs/s0-phase1-event-channel-exhaustive-audit-2026-08-05.md`）
 - [x] VPS 前向影子检查：30d 动量 2 笔、24h 截面动量 18 笔（未达 30 笔/8 币门槛）
 - [ ] Phase 1 下一候选：30 日横截面动量（唯一历史正期望家族）高杠杆事件化：信号日 3x-10x、1m 快速入场 + 5U 硬止损 + 让利润跑（2020-2022 选型 / 2023+ 验证 / bootstrap / 影子盘）

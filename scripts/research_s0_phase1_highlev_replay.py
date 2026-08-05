@@ -73,6 +73,9 @@ def load_bars(path: Path) -> pd.DataFrame | None:
     keep = ["open_time", "open", "high", "low", "close", "volume"]
     if "quote_volume" in frame.columns:
         keep.append("quote_volume")
+    for column in ("taker_buy_volume", "taker_buy_quote_volume"):
+        if column in frame.columns:
+            keep.append(column)
     frame = frame[keep].copy()
     frame = frame.sort_values("open_time").reset_index(drop=True)
     frame["open_time"] = frame["open_time"].astype("int64")
@@ -84,6 +87,9 @@ def load_bars(path: Path) -> pd.DataFrame | None:
         frame["quote_volume"] = pd.to_numeric(
             frame["quote_volume"], errors="coerce"
         )
+    for column in ("taker_buy_volume", "taker_buy_quote_volume"):
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
     return frame.dropna(subset=["open", "high", "low", "close"]).reset_index(
         drop=True
     )
