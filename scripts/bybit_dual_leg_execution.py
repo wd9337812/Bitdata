@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.registration_free_market import client_for  # noqa: E402
+from app.okx_private import OkxPrivateClient, OkxPrivateConfig  # noqa: E402
 
 
 BYBIT_PUBLIC_BASE = "https://api.bybit.com"
@@ -119,6 +120,30 @@ def compute_premium(binance_price: float, bybit_price: float) -> float:
     return (binance_price / bybit_price - 1.0) * 100.0
 
 
+def okx_instrument(symbol: str) -> str:
+    base = symbol.removesuffix("USDT")
+    return f"{base}-USDT-SWAP"
+
+
+def execute_okx_leg(
+    plan: PairOrderTemplate,
+    second_price: float,
+    okx_config: OkxPrivateConfig,
+    client: OkxPrivateClient | None = None,
+) -> dict[str, Any]:
+    """Place the OKX leg. Raises in dry-run mode (no live orders)."""
+    if okx_config.dry_run:
+        raise RuntimeError("dry_run=True: refusing to place a live OKX order")
+    qty = plan.notional_per_leg / second_price
+    executor = client or OkxPrivateClient(okx_config)
+    result = executor.place_market_order(
+        okx_instrument(plan.symbol),
+        plan.bybit_side.lower(),
+        round(qty, 6),
+    )
+    return {"ok": True, "okx_order": result}
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -137,6 +162,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--second-price", type=float, default=None)
     parser.add_argument("--equity", type=float, default=14.0)
     parser.add_argument("--leverage", type=float, default=5.0)
+    parser.add_argument("--okx-api-key", default=None)
+    parser.add_argument("--okx-api-secret", default=None)
+    parser.add_argument("--okx-passphrase", default=None)
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="Allow live OKX orders (dangerous; requires all three credentials).",
+    )
     return parser.parse_args()
 
 
@@ -153,24 +186,39 @@ def main() -> None:
     plan = build_pair_orders(
         args.symbol, direction, args.equity, config, premium
     )
-    print(
-        json.dumps(
-            {
-                "symbol": args.symbol,
-                "premium_pct": round(premium, 4),
-                "direction_binance": plan.binance_side,
-                "direction_bybit": plan.bybit_side,
-                "second_venue": args.venue,
-                "second_price": second_price,
-                "notional_per_leg_usdt": plan.notional_per_leg,
-                "stop_distance_pct": plan.binance_stop,
-                "dry_run": True,
-                "note": "No orders placed; live execution on the second venue requires an account.",
-            },
-            ensure_ascii=False,
-            indent=2,
+    output: dict[str, Any] = {
+        "symbol": args.symbol,
+        "premium_pct": round(premium, 4),
+        "direction_binance": plan.binance_side,
+        "direction_second_venue": plan.bybit_side,
+        "second_venue": args.venue,
+        "second_price": second_price,
+        "notional_per_leg_usdt": plan.notional_per_leg,
+        "stop_distance_pct": plan.binance_stop,
+    }
+    if args.venue == "okx" and args.live:
+        okx_config = OkxPrivateConfig(
+            api_key=args.okx_api_key or "",
+            api_secret=args.okx_api_secret or "",
+            passphrase=args.okx_passphrase or "",
+            dry_run=False,
         )
-    )
+        result = execute_okx_leg(plan, second_price, okx_config)
+        output.update({"dry_run": False, "okx_leg": result})
+        output["note"] = (
+            "OKX leg submitted; Binance leg must be submitted by the live bot."
+        )
+    else:
+        output.update(
+            {
+                "dry_run": True,
+                "note": (
+                    "No orders placed. Use --live with OKX credentials to enable "
+                    "the OKX leg; Binance leg still requires the live bot."
+                ),
+            }
+        )
+    print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
