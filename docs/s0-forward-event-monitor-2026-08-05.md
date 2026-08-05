@@ -13,10 +13,16 @@
 | funding_extreme | 最新资金费 \|r\|≥0.05%/8h 且相对历史 z≥2 | 正→空、负→多（拥挤反转） | 方案 1.2-2 |
 | volume_breakout | 最新 1h 成交量相对 200h z≥3 且收阳/收阴 | 阳→多、阴→空（量价爆发） | 方案 1.2-3 |
 | btc_impulse | BTC 4h 收益 z≥3 | 跟随方向（大盘异动） | 事件家族扩展 |
+| momentum_confirmed | 每日 30d 截面动量 + 加速&广度确认（预注册共现候选） | 选币方向 | 30d 共现候选 |
 
 每个事件记录入场价格；24 小时后用真实收盘价结算 `raw_return_pct` 与
 `mfe_pct`（最大有利波动），写入 `records.jsonl`。积累到每个类型 ≥50 笔闭合
 后再按协议评估（PF≥1.2、无 5U、去集中度、bootstrap）。
+
+momentum_confirmed 按冻结 30d 动量规则每日评估：广度绝对值必须在 2%-10%，
+BTC 与广度同向；选中币需同时满足加速与广度确认才记 `momentum_confirmed`，
+否则记 `momentum_unconfirmed`（诊断用）。2026-08-05 实测：市场广度 +0.29%
+低于触发带，正确不出信号（该类型一年约 15 次）。
 
 ## 启动（VPS，nohup，非 cron）
 

@@ -6,6 +6,7 @@ import json
 from scripts.forward_event_monitor import (
     close_expired,
     evaluate_volume,
+    select_30d_momentum,
     z_score,
 )
 
@@ -83,3 +84,51 @@ def test_close_expired_writes_record(monkeypatch, tmp_path) -> None:
     line = json.loads(records.read_text(encoding="utf-8").strip())
     assert line["raw_return_pct"] == 5.0
     assert line["mfe_pct"] == 6.0
+
+
+def test_select_30d_momentum_confirmations(monkeypatch) -> None:
+    tickers = [{"symbol": "BTCUSDT", "quoteVolume": "1000000000", "lastPrice": "64000"}]
+    strong = "STRONGUSDT"
+    ratios = {"BTCUSDT": 1.05}
+    for index in range(40):
+        symbol = f"UP{index:02d}USDT"
+        tickers.append({"symbol": symbol, "quoteVolume": "50000000", "lastPrice": "10"})
+        ratios[symbol] = 1.03
+    for index in range(20):
+        symbol = f"DOWN{index:02d}USDT"
+        tickers.append({"symbol": symbol, "quoteVolume": "50000000", "lastPrice": "10"})
+        ratios[symbol] = 0.98
+    for value in (1.08, 1.09, 1.10):
+        symbol = f"BIG{int(value * 100)}USDT"
+        tickers.append({"symbol": symbol, "quoteVolume": "50000000", "lastPrice": "10"})
+        ratios[symbol] = value
+    ratios[strong] = 1.15
+    tickers.append({"symbol": strong, "quoteVolume": "50000000", "lastPrice": "30"})
+
+    def fake_get_json(url, params=None):
+        assert "ticker/24hr" in url
+        return tickers
+
+    def fake_klines(symbol, interval, limit):
+        if interval == "1d":
+            close = {"BTCUSDT": 105.0, strong: 110.0}
+            ratio = ratios[symbol]
+            close_value = close.get(symbol, 100.0 * ratio)
+            return [[0, 0, 0, 0, close_value / ratio, 0, 0, 0, 0, 0, 0, 0]] * 31 + [
+                [0, 0, 0, 0, close_value, 0, 0, 0, 0, 0, 0, 0]
+            ]
+        # 1h
+        if symbol == strong:
+            return [[0, 0, 0, 0, 30.0, 0, 0, 0, 0, 0, 0, 0]] * 24 + [
+                [0, 0, 0, 0, 30.3, 0, 0, 0, 0, 0, 0, 0]
+            ]
+        return [[0, 0, 0, 0, 100.0, 0, 0, 0, 0, 0, 0, 0]] * 25
+
+    monkeypatch.setattr("scripts.forward_event_monitor._get_json", fake_get_json)
+    monkeypatch.setattr("scripts.forward_event_monitor.fetch_klines", fake_klines)
+    result = select_30d_momentum(_args())
+    assert result is not None
+    assert result["symbol"] == strong
+    assert result["confirmed"] is True
+    assert result["acceleration"] is True
+    assert result["breadth_confirmation"] is True
