@@ -1,0 +1,45 @@
+# 多事件类型实时前向影子（2026-08-05）
+
+## 定位
+
+回归事件研究主线：Phase 0（30d 动量底仓）继续运行；Phase 1 事件通道需要
+“未来样本”证据。本监控器把方案里的三类事件候选同时挂到真实行情上，
+**只记录、不下单、不需要任何交易所资金**。
+
+## 监控的事件类型
+
+| 类型 | 触发 | 方向 | 对应方案 |
+| --- | --- | --- | --- |
+| funding_extreme | 最新资金费 \|r\|≥0.05%/8h 且相对历史 z≥2 | 正→空、负→多（拥挤反转） | 方案 1.2-2 |
+| volume_breakout | 最新 1h 成交量相对 200h z≥3 且收阳/收阴 | 阳→多、阴→空（量价爆发） | 方案 1.2-3 |
+| btc_impulse | BTC 4h 收益 z≥3 | 跟随方向（大盘异动） | 事件家族扩展 |
+
+每个事件记录入场价格；24 小时后用真实收盘价结算 `raw_return_pct` 与
+`mfe_pct`（最大有利波动），写入 `records.jsonl`。积累到每个类型 ≥50 笔闭合
+后再按协议评估（PF≥1.2、无 5U、去集中度、bootstrap）。
+
+## 启动（VPS，nohup，非 cron）
+
+```bash
+cd /opt/bitdata
+mkdir -p data/research/s0_forward_event_monitor
+nohup python3 scripts/forward_event_monitor.py \
+  --state data/research/s0_forward_event_monitor/state.json \
+  --records data/research/s0_forward_event_monitor/records.jsonl \
+  --loop-interval 300 \
+  > data/research/s0_forward_event_monitor/monitor.log 2>&1 &
+echo $! > data/research/s0_forward_event_monitor/monitor.pid
+```
+
+查看：`tail -f .../monitor.log`；停止：`kill $(cat .../monitor.pid)`。
+状态持久化，重启续跑；每 5 分钟一轮，公共 API 权重极小。
+
+## 与 OKX 套利的关系
+
+OKX 双腿套利**降级为 Phase 2 备选**（跨所价差毛利薄，不适合第一桶金 1000x）；
+其代码与凭据保留，但不占 Phase 1 主线。OKX 公共行情仍可作免注册数据源。
+
+## 验收
+
+- 单元测试 3 个（z 分数、量价事件、到期结算）。
+- VPS 端到端实测通过（4 币扫描，0 事件触发属正常）。
