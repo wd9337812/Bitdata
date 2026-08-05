@@ -15,6 +15,13 @@ COSTS: dict[str, float] = {
     "momentum_confirmed": 0.60,
     "momentum_unconfirmed": 0.60,
 }
+TARGETS: dict[str, int] = {
+    "new_listing": 30,
+    "momentum_confirmed": 30,
+    "funding_extreme": 50,
+    "volume_breakout": 50,
+    "btc_impulse": 50,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,7 +56,16 @@ def evaluate(records: list[dict[str, Any]]) -> dict[str, Any]:
                 3,
             ),
         }
-    return {"records": len(records), "by_type": rows}
+    milestones: dict[str, Any] = {}
+    for event_type, target in TARGETS.items():
+        current = rows.get(event_type, {}).get("closed", 0)
+        milestones[event_type] = {
+            "closed": current,
+            "target": target,
+            "remaining": max(0, target - current),
+            "ready_for_evaluation": current >= target,
+        }
+    return {"records": len(records), "by_type": rows, "milestones": milestones}
 
 
 def main() -> None:
@@ -62,6 +78,12 @@ def main() -> None:
                 if line:
                     records.append(json.loads(line))
     report = evaluate(records)
+    ready = [
+        key
+        for key, value in report["milestones"].items()
+        if value["ready_for_evaluation"]
+    ]
+    print("READY_FOR_EVALUATION:", ready or "none", flush=True)
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(

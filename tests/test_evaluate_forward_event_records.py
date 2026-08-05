@@ -17,3 +17,5 @@ def test_evaluate_applies_costs() -> None:
     assert funding["net_sum_pct"] == round((1.0 - 0.24) + (-0.1 - 0.24), 3)
     momentum = report["by_type"]["momentum_confirmed"]
     assert momentum["net_sum_pct"] == round(2.0 - 0.60, 3)
+    assert report["milestones"]["funding_extreme"]["closed"] == 2
+    assert report["milestones"]["new_listing"]["remaining"] == 30
