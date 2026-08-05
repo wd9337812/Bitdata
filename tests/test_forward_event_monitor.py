@@ -189,3 +189,34 @@ def test_close_expired_absolute_for_direction_none(monkeypatch, tmp_path) -> Non
     closed = close_expired(state, _args(horizon_hours=0.0), records)
     assert closed[0]["raw_return_pct"] == 20.0
     assert closed[0]["mfe_pct"] == round(42.8571, 4)
+
+
+def test_close_expired_new_listing_first_hour_rule(monkeypatch, tmp_path) -> None:
+    records = tmp_path / "records2.jsonl"
+    ts = 1_000_000_000_000
+    state = {
+        "open_events": [
+            {
+                "type": "new_listing",
+                "symbol": "NEWALTUSDT",
+                "direction": None,
+                "ts": ts,
+                "entry_price": 1.0,
+                "horizon_hours": 0.0,
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        "scripts.forward_event_monitor.fetch_price", lambda symbol: 1.0
+    )
+    monkeypatch.setattr(
+        "scripts.forward_event_monitor.fetch_klines",
+        lambda symbol, interval, limit: [
+            [ts, 1.0, 1.12, 0.98, 1.10, 0, 0, 0, 0, 0, 0, 0],
+            [ts + 3_600_000, 0, 1.15, 0.80, 0.90, 0, 0, 0, 0, 0, 0, 0],
+        ],
+    )
+    closed = close_expired(state, _args(horizon_hours=0.0), records)
+    assert closed[0]["first_hour_return_pct"] == 10.0
+    assert closed[0]["first_hour_rule_traded"] is True
+    assert closed[0]["first_hour_rule_pnl_pct"] == -15.0

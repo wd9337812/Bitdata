@@ -344,11 +344,60 @@ def close_expired(
         else:
             raw_return = abs(current / event["entry_price"] - 1.0) * 100.0
             mfe_record = mfe
+        first_hour_pct = None
+        would_trade = False
+        trade_pnl_pct = None
+        if event.get("type") == "new_listing":
+            first_idx = None
+            for index, item in enumerate(klines):
+                if int(item[0]) >= event["ts"]:
+                    first_idx = index
+                    break
+            if first_idx is not None and first_idx + 1 < len(klines):
+                open_price = float(klines[first_idx][1])
+                close_price = float(klines[first_idx][4])
+                if open_price > 0:
+                    first_hour_pct = (close_price / open_price - 1.0) * 100.0
+                    if abs(first_hour_pct) >= 5.0:
+                        would_trade = True
+                        direction_rule = 1 if first_hour_pct > 0 else -1
+                        entry = close_price
+                        stop = entry - direction_rule * entry * 0.15
+                        target = entry + direction_rule * entry * 0.30
+                        exit_price = None
+                        exit_ms = int(klines[-1][0])
+                        for item in klines[first_idx + 1:]:
+                            high = float(item[2])
+                            low = float(item[3])
+                            if direction_rule > 0 and low <= stop:
+                                exit_price, exit_ms = stop, int(item[0])
+                                break
+                            if direction_rule < 0 and high >= stop:
+                                exit_price, exit_ms = stop, int(item[0])
+                                break
+                            if direction_rule > 0 and high >= target:
+                                exit_price, exit_ms = target, int(item[0])
+                                break
+                            if direction_rule < 0 and low <= target:
+                                exit_price, exit_ms = target, int(item[0])
+                                break
+                        if exit_price is None:
+                            exit_price = float(klines[-1][4])
+                        trade_pnl_pct = (
+                            direction_rule * (exit_price / entry - 1.0) * 100.0
+                        )
         record = {
             **event,
             "exit_ts": int(time.time() * 1000),
             "raw_return_pct": round(raw_return, 4),
             "mfe_pct": round(mfe_record, 4),
+            "first_hour_return_pct": (
+                round(first_hour_pct, 4) if first_hour_pct is not None else None
+            ),
+            "first_hour_rule_traded": would_trade,
+            "first_hour_rule_pnl_pct": (
+                round(trade_pnl_pct, 4) if trade_pnl_pct is not None else None
+            ),
         }
         closed.append(record)
         with records_path.open("a", encoding="utf-8") as handle:
