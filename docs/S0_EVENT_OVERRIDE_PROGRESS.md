@@ -45,6 +45,7 @@
 - [x] 30d 动量“让利润跑”（2.5 ATR / 3.5R-4R / 7 天）1m 路径跨年审计：小时级 PF 1.8-1.9 衰减为 1.5-1.7，年度稳定/去集中度/bootstrap 全部未过 → 拒绝（`docs/s0-30d-minute-letwin-rejection-2026-08-05.md`）
 - [x] 30d letwin 全量 1m 重验（154 币全路径，无窗口截断）：可交易信号 17-20 笔，最优 PF 1.43、去前三 PF 0.14 → 结论不变且在高流动性宇宙上更弱
 - [x] 免注册替代数据源：OKX/Gate/KuCoin 匿名公共行情客户端（无需注册）+ 双腿脚手架 `--venue`；Binance↔OKX 双腿 2026H1：基准 PF 1.90、延迟 1 分钟 PF 1.39、成本×2 PF 0.97 → 延迟鲁棒但成本脆弱，需用户确认可注册的第二交易所（`docs/s0-okx-registration-free-alternative-2026-08-05.md`）
+- [x] 免注册数据源矩阵（VPS 实测）：Gate/KuCoin/Bitget/MEXC 无跨年 1m 公共历史；Hyperliquid 1m 仅 2 天/日线全史/钱包免 KYC；跨年第二所唯一免注册档案仍是 Bybit 公共站（下载免注册）→ `docs/s0-registration-free-data-matrix-2026-08-05.md`
 - [x] Phase 1 穷尽审计总档：30+ 家族全部拒绝，唯一正期望家族仅前向影子（`docs/s0-phase1-event-channel-exhaustive-audit-2026-08-05.md`）
 - [x] VPS 前向影子检查：30d 动量 2 笔、24h 截面动量 18 笔（未达 30 笔/8 币门槛）
 - [ ] Phase 1 下一候选：30 日横截面动量（唯一历史正期望家族）高杠杆事件化：信号日 3x-10x、1m 快速入场 + 5U 硬止损 + 让利润跑（2020-2022 选型 / 2023+ 验证 / bootstrap / 影子盘）

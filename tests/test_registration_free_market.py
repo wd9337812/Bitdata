@@ -4,6 +4,7 @@ import pytest
 
 from app.registration_free_market import (
     GatePublicClient,
+    HyperliquidPublicClient,
     KuCoinFuturesPublicClient,
     OkxPublicClient,
     client_for,
@@ -52,3 +53,12 @@ def test_client_for_unsupported_venue() -> None:
     with pytest.raises(ValueError):
         client_for("bybit")
     assert isinstance(client_for("okx"), OkxPublicClient)
+
+
+def test_hyperliquid_last_price_anonymous(monkeypatch) -> None:
+    def fake_post(url, json=None, timeout=None):
+        assert json["type"] == "allMids"
+        return _FakeResponse({"BTC": "64000.5"})
+
+    monkeypatch.setattr("app.registration_free_market.requests.post", fake_post)
+    assert HyperliquidPublicClient().last_price("BTCUSDT") == pytest.approx(64000.5)

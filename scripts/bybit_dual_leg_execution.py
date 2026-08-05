@@ -130,7 +130,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--venue",
         default="okx",
-        choices=("okx", "gate", "kucoin"),
+        choices=("okx", "gate", "kucoin", "hyperliquid"),
         help="Registration-free second-venue data source.",
     )
     parser.add_argument("--binance-price", type=float, default=None)

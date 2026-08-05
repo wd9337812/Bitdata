@@ -219,6 +219,57 @@ class KuCoinFuturesPublicClient(RegistrationFreeMarketClient):
         ]
 
 
+@dataclass(frozen=True)
+class HyperliquidPublicClient(RegistrationFreeMarketClient):
+    base_url: str = "https://api.hyperliquid.xyz"
+    timeout: int = 15
+
+    def _post(self, payload: dict[str, Any]) -> Any:
+        response = requests.post(
+            f"{self.base_url}/info",
+            json=payload,
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def last_price(self, symbol: str) -> float:
+        coin = symbol.removesuffix("USDT")
+        mids = self._post({"type": "allMids"})
+        return float(mids[coin])
+
+    def klines(
+        self,
+        symbol: str,
+        interval: str,
+        start_ms: int,
+        end_ms: int,
+    ) -> list[dict[str, Any]]:
+        coin = symbol.removesuffix("USDT")
+        rows = self._post(
+            {
+                "type": "candleSnapshot",
+                "req": {
+                    "coin": coin,
+                    "interval": interval,
+                    "startTime": start_ms,
+                    "endTime": end_ms,
+                },
+            }
+        )
+        return [
+            {
+                "open_time": int(row["t"]),
+                "open": float(row["o"]),
+                "high": float(row["h"]),
+                "low": float(row["l"]),
+                "close": float(row["c"]),
+                "volume": float(row["v"]),
+            }
+            for row in rows
+        ]
+
+
 def client_for(venue: str) -> RegistrationFreeMarketClient:
     if venue == "okx":
         return OkxPublicClient()
@@ -226,4 +277,6 @@ def client_for(venue: str) -> RegistrationFreeMarketClient:
         return GatePublicClient()
     if venue == "kucoin":
         return KuCoinFuturesPublicClient()
+    if venue == "hyperliquid":
+        return HyperliquidPublicClient()
     raise ValueError(f"unsupported venue: {venue}")
