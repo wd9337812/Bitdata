@@ -40,6 +40,12 @@ echo $! > data/research/s0_forward_event_monitor/monitor.pid
 查看：`tail -f .../monitor.log`；停止：`kill $(cat .../monitor.pid)`。
 状态持久化，重启续跑；每 5 分钟一轮，公共 API 权重极小。
 
+## 运行状态（2026-08-05）
+
+- VPS 上已启动：PID `237564`，`state.json`/`records.jsonl` 已建立；
+- 首轮执行完成：0 事件触发（当日市场广度 +0.29% 低于 30d 动量触发带，正常）；
+- 每 5 分钟一轮，日志追加 `monitor.log`；停止用 `kill $(cat monitor.pid)`。
+
 ## 与 OKX 套利的关系
 
 OKX 双腿套利**降级为 Phase 2 备选**（跨所价差毛利薄，不适合第一桶金 1000x）；
