@@ -5,6 +5,7 @@ import json
 
 from scripts.forward_event_monitor import (
     close_expired,
+    detect_new_listings,
     evaluate_volume,
     select_30d_momentum,
     z_score,
@@ -132,3 +133,59 @@ def test_select_30d_momentum_confirmations(monkeypatch) -> None:
     assert result["confirmed"] is True
     assert result["acceleration"] is True
     assert result["breadth_confirmation"] is True
+
+
+def test_detect_new_listings(monkeypatch) -> None:
+    def fake_get_json(url, params=None):
+        return {
+            "symbols": [
+                {"symbol": "BTCUSDT"},
+                {"symbol": "NEWALTUSDT"},
+                {"symbol": "OLDALTUSDT"},
+            ]
+        }
+
+    monkeypatch.setattr("scripts.forward_event_monitor._get_json", fake_get_json)
+    monkeypatch.setattr(
+        "scripts.forward_event_monitor.fetch_price", lambda symbol: 1.23
+    )
+    state: dict = {}
+    events = detect_new_listings(state)
+    assert events == []  # first run only initializes
+    assert state["known_symbols"] == ["BTCUSDT", "NEWALTUSDT", "OLDALTUSDT"]
+    events2 = detect_new_listings(state)
+    assert len(events2) == 0
+    state["known_symbols"].remove("NEWALTUSDT")
+    state["known_symbols"] = ["BTCUSDT", "OLDALTUSDT"]
+    events3 = detect_new_listings(state)
+    assert len(events3) == 1
+    assert events3[0]["type"] == "new_listing"
+    assert events3[0]["symbol"] == "NEWALTUSDT"
+    assert events3[0]["direction"] is None
+
+
+def test_close_expired_absolute_for_direction_none(monkeypatch, tmp_path) -> None:
+    records = tmp_path / "records.jsonl"
+    state = {
+        "open_events": [
+            {
+                "type": "new_listing",
+                "symbol": "NEWALTUSDT",
+                "direction": None,
+                "ts": 1_000_000_000_000,
+                "entry_price": 1.0,
+            }
+        ]
+    }
+    monkeypatch.setattr(
+        "scripts.forward_event_monitor.fetch_price", lambda symbol: 0.8
+    )
+    monkeypatch.setattr(
+        "scripts.forward_event_monitor.fetch_klines",
+        lambda symbol, interval, limit: [
+            [0, 0, 1.3, 0.7, 0, 0, 0, 0, 0, 0, 0, 0]
+        ],
+    )
+    closed = close_expired(state, _args(horizon_hours=0.0), records)
+    assert closed[0]["raw_return_pct"] == 20.0
+    assert closed[0]["mfe_pct"] == round(42.8571, 4)

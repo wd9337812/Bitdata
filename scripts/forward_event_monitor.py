@@ -233,6 +233,38 @@ def select_30d_momentum(args: argparse.Namespace) -> dict[str, Any] | None:
     }
 
 
+def detect_new_listings(state: dict[str, Any]) -> list[dict[str, Any]]:
+    """Detect newly listed Binance USD-M symbols via exchangeInfo diff."""
+    exchange = _get_json("https://fapi.binance.com/fapi/v1/exchangeInfo")
+    current = {
+        str(item["symbol"])
+        for item in exchange.get("symbols", [])
+        if str(item["symbol"]).endswith("USDT")
+    }
+    known = set(state.get("known_symbols", []))
+    events: list[dict[str, Any]] = []
+    if known:
+        for symbol in sorted(current - known):
+            try:
+                price = fetch_price(symbol)
+            except Exception:
+                continue
+            events.append(
+                {
+                    "type": "new_listing",
+                    "symbol": symbol,
+                    "direction": None,
+                    "strength": 0.0,
+                    "z": 0.0,
+                    "ts": int(time.time() * 1000),
+                    "entry_price": price,
+                    "horizon_hours": 72.0,
+                }
+            )
+    state["known_symbols"] = sorted(current)
+    return events
+
+
 def evaluate_once(state: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     symbols = args.symbols or list(FALLBACK_SYMBOLS)
@@ -246,6 +278,7 @@ def evaluate_once(state: dict[str, Any], args: argparse.Namespace) -> list[dict[
     btc = evaluate_btc_impulse(state, args)
     if btc:
         events.append(btc)
+    events.extend(detect_new_listings(state))
     today = time.strftime("%Y-%m-%d", time.gmtime())
     if state.get("momentum_last_day") != today:
         momentum = select_30d_momentum(args)
@@ -293,18 +326,29 @@ def close_expired(
             remaining.append(event)
             continue
         direction = event["direction"]
-        raw_return = (current / event["entry_price"] - 1.0) * direction * 100.0
         mfe = 0.0
         for item in klines:
             high = float(item[2])
             low = float(item[3])
-            favorable = max(high / event["entry_price"] - 1.0, event["entry_price"] / low - 1.0) * 100.0
+            favorable = (
+                max(
+                    high / event["entry_price"] - 1.0,
+                    event["entry_price"] / low - 1.0,
+                )
+                * 100.0
+            )
             mfe = max(mfe, favorable)
+        if direction:
+            raw_return = (current / event["entry_price"] - 1.0) * direction * 100.0
+            mfe_record = mfe * direction if direction < 0 else mfe
+        else:
+            raw_return = abs(current / event["entry_price"] - 1.0) * 100.0
+            mfe_record = mfe
         record = {
             **event,
             "exit_ts": int(time.time() * 1000),
             "raw_return_pct": round(raw_return, 4),
-            "mfe_pct": round(mfe * direction, 4) if direction < 0 else round(mfe, 4),
+            "mfe_pct": round(mfe_record, 4),
         }
         closed.append(record)
         with records_path.open("a", encoding="utf-8") as handle:
