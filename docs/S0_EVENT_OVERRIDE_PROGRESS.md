@@ -1,6 +1,6 @@
 # S0 事件接管方案：开发进度 TODO
 
-最后更新：2026-08-05 17:45（北京时间）
+最后更新：2026-08-05 17:56（北京时间）
 
 ## Phase 0：底仓层
 
@@ -62,6 +62,7 @@
 - [x] 新币首小时动量规则历史预注册回测：70 个合格，压力 PF 1.01、去前三 0.88、2025 负 → 与 72h 动量结论一致，无交易 edge（`docs/s0-new-listing-first-hour-rejection-2026-08-05.md`）
 - [x] 三条前向事件规则历史反演（24h 收盘结算）：funding_extreme 13,887 笔 PF 0.841、volume_breakout 30,207 笔 PF 0.973、btc_impulse 1,272 笔 PF 0.838，全部 <1 → 历史先验为负，前向样本预期拒绝（`docs/s0-forward-event-rules-historical-estimate-2026-08-05.md`）
 - [x] Phase 1 穷尽审计总档：30+ 家族全部拒绝，唯一正期望家族仅前向影子（`docs/s0-phase1-event-channel-exhaustive-audit-2026-08-05.md`）
+- [x] 30d 动量高杠杆事件化账户回测（10U 起步、全仓、3x-10x、30% 风险、5U 硬停止、12 个出场档案）：全部无法 1000x；最优 3x+1.5R=1.61x/5年，5x/10x 全爆仓；胜率 65% 可到但 PF<1 → “凉兮式梭哈”路径否定（`docs/s0-30d-momentum-highlev-rejection-2026-08-05.md`）
 - [x] VPS 前向影子检查：30d 动量 2 笔、24h 截面动量 18 笔（未达 30 笔/8 币门槛）
 - [ ] Phase 1 下一候选：30 日横截面动量（唯一历史正期望家族）高杠杆事件化：信号日 3x-10x、1m 快速入场 + 5U 硬止损 + 让利润跑（2020-2022 选型 / 2023+ 验证 / bootstrap / 影子盘）
 - [ ] Phase 1 下一候选：修正宇宙重拉 daily metrics（OI/taker/toptrader）→ 拥挤反转 + 1m 快速离场；空头与 ATR 自适应止损；大盘异动事件（2020-2022 选型 / 2023+ 验证 / bootstrap / 影子盘）
