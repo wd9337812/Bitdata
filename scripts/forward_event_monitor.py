@@ -29,6 +29,19 @@ FALLBACK_SYMBOLS = (
     "1000BONKUSDT", "ONDOUSDT",
 )
 
+POLYMARKET_SYMBOLS = {
+    "bitcoin": "BTCUSDT",
+    "btc": "BTCUSDT",
+    "ethereum": "ETHUSDT",
+    "eth": "ETHUSDT",
+    "solana": "SOLUSDT",
+    "sol": "SOLUSDT",
+    "xrp": "XRPUSDT",
+    "dogecoin": "DOGEUSDT",
+    "doge": "DOGEUSDT",
+    "bnb": "BNBUSDT",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -85,6 +98,128 @@ def fetch_price(symbol: str) -> float:
         {"symbol": symbol},
     )
     return float(item["price"])
+
+
+def _polymarket_direction(title: str) -> int | None:
+    lowered = title.lower()
+    if any(token in lowered for token in ("above", "up", "increase", "higher", "rise")):
+        return 1
+    if any(token in lowered for token in ("below", "down", "decrease", "lower", "fall")):
+        return -1
+    return None
+
+
+def _polymarket_symbol(title: str) -> str | None:
+    lowered = title.lower()
+    for token, symbol in POLYMARKET_SYMBOLS.items():
+        if token in lowered:
+            return symbol
+    return None
+
+
+def _market_probability(market: dict[str, Any]) -> float | None:
+    raw = market.get("outcomePrices") or market.get("outcome_prices")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(raw, list) and raw:
+        try:
+            return float(raw[0])
+        except (TypeError, ValueError):
+            return None
+    for key in ("probability", "lastTradePrice", "last_trade_price"):
+        try:
+            value = float(market.get(key))
+        except (TypeError, ValueError):
+            continue
+        if 0.0 <= value <= 1.0:
+            return value
+    return None
+
+
+def evaluate_polymarket_binance(
+    state: dict[str, Any], args: argparse.Namespace
+) -> list[dict[str, Any]]:
+    """Record only cross-market confirmations; Polymarket is never a direct order source."""
+    try:
+        raw_events = _get_json(
+            "https://gamma-api.polymarket.com/events",
+            {"active": "true", "closed": "false", "limit": "100"},
+        )
+    except Exception:
+        return []
+    rows = raw_events if isinstance(raw_events, list) else raw_events.get("data", [])
+    cache = dict(state.get("polymarket_probability_cache") or {})
+    next_cache = dict(cache)
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or row.get("question") or "")
+        symbol = _polymarket_symbol(title)
+        title_direction = _polymarket_direction(title)
+        markets = row.get("markets") or [row]
+        market = next((item for item in markets if isinstance(item, dict)), None)
+        if not symbol or title_direction is None or not market:
+            continue
+        probability = _market_probability(market)
+        if probability is None:
+            continue
+        market_id = str(market.get("id") or row.get("id") or title)
+        previous = cache.get(market_id)
+        next_cache[market_id] = probability
+        if previous is None:
+            continue
+        probability_delta = probability - float(previous)
+        if abs(probability_delta) < 0.08:
+            continue
+        # A falling probability for “will BTC rise?” is bearish; a falling
+        # probability for “will BTC fall?” is bullish. The title alone cannot
+        # provide an executable direction.
+        direction = title_direction if probability_delta > 0 else -title_direction
+        try:
+            klines = fetch_klines(symbol, "5m", 24)
+        except Exception:
+            continue
+        if len(klines) < 12:
+            continue
+        volumes = [float(item[5]) for item in klines[:-1]]
+        last = klines[-1]
+        entry = float(last[4])
+        prior = float(klines[-4][4])
+        move_pct = (entry / prior - 1.0) * 100.0 if prior > 0 else 0.0
+        volume_z = z_score(volumes, float(last[5]))
+        direction_ok = move_pct * direction > 0
+        confirmation_count = int(direction_ok) + int(abs(volume_z) >= 1.5)
+        if confirmation_count < 2:
+            continue
+        result.append(
+            {
+                "type": "polymarket_binance_confirmed",
+                "event_id": f"poly:{market_id}:{int(time.time() // 300)}",
+                "source_market_id": market_id,
+                "symbol": symbol,
+                "direction": direction,
+                "title_direction": title_direction,
+                "strength": round(abs(probability_delta) * 100.0, 3),
+                "z": round(volume_z, 3),
+                "probability": round(probability, 6),
+                "probability_delta": round(probability_delta, 6),
+                "market_title": title[:240],
+                "volume_z": round(volume_z, 3),
+                "move_pct": round(move_pct, 4),
+                "binance_confirmation_count": confirmation_count,
+                "entry_price": entry,
+                "ts": int(time.time() * 1000),
+                "horizon_hours": 6.0,
+            }
+        )
+    # Gamma's active catalog is large and changes over time. Keep only the
+    # current cycle's recognized crypto-event probabilities in the cache.
+    state["polymarket_probability_cache"] = dict(list(next_cache.items())[-500:])
+    return result
 
 
 def evaluate_funding(state: dict[str, Any], symbol: str, args: argparse.Namespace) -> dict[str, Any] | None:
@@ -166,6 +301,50 @@ def evaluate_btc_impulse(state: dict[str, Any], args: argparse.Namespace) -> dic
             "ts": int(klines[-1][0]),
         }
     return None
+
+
+def simulate_open_tail(
+    klines: list[list[Any]],
+    first_idx: int,
+    entry_price: float,
+    stop_pct: float,
+    target_pct: float,
+    horizon_bars: int = 72,
+) -> tuple[str, float, int] | None:
+    """Adverse-first hourly paper trade of the new-listing open-tail candidate.
+
+    Entry is the detected listing price; the first hourly bar at/after the
+    listing time is the first bar considered. Returns (outcome, pnl_pct,
+    exit_ms) or None when the path is empty.
+    """
+    if (
+        entry_price <= 0
+        or first_idx is None
+        or first_idx < 0
+        or first_idx >= len(klines)
+    ):
+        return None
+    stop = entry_price * (1.0 - stop_pct / 100.0)
+    target = entry_price * (1.0 + target_pct / 100.0)
+    end = min(len(klines), first_idx + horizon_bars)
+    for index in range(first_idx, end):
+        high = float(klines[index][2])
+        low = float(klines[index][3])
+        if low <= stop:
+            exit_price = stop
+            outcome = "STOP"
+        elif high >= target:
+            exit_price = target
+            outcome = "TARGET"
+        else:
+            continue
+        return outcome, (exit_price / entry_price - 1.0) * 100.0, int(
+            klines[index][0]
+        )
+    exit_price = float(klines[end - 1][4])
+    return "TIME", (exit_price / entry_price - 1.0) * 100.0, int(
+        klines[end - 1][0]
+    )
 
 
 def select_30d_momentum(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -267,8 +446,13 @@ def detect_new_listings(state: dict[str, Any]) -> list[dict[str, Any]]:
     return events
 
 
-def evaluate_once(state: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
+def evaluate_once(
+    state: dict[str, Any], args: argparse.Namespace, include_slow: bool = True
+) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
+    events.extend(evaluate_polymarket_binance(state, args))
+    if not include_slow:
+        return events
     symbols = args.symbols or list(FALLBACK_SYMBOLS)
     for symbol in symbols:
         funding = evaluate_funding(state, symbol, args)
@@ -349,6 +533,8 @@ def close_expired(
         first_hour_pct = None
         would_trade = False
         trade_pnl_pct = None
+        open_tail_s15 = None
+        open_tail_s20 = None
         if event.get("type") == "new_listing":
             first_idx = None
             for index, item in enumerate(klines):
@@ -388,6 +574,12 @@ def close_expired(
                         trade_pnl_pct = (
                             direction_rule * (exit_price / entry - 1.0) * 100.0
                         )
+            open_tail_s15 = simulate_open_tail(
+                klines, first_idx, event.get("entry_price", 0.0), 15.0, 50.0
+            )
+            open_tail_s20 = simulate_open_tail(
+                klines, first_idx, event.get("entry_price", 0.0), 20.0, 50.0
+            )
         record = {
             **event,
             "exit_ts": int(time.time() * 1000),
@@ -399,6 +591,18 @@ def close_expired(
             "first_hour_rule_traded": would_trade,
             "first_hour_rule_pnl_pct": (
                 round(trade_pnl_pct, 4) if trade_pnl_pct is not None else None
+            ),
+            "open_tail_s15_tp50_outcome": (
+                open_tail_s15[0] if open_tail_s15 is not None else None
+            ),
+            "open_tail_s15_tp50_pnl_pct": (
+                round(open_tail_s15[1], 4) if open_tail_s15 is not None else None
+            ),
+            "open_tail_s20_tp50_outcome": (
+                open_tail_s20[0] if open_tail_s20 is not None else None
+            ),
+            "open_tail_s20_tp50_pnl_pct": (
+                round(open_tail_s20[1], 4) if open_tail_s20 is not None else None
             ),
         }
         closed.append(record)
@@ -444,7 +648,12 @@ def check_milestones(records_path: Path) -> list[str]:
 def run_once(state: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     closed = close_expired(state, args, args.records)
     check_milestones(args.records)
-    events = evaluate_once(state, args)
+    now_epoch = time.time()
+    slow_interval = max(300.0, float(args.loop_interval))
+    include_slow = now_epoch - float(state.get("last_slow_scan_epoch") or 0) >= slow_interval
+    events = evaluate_once(state, args, include_slow=include_slow)
+    if include_slow:
+        state["last_slow_scan_epoch"] = now_epoch
     seen = set()
     for event in events:
         key = (event["type"], event["symbol"], event["ts"])
@@ -461,6 +670,9 @@ def run_once(state: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
             f"strength={event['strength']} z={event['z']}",
             flush=True,
         )
+    state["latest_events"] = events[-100:]
+    state["last_completed_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    state["last_completed_epoch"] = now_epoch
     args.state.write_text(
         json.dumps(state, ensure_ascii=False, indent=2),
         encoding="utf-8",

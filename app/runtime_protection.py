@@ -148,7 +148,11 @@ def _replace_dynamic_stop(
     entry = float(action.get("entry") or 0)
     mark = float(action.get("mark") or 0)
     atr_value = mark * float(action.get("atr_pct") or 0) / 100
-    if entry <= 0 or mark <= 0 or atr_value <= 0:
+    uses_explicit_pct_trail = (
+        action.get("action") == "trail_stop"
+        and float(action.get("trailing_distance_pct") or 0) > 0
+    )
+    if entry <= 0 or mark <= 0 or (atr_value <= 0 and not uses_explicit_pct_trail):
         return {**action, "executed": False, "management_status": "price_or_atr_missing"}
     last_raw = tracked_item.get("last_stop_adjustment_at")
     if last_raw:
@@ -163,8 +167,12 @@ def _replace_dynamic_stop(
             pass
     is_short = direction == "SHORT"
     if action.get("action") == "trail_stop":
-        distance_atr = float(tracked_item.get("trailing_distance_atr") or config.get("protection_trailing_distance_atr", 0.55))
-        desired = mark + atr_value * distance_atr if is_short else mark - atr_value * distance_atr
+        distance_pct = float(action.get("trailing_distance_pct") or 0.0)
+        if distance_pct > 0:
+            desired = mark * (1 + distance_pct / 100) if is_short else mark * (1 - distance_pct / 100)
+        else:
+            distance_atr = float(tracked_item.get("trailing_distance_atr") or config.get("protection_trailing_distance_atr", 0.55))
+            desired = mark + atr_value * distance_atr if is_short else mark - atr_value * distance_atr
     else:
         buffer_pct = float(config.get("protection_break_even_buffer_pct", 0.08)) / 100
         desired = entry * (1 - buffer_pct) if is_short else entry * (1 + buffer_pct)
@@ -173,7 +181,10 @@ def _replace_dynamic_stop(
     stops = [order for order in orders if _algo_type(order) == "STOP_MARKET"]
     triggers = [_algo_trigger(order) for order in stops if _algo_trigger(order) > 0]
     current = min(triggers) if is_short and triggers else max(triggers) if triggers else 0.0
-    minimum_improvement = atr_value * float(config.get("runtime_stop_management_min_improvement_atr", 0.10))
+    minimum_improvement = max(
+        mark * 0.0001 if uses_explicit_pct_trail else 0.0,
+        atr_value * float(config.get("runtime_stop_management_min_improvement_atr", 0.10)),
+    )
     improves = desired < current - minimum_improvement if is_short and current > 0 else desired > current + minimum_improvement
     valid_side = desired > mark if is_short else desired < mark
     if not improves or not valid_side:
@@ -773,9 +784,24 @@ def build_runtime_protection_action(
     max_hold_bars = int((tracked.get(key) or {}).get("max_hold_bars") or config.get("runtime_protection_max_hold_bars", 12))
     if max_hold_seconds <= 0:
         max_hold_seconds = max_hold_bars * 300
-    break_even_trigger_pct = atr_pct * float(tracked_item.get("break_even_atr") or config.get("protection_break_even_trigger_atr", 0.55))
-    trailing_trigger_pct = atr_pct * float(tracked_item.get("trailing_trigger_atr") or config.get("protection_trailing_trigger_atr", 0.9))
-    trailing_distance_pct = atr_pct * float(tracked_item.get("trailing_distance_atr") or config.get("protection_trailing_distance_atr", 0.55))
+    break_even_trigger_pct = float(tracked_item.get("break_even_trigger_pct") or 0.0)
+    trailing_trigger_pct = float(tracked_item.get("trailing_trigger_pct") or 0.0)
+    trailing_distance_pct = float(tracked_item.get("trailing_distance_pct") or 0.0)
+    if break_even_trigger_pct <= 0:
+        break_even_trigger_pct = atr_pct * float(
+            tracked_item.get("break_even_atr")
+            or config.get("protection_break_even_trigger_atr", 0.55)
+        )
+    if trailing_trigger_pct <= 0:
+        trailing_trigger_pct = atr_pct * float(
+            tracked_item.get("trailing_trigger_atr")
+            or config.get("protection_trailing_trigger_atr", 0.9)
+        )
+    if trailing_distance_pct <= 0:
+        trailing_distance_pct = atr_pct * float(
+            tracked_item.get("trailing_distance_atr")
+            or config.get("protection_trailing_distance_atr", 0.55)
+        )
     action = "observe"
     reason = "holding"
     orderbook_exit = {"enabled": False}

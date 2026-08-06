@@ -41,6 +41,7 @@ from app.strategy_canary import consume_strategy_canary, revoke_strategy_canary
 from app.risk import direction_cooldown_key, live_trading_allowed
 from app.runtime_protection import manage_runtime_protection, tighten_position_stop_to_price
 from app.s0_daily_profit_lock import s0_daily_profit_lock_status
+from app.s0_event_engine import build_s0_event_decision, event_engine_status
 from app.shadow_trading import update_shadow_trades
 from app.stage_modes import apply_stage_route
 from app.strategy_capabilities import strategy_family_for_version, strategy_supports
@@ -301,6 +302,9 @@ def track_runtime_position(decision: dict, result: dict | None = None) -> None:
         "break_even_atr": protection_profile.get("break_even_atr"),
         "trailing_trigger_atr": protection_profile.get("trailing_trigger_atr"),
         "trailing_distance_atr": protection_profile.get("trailing_distance_atr"),
+        "break_even_trigger_pct": protection_profile.get("break_even_trigger_pct"),
+        "trailing_trigger_pct": protection_profile.get("trailing_trigger_pct"),
+        "trailing_distance_pct": protection_profile.get("trailing_distance_pct"),
         "runtime_intraday_trailing_enabled": protection_profile.get(
             "runtime_intraday_trailing_enabled",
             True,
@@ -925,6 +929,10 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             if fast_lane and not symbols_override:
                 return {"status": "grid_event_ignored", "results": grid_results, "loop_seconds": int(config.get("grid_loop_seconds", 300))}
 
+    event_takeover = bool(config.get("s0_event_live_enabled", False)) and str(
+        (state.get("stage_route") or {}).get("stage") or ""
+    ).upper() == "S0"
+    event_decision = build_s0_event_decision(config, state, account) if event_takeover else None
     adaptive_takeover = bool(config.get("adaptive_30d_live_enabled", False)) and str(
         (state.get("stage_route") or {}).get("stage") or ""
     ).upper() == "S0"
@@ -958,7 +966,20 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     market_tsmom_takeover = bool(config.get("market_tsmom_live_enabled", False)) and str(
         (state.get("stage_route") or {}).get("stage") or ""
     ).upper() == "S0"
-    if adaptive_takeover:
+    if event_decision and event_decision.get("action") in {"OPEN_LONG", "OPEN_SHORT"}:
+        decision = event_decision
+        route = "s0_concentrated_event"
+        decision["scan"] = {
+            "mode": {"mode": route, "strategy": decision.get("strategy")},
+            "candidates": [decision["candidate"]],
+            "v4_candidates": [],
+            "funnel": {
+                "takeover": route,
+                "event_status": decision.get("event_status") or {},
+                "fallback": "adaptive_30d_momentum",
+            },
+        }
+    elif adaptive_takeover:
         decision = build_adaptive_30d_live_decision(config, state, account)
         route = "adaptive_30d_momentum"
         if (
@@ -1204,6 +1225,20 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         consume_recovery_permit(decision, result)
         consume_strategy_canary(decision, result)
         track_runtime_position(decision, result)
+        if str(decision.get("strategy_family") or "") == "s0_concentrated_event":
+            current_event_time = datetime.now(timezone.utc).timestamp()
+            recent_events = dict(load_state().get("s0_event_recent_market_ids") or {})
+            hold_seconds = int(config.get("s0_event_max_hold_seconds", 21_600))
+            recent_events = {
+                key: value
+                for key, value in recent_events.items()
+                if current_event_time - float(value or 0) < hold_seconds
+            }
+            recent_events[str(decision.get("source_market_id") or decision.get("event_id"))] = current_event_time
+            save_state({
+                "s0_event_last_traded_id": decision.get("event_id"),
+                "s0_event_recent_market_ids": recent_events,
+            })
         cooldown_minutes = float(config.get("symbol_cooldown_minutes", 0))
         if config.get("directional_cooldown_enabled", True):
             set_symbol_direction_cooldown(
@@ -1269,6 +1304,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             "performance_guard": performance_status,
         },
         "shadow_trading": shadow_status,
+        "s0_event_engine": (decision.get("event_status") or event_engine_status(config)),
     }
     if not fast_lane and "audit_status" in locals():
         snapshot_updates["protection_audit"] = audit_status

@@ -18,3 +18,10 @@ services:
       - .env
     volumes:
       - ./data:/app/data
+  event_monitor:
+    build: .
+    container_name: binance-strategy-event-monitor
+    restart: unless-stopped
+    command: ["python", "scripts/forward_event_monitor.py", "--loop-interval", "60"]
+    volumes:
+      - ./data:/app/data

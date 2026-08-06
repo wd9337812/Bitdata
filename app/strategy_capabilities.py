@@ -19,15 +19,19 @@ STRATEGY_GENERATION_ALIASES = {
     "v5.1.1": "v5.1.1",
     "v5.2": "v5.2",
     "v5.3": "v5.3",
+    "v6.0-s0-event": "v6.0-s0-event",
 }
 
 
 V5_STRATEGY_FAMILY = "extreme_v5_roll"
 V4_STRATEGY_FAMILY = "extreme_v4_roll"
+V6_STRATEGY_FAMILY = "s0_concentrated_event"
 
 
 def strategy_family_for_version(value: Any) -> str:
     version = str(value or "").strip().lower()
+    if version.startswith("v6."):
+        return V6_STRATEGY_FAMILY
     return V5_STRATEGY_FAMILY if version.startswith("v5.") else V4_STRATEGY_FAMILY
 
 
@@ -41,6 +45,15 @@ def effective_strategy_version(value: Any) -> str:
 
 def strategy_supports(value: Any, capability: str) -> bool:
     raw_version = str(value or "").strip().lower()
+    if raw_version.startswith("v6."):
+        return capability in {
+            "full_bet",
+            "continuous_permit",
+            "direct_live",
+            "v50_s30",
+            "hard_stop_headroom",
+            "s0_event_engine",
+        }
     if raw_version.startswith("v5."):
         supported = {
             "full_bet",

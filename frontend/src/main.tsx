@@ -26,7 +26,7 @@ import {
 } from "recharts";
 import { api, fmt, modeLabel, stageLabel, statusLabel } from "./lib/api";
 import "./styles.css";
-type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; user_stream?: Record<string, any>; binance_rate?: Record<string, any>; opportunity_queue?: Record<string, any>; runtime?: Record<string, any>; target_progress?: Record<string, any>; stage_profile?: Record<string, any>; stage_route?: Record<string, any>; stage_profiles?: Record<string, any>[]; product_completion?: Record<string, any>; storage?: Record<string, any>; v49_global_adaptive?: Record<string, any>; global_adaptive?: Record<string, any>; s0_moe?: Record<string, any>; adaptive_30d_runtime?: Record<string, any> };
+type StatusData = { config: Record<string, any>; state: Record<string, any>; account: Record<string, any>; market_stream?: Record<string, any>; user_stream?: Record<string, any>; binance_rate?: Record<string, any>; opportunity_queue?: Record<string, any>; runtime?: Record<string, any>; target_progress?: Record<string, any>; stage_profile?: Record<string, any>; stage_route?: Record<string, any>; stage_profiles?: Record<string, any>[]; product_completion?: Record<string, any>; storage?: Record<string, any>; v49_global_adaptive?: Record<string, any>; global_adaptive?: Record<string, any>; s0_moe?: Record<string, any>; adaptive_30d_runtime?: Record<string, any>; s0_event_engine?: Record<string, any> };
 type DecisionsData = { growth_scan?: { mode: Record<string, any>; candidates: any[]; best?: any; funnel?: any }; stage2_grid: any[]; auth_error?: string };
 type MarketData = { symbols: any[] };
 type SnapshotData = { snapshots: any[] };
@@ -574,6 +574,14 @@ function App() {
                     : "当前阶段未启用"
                 }
                 tone={dailyProfitLock.active ? "positive" : dailyProfitLock.pending_flat ? "negative" : ""}
+              />
+              <MetricCard
+                title="S级事件引擎"
+                value={runtime?.s0_event_engine?.enabled ? (runtime?.s0_event_engine?.best_event ? `待确认 ${runtime.s0_event_engine.best_event.symbol || "事件"}` : "监控中") : "未启用"}
+                sub={runtime?.s0_event_engine?.enabled
+                  ? `只在预测市场概率突变与币安放量/价格确认一致时下单；最高风险 ${fmt(runtime.s0_event_engine.max_account_risk_pct, 0)}% · 杠杆上限 ${fmt(runtime.s0_event_engine.max_leverage, 0)}x`
+                  : "默认关闭；不会把新闻或 Polymarket 单一信号直接变成订单"}
+                tone={runtime?.s0_event_engine?.best_event ? "positive" : ""}
               />
             </div>
             <div className="panel decision-guide">
@@ -1789,6 +1797,10 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {number("stage_s0_max_leverage", "S0 最大杠杆", "默认 10 倍；系统会按止损距离在 3-10 倍间动态选择")}
             {toggle("opportunity_v4_live_enabled", `${v53Configured ? "V5.3" : "V5.2"} 当前实盘排序`, v53Configured ? "按行情状态选择顺势突破、预突破或回踩；旧版本只供复盘" : "按独立行情段、横截面强度和成本优势排序")}
             {toggle("opportunity_v44_full_bet_enabled", "启用 S0 单仓全进全出", "最多使用约 90% 新鲜可用保证金，只持有一个币种和一个方向")}
+            {toggle("s0_event_live_enabled", "启用 S 级事件集中仓", "预测市场概率突变必须与 Binance 放量、价格方向同时确认；单一外部信息不会下单")}
+            {number("s0_event_s_grade_max_account_risk_pct", "S 级事件止损账户风险上限%", "最高 50%；会被 5U 硬停止余量再次压低，不等于 50% 保证金")}
+            {number("s0_event_s_grade_max_leverage", "S 级事件最大杠杆", "默认 15 倍；止损、强平缓冲与交易所保护单仍优先")}
+            {number("s0_event_stop_pct", "S 级事件初始止损%", "默认 3%；每一笔都由 Binance 条件单保护")}
             {toggle("stage_s0_daily_loss_stop_enabled", "S0 普通日亏损停牌", "默认关闭；5U 权益硬停止、每仓止盈止损和运行安全保护仍始终生效")}
             {toggle("stage_s0_daily_profit_lock_enabled", "S0 当日净利润锁", "默认开启；达到目标后不强平受保护持仓，空仓后停止当天新开仓")}
           {number("stage_s0_daily_profit_target_pct", "S0 当日净利润目标%", "默认 200%；历史回测未模拟当日锁仓，200% 让实盘与审计口径对齐，同时保留极端连赢的安全上限")}

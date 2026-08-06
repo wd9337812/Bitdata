@@ -4,12 +4,16 @@ import argparse
 import json
 import json
 
+import pytest
+
 from scripts.forward_event_monitor import (
     check_milestones,
     close_expired,
     detect_new_listings,
+    evaluate_polymarket_binance,
     evaluate_volume,
     select_30d_momentum,
+    simulate_open_tail,
     z_score,
 )
 
@@ -56,6 +60,46 @@ def test_evaluate_volume_detects_shock(monkeypatch) -> None:
     assert event is not None
     assert event["type"] == "volume_breakout"
     assert event["direction"] == 1
+
+
+def test_polymarket_event_requires_probability_price_and_volume_confirmation(monkeypatch) -> None:
+    def fake_get_json(url, params=None):
+        assert "gamma-api.polymarket.com" in url
+        return [{"id": "1", "title": "Will Bitcoin rise today?", "markets": [{"id": "m1", "outcomePrices": "[0.60, 0.40]"}]}]
+
+    klines = []
+    for index in range(24):
+        klines.append([index, 0, 0, 0, 100.0, 100.0 + (index % 3), 0, 0, 0, 0, 0, 0])
+    klines[-4][4] = 100.0
+    klines[-1][4] = 101.0
+    klines[-1][5] = 1000.0
+    monkeypatch.setattr("scripts.forward_event_monitor._get_json", fake_get_json)
+    monkeypatch.setattr("scripts.forward_event_monitor.fetch_klines", lambda *args: klines)
+
+    state = {"polymarket_probability_cache": {"m1": 0.50}}
+    events = evaluate_polymarket_binance(state, _args())
+
+    assert len(events) == 1
+    assert events[0]["type"] == "polymarket_binance_confirmed"
+    assert events[0]["direction"] == 1
+    assert events[0]["binance_confirmation_count"] == 2
+
+
+def test_polymarket_probability_fall_reverses_question_direction(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "scripts.forward_event_monitor._get_json",
+        lambda *args, **kwargs: [{"id": "1", "title": "Will Bitcoin rise today?", "markets": [{"id": "m1", "outcomePrices": "[0.40, 0.60]"}]}],
+    )
+    klines = [[index, 0, 0, 0, 100.0, 100.0 + index, 0, 0, 0, 0, 0, 0] for index in range(24)]
+    klines[-4][4] = 100.0
+    klines[-1][4] = 99.0
+    klines[-1][5] = 1000.0
+    monkeypatch.setattr("scripts.forward_event_monitor.fetch_klines", lambda *args: klines)
+
+    events = evaluate_polymarket_binance({"polymarket_probability_cache": {"m1": 0.50}}, _args())
+
+    assert len(events) == 1
+    assert events[0]["direction"] == -1
 
 
 def test_close_expired_writes_record(monkeypatch, tmp_path) -> None:
@@ -222,6 +266,33 @@ def test_close_expired_new_listing_first_hour_rule(monkeypatch, tmp_path) -> Non
     assert closed[0]["first_hour_return_pct"] == 10.0
     assert closed[0]["first_hour_rule_traded"] is True
     assert closed[0]["first_hour_rule_pnl_pct"] == -15.0
+    assert closed[0]["open_tail_s20_tp50_outcome"] == "STOP"
+    assert closed[0]["open_tail_s20_tp50_pnl_pct"] == -20.0
+    assert closed[0]["open_tail_s15_tp50_outcome"] == "STOP"
+    assert closed[0]["open_tail_s15_tp50_pnl_pct"] == -15.0
+
+
+def test_simulate_open_tail_target_and_time() -> None:
+    entry = 1.0
+    klines = [
+        [0, 1.0, 1.60, 0.98, 1.20, 0, 0, 0, 0, 0, 0, 0],
+        [3_600_000, 0, 1.10, 0.90, 1.00, 0, 0, 0, 0, 0, 0, 0],
+    ]
+    result = simulate_open_tail(klines, 0, entry, 20.0, 50.0, horizon_bars=72)
+    assert result is not None
+    assert result[0] == "TARGET"
+    assert result[1] == pytest.approx(50.0)
+    time_result = simulate_open_tail(
+        [[0, 1.0, 1.10, 0.95, 1.05, 0, 0, 0, 0, 0, 0, 0]],
+        0,
+        entry,
+        20.0,
+        50.0,
+        horizon_bars=1,
+    )
+    assert time_result is not None
+    assert time_result[0] == "TIME"
+    assert time_result[1] == pytest.approx(5.0)
 
 
 def test_check_milestones(tmp_path) -> None:

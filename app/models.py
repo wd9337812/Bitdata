@@ -375,6 +375,17 @@ class TradingConfig(BaseModel):
     adaptive_30d_live_min_equity_usdt: float = Field(default=10.0, ge=5, le=10000)
     adaptive_30d_live_hard_stop_reserve_usdt: float = Field(default=0.50, ge=0, le=100)
     adaptive_30d_live_bnb_fallback_enabled: bool = True
+    s0_event_live_enabled: bool = False
+    s0_event_s_grade_min_score: float = Field(default=82.0, ge=0, le=100)
+    s0_event_s_grade_max_account_risk_pct: float = Field(default=50.0, ge=1, le=50)
+    s0_event_s_grade_max_leverage: int = Field(default=15, ge=1, le=20)
+    s0_event_margin_pct: float = Field(default=97.0, ge=1, le=99)
+    s0_event_stop_pct: float = Field(default=3.0, ge=0.2, le=20)
+    s0_event_take_profit_r: float = Field(default=2.0, ge=0.5, le=10)
+    s0_event_max_hold_seconds: int = Field(default=21600, ge=60, le=86400)
+    s0_event_max_age_seconds: int = Field(default=300, ge=30, le=3600)
+    s0_event_hard_stop_reserve_usdt: float = Field(default=0.25, ge=0, le=100)
+    s0_event_min_liquidation_buffer_pct: float = Field(default=2.0, ge=0, le=30)
     market_tsmom_shadow_enabled: bool = True
     market_tsmom_shadow_utc_hour: int = Field(default=0, ge=0, le=23)
     market_tsmom_shadow_minute_start: int = Field(default=3, ge=0, le=59)
