@@ -584,6 +584,16 @@ function App() {
                   : "默认关闭；不会把新闻或 Polymarket 单一信号直接变成订单"}
                 tone={runtime?.s0_event_engine?.best_event ? "positive" : ""}
               />
+              <MetricCard
+                title="盘口超短线研究"
+                value={runtime?.microstructure_research?.enabled
+                  ? `${fmt(runtime.microstructure_research.qualified, 0)} / ${fmt(runtime.microstructure_research.inspected, 0)} 个共振`
+                  : "未启用"}
+                sub={runtime?.microstructure_research?.enabled
+                  ? `最佳 ${runtime.microstructure_research.best?.symbol || "-"} · ${runtime.microstructure_research.best?.confirmation_count || 0}/5 确认 · 仅影子，不参与当前实盘`
+                  : "关闭后不会订阅额外盘口研究数据"}
+                tone={Number(runtime?.microstructure_research?.qualified || 0) > 0 ? "positive" : ""}
+              />
             </div>
             <div className="panel decision-guide">
               <div className="panel-head">
@@ -1823,6 +1833,9 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {number("s0_moe_online_window_hours", "MoE 线上统计窗口（小时）", "默认 24 小时；同时保留当前策略版本的全量统计")}
             {number("s0_moe_retrain_min_selected_closes", "MoE 候选重训练最少闭合样本", "默认 200 笔通过模型门控且已结束的独立影子机会")}
             {number("s0_moe_retrain_min_regimes", "MoE 候选重训练最少市场状态", "默认至少覆盖 2 种市场状态，避免只学到单边行情")}
+            {toggle("microstructure_research_enabled", "启用盘口超短线研究影子", "复用 Binance WebSocket 的盘口和主动成交，只记录独立影子，不改变当前实盘准入、仓位或止盈止损")}
+            {number("microstructure_research_symbol_limit", "研究盘口币种上限", "默认 12；仅给候选和热点币订阅 100ms 增量盘口与逐笔成交，避免额外 REST 开销")}
+            {number("microstructure_research_min_confirmations", "盘口影子最少确认数", "默认 4/5：深度、点差、盘口方向、主动成交和微价格；仅影响研究样本")}
             {number("opportunity_v50_margin_pct", "计划使用保证金%", "默认 90%；保留约 10% 处理费用和价格波动")}
             {number("opportunity_v50_min_risk_pct", "普通机会风险基线%", "默认 12%；亏损后降仓和三连止损冷却恢复都回到该基线")}
             {number("opportunity_v50_max_risk_pct", "最强机会风险上限%", "默认 30%；只在排名、确认、净期望和成本全部较强时接近上限")}

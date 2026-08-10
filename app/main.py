@@ -187,6 +187,7 @@ def status() -> dict[str, Any]:
             "protection_audit",
             "risk_status",
             "shadow_trading",
+            "microstructure_research",
             "s0_event_engine",
             "execution_route",
         ]

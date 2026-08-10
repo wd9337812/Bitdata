@@ -557,7 +557,14 @@ def _full_orderbook_symbols(
     intent: dict[str, Any],
 ) -> list[str]:
     active_mode = str(intent.get("active_mode") or config.get("_active_growth_mode") or config.get("growth_mode") or "")
-    if active_mode != "yolo_scalp" or not config.get("orderbook_full_stream_enabled", True):
+    # Keep direct callers and older saved configurations on the historical
+    # lightweight path. DEFAULT_CONFIG explicitly enables the V5.4 research
+    # lane, while a missing key must not silently expand subscriptions.
+    research_enabled = bool(config.get("microstructure_research_enabled", False))
+    if (
+        active_mode != "yolo_scalp"
+        and not research_enabled
+    ) or not config.get("orderbook_full_stream_enabled", True):
         return []
     sources = intent.get("sources") or {}
     ranked = _dedupe_symbols(
@@ -566,7 +573,12 @@ def _full_orderbook_symbols(
         + list(sources.get("hot") or [])
     )
     allowed = set(symbols)
-    limit = max(0, int(config.get("orderbook_full_symbols_limit", 20)))
+    base_limit = int(config.get("orderbook_full_symbols_limit", 20))
+    if active_mode != "yolo_scalp":
+        # The V5 entry route normally uses lightweight depth5. Reserve a small,
+        # bounded subset of the existing candidate stream for research only.
+        base_limit = min(base_limit, int(config.get("microstructure_research_symbol_limit", 12)))
+    limit = max(0, base_limit)
     return [symbol for symbol in ranked if symbol in allowed][:limit]
 
 

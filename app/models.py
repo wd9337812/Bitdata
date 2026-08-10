@@ -39,6 +39,18 @@ class TradingConfig(BaseModel):
     yolo_scalp_trade_flow_weight: float = Field(default=0.35, ge=0, le=0.8)
     yolo_scalp_trade_flow_trigger_notional_usdt: float = Field(default=100_000.0, ge=0)
     yolo_scalp_trade_flow_trigger_imbalance: float = Field(default=0.15, ge=0, le=1)
+    microstructure_research_enabled: bool = True
+    microstructure_research_symbol_limit: int = Field(default=12, ge=1, le=50)
+    microstructure_research_candidate_limit: int = Field(default=8, ge=1, le=30)
+    microstructure_research_stream_max_age_seconds: int = Field(default=8, ge=1, le=60)
+    microstructure_research_min_depth_notional_usdt: float = Field(default=750.0, ge=0)
+    microstructure_research_max_spread_pct: float = Field(default=0.10, ge=0, le=5)
+    microstructure_research_min_flow_notional_usdt: float = Field(default=15_000.0, ge=0)
+    microstructure_research_min_abs_imbalance: float = Field(default=0.10, ge=0, le=1)
+    microstructure_research_min_confirmations: int = Field(default=4, ge=1, le=5)
+    microstructure_research_stop_pct: float = Field(default=0.25, ge=0.05, le=5)
+    microstructure_research_take_profit_pct: float = Field(default=0.35, ge=0.05, le=10)
+    microstructure_research_max_hold_minutes: int = Field(default=5, ge=1, le=60)
     user_stream_enabled: bool = True
     user_stream_keepalive_seconds: int = Field(default=1800, ge=300, le=3600)
     user_stream_reconnect_seconds: int = Field(default=5, ge=1, le=300)

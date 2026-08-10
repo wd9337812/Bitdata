@@ -246,6 +246,27 @@ def test_full_orderbook_is_enabled_only_for_scalp_mode_candidates():
     ) == []
 
 
+def test_microstructure_research_uses_a_bounded_non_scalp_book_subset():
+    symbols = ["POSUSDT", "HOTUSDT", "OTHERUSDT"]
+    intent = {
+        "active_mode": "extreme_sprint",
+        "sources": {"positions": ["POSUSDT"], "candidates": ["HOTUSDT"], "hot": ["OTHERUSDT"]},
+    }
+
+    result = market_stream._full_orderbook_symbols(
+        {
+            "orderbook_full_stream_enabled": True,
+            "orderbook_full_symbols_limit": 20,
+            "microstructure_research_enabled": True,
+            "microstructure_research_symbol_limit": 2,
+        },
+        symbols,
+        intent,
+    )
+
+    assert result == ["POSUSDT", "HOTUSDT"]
+
+
 def test_full_orderbook_and_trade_flow_use_binance_stream_families():
     depth_url = market_stream._diff_depth_stream_url(["BTCUSDT", "ETHUSDT"])
     trade_url = market_stream._trade_stream_url(["BTCUSDT", "ETHUSDT"])

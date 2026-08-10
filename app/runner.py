@@ -23,6 +23,7 @@ from app.live_learning import sync_live_learning_from_binance
 from app.live_reaction import sync_live_reaction_from_binance
 from app.local_circuit import record_v4_live_open
 from app.market_stream import start_market_stream_thread
+from app.microstructure_research import build_research_candidates
 from app.market_tsmom_consensus_shadow import (
     LEGACY_STRATEGY_VERSIONS as MARKET_TSMOM_LEGACY_VERSIONS,
     STRATEGY_FAMILY as MARKET_TSMOM_FAMILY,
@@ -1045,6 +1046,15 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
     }
     scan = decision.get("scan") or {}
     shadow_candidates = [item for item in scan.get("candidates", []) if not item.get("passed")]
+    # Independent V5.4 research.  It reuses the bounded market-stream subset
+    # and only appends paper candidates; execute_with_freshness_guard never
+    # receives these rows as a live decision.
+    microstructure_input = list(scan.get("v4_candidates") or scan.get("candidates") or [])
+    microstructure_candidates, microstructure_status = build_research_candidates(
+        microstructure_input,
+        config,
+    )
+    shadow_candidates.extend(microstructure_candidates)
     paired_active_candidates: list[dict[str, Any]] = []
     if config.get("opportunity_v33_challenger_enabled", False) and not config.get("opportunity_v4_enabled", True):
         for item in scan.get("candidates", []):
@@ -1328,6 +1338,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             "performance_guard": performance_status,
         },
         "shadow_trading": shadow_status,
+        "microstructure_research": microstructure_status,
         "s0_event_engine": (decision.get("event_status") or event_engine_status(config)),
         "execution_route": execution_route,
     }
