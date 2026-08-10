@@ -197,3 +197,17 @@ def test_v53_keeps_loss_penalty_proportional(monkeypatch, tmp_path):
     assert first_loss["allowed"] is True
     assert first_loss["risk_multiplier"] == 0.80
     assert second_loss["risk_multiplier"] == 0.60
+
+
+def test_v53_starts_with_full_independent_opportunity_multiplier(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+
+    status = s0_continuous_permit_status(
+        {**_config(), "opportunity_v4_strategy_version": "v5.3"},
+        equity=10.0,
+        live_rows=[],
+        now=datetime(2026, 8, 10, tzinfo=timezone.utc),
+    )
+
+    assert status["status"] == "initial_exploration"
+    assert status["risk_multiplier"] == 1.0

@@ -22,8 +22,8 @@ router, rather than copying the small sample as a guaranteed edge.
   enter the V5.3 route. Broad-up selects longs and broad-down selects shorts.
 - Repeated symbol/direction/structure episodes remain deduplicated and local
   loss/re-entry safeguards remain active.
-- One net loss reduces the next independent opportunity to 0.80x risk, two to
-  0.60x. Three losses retain the existing timed cooldown. A global release
+- A fresh V5.3 release starts at 1.00x. One net loss reduces the next
+  independent opportunity to 0.80x risk, two to 0.60x. Three losses retain the existing timed cooldown. A global release
   drawdown is recorded for audit but does not itself freeze new V5.3 entries.
 - The 5U hard stop, Binance-side take-profit and stop-loss orders, minimum
   notional, liquidity gates, time sync, and API limits remain mandatory.

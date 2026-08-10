@@ -62,7 +62,9 @@ def _level_multiplier(level: int, config: dict[str, Any], *, v50_active: bool = 
 def _base_state(release_id: str, config: dict[str, Any], *, v50_active: bool = False) -> dict[str, Any]:
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
     initial_multiplier = (
-        float(config.get("opportunity_v511_initial_multiplier", 0.50))
+        float(config.get("opportunity_v50_initial_multiplier", 1.0))
+        if version.startswith("v5.3")
+        else float(config.get("opportunity_v511_initial_multiplier", 0.50))
         if strategy_supports(version, "v511_incident_guard")
         else float(config.get("opportunity_v50_initial_multiplier", 1.0))
         if v50_active
@@ -224,7 +226,9 @@ def s0_continuous_permit_status(
         result_multiplier = min(
             result_multiplier,
             (
-                float(config.get("opportunity_v511_initial_multiplier", 0.50))
+                float(config.get("opportunity_v50_initial_multiplier", 1.0))
+                if version.lower().startswith("v5.3")
+                else float(config.get("opportunity_v511_initial_multiplier", 0.50))
                 if strategy_supports(version, "v511_incident_guard")
                 else float(config.get("opportunity_v50_initial_multiplier", 1.0))
                 if v50_active
