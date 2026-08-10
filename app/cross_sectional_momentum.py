@@ -15,7 +15,7 @@ from app.telemetry import record_event_throttled
 
 
 STRATEGY_FAMILY = "cross_sectional_momentum"
-STRATEGY_VERSION = "s0_xmom_24h_v2"
+STRATEGY_VERSION = "s0_xmom_24h_v3"
 _THREAD: threading.Thread | None = None
 _LOCK = threading.Lock()
 
@@ -222,7 +222,17 @@ def build_cross_sectional_shadow_candidate(
     sign = 1 if selection["direction"] == "LONG" else -1
     stop = entry - sign * stop_distance
     take = entry + sign * stop_distance * reward_r
-    signal_hour = str(selection["signal_hour"])
+    signal_time_ms = int(now.timestamp() * 1000)
+    episode_minutes = max(30, int(config.get("xmom_shadow_episode_minutes", 360)))
+    episode_bucket = int(now.timestamp() // (episode_minutes * 60))
+    episode_id = ":".join(
+        (
+            STRATEGY_VERSION,
+            str(selection["symbol"]),
+            str(selection["direction"]),
+            str(episode_bucket),
+        )
+    )
     candidate = {
         "symbol": selection["symbol"],
         "direction": selection["direction"],
@@ -237,7 +247,9 @@ def build_cross_sectional_shadow_candidate(
         "shadow_force_eligible": True,
         "shadow_single_position": True,
         "shadow_max_hold_minutes": int(config.get("xmom_shadow_max_hold_hours", 12)) * 60,
-        "shadow_dedupe_key": f"{STRATEGY_VERSION}:{signal_hour}",
+        # One continuous same-symbol/same-direction move is one observation,
+        # even when a shadow closes before the trend itself has ended.
+        "shadow_dedupe_key": episode_id,
         "score": 100.0,
         "passed": False,
         "decision_reason": "独立横截面动量研究影子，不参与 V5.2 实盘准入或仓位",
@@ -255,16 +267,31 @@ def build_cross_sectional_shadow_candidate(
                 "max_hold_seconds": int(config.get("xmom_shadow_max_hold_hours", 12)) * 3600,
             },
         },
-        "opportunity_id": f"{STRATEGY_VERSION}:{signal_hour}",
-        "event_id": f"{STRATEGY_VERSION}:{signal_hour}",
+        "signal_time_ms": signal_time_ms,
+        "opportunity_id": episode_id,
+        "event_id": episode_id,
+        "event_group_id": (
+            f"{STRATEGY_VERSION}:{selection['symbol']}:"
+            f"{selection['direction']}:wave:{episode_bucket}"
+        ),
         "parameter_fingerprint": (
             f"{STRATEGY_VERSION}:stop={stop_atr}:r={reward_r}:"
             f"hold={int(config.get('xmom_shadow_max_hold_hours', 12))}:cost="
             f"{float(config.get('shadow_round_trip_cost_pct', 0.12))}"
         ),
-        "research_context": selection,
+        "research_context": {
+            **selection,
+            "episode_minutes": episode_minutes,
+            "episode_bucket": episode_bucket,
+        },
     }
-    return candidate, {**selection, "status": "candidate_ready", "atr_1h": round(atr, 10)}
+    return candidate, {
+        **selection,
+        "status": "candidate_ready",
+        "atr_1h": round(atr, 10),
+        "episode_minutes": episode_minutes,
+        "episode_id": episode_id,
+    }
 
 
 def _run(config_provider: Callable[[], dict[str, Any]]) -> None:

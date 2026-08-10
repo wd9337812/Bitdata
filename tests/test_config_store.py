@@ -49,6 +49,9 @@ def test_strategy_safety_defaults_match_api_model():
         "execution_min_depth_notional_usdt",
         "position_rotation_enabled",
         "position_rotation_shadow_enabled",
+        "adaptive_30d_live_enabled",
+        "adaptive_30d_live_manage_existing_enabled",
+        "xmom_shadow_episode_minutes",
     ):
         assert model[key] == config_store.DEFAULT_CONFIG[key]
 

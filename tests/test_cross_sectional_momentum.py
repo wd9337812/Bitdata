@@ -127,6 +127,28 @@ def test_builds_isolated_single_position_shadow_with_capped_stop():
     assert candidate["signal"]["take_profit"] > candidate["signal"]["last_price"]
     assert candidate["signal"]["protection_profile"]["max_hold_seconds"] == 12 * 3600
     assert candidate["research_context"]["symbol_age_days"] > 30
+    assert candidate["shadow_dedupe_key"] == candidate["opportunity_id"]
+    assert candidate["research_context"]["episode_minutes"] == 360
+
+
+def test_shadow_candidate_reuses_one_id_within_an_independent_episode():
+    now = datetime(2026, 7, 31, 8, 1, 30, tzinfo=timezone.utc)
+    snapshot = _snapshot(now)
+    for ticker in snapshot["tickers"].values():
+        if ticker is not snapshot["tickers"]["BTCUSDT"]:
+            ticker["priceChangePercent"] = str(float(ticker["priceChangePercent"]) + 3)
+
+    first, _ = build_cross_sectional_shadow_candidate(FakeClient(), snapshot, {}, now)
+    later = now + timedelta(minutes=1)
+    later_snapshot = _snapshot(later)
+    for ticker in later_snapshot["tickers"].values():
+        if ticker is not later_snapshot["tickers"]["BTCUSDT"]:
+            ticker["priceChangePercent"] = str(float(ticker["priceChangePercent"]) + 3)
+    second, _ = build_cross_sectional_shadow_candidate(FakeClient(), later_snapshot, {}, later)
+
+    assert first is not None and second is not None
+    assert first["opportunity_id"] == second["opportunity_id"]
+    assert first["shadow_dedupe_key"] == second["shadow_dedupe_key"]
 
 
 def test_skips_selected_symbol_that_is_too_new_without_substitution():

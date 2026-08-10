@@ -342,6 +342,7 @@ class TradingConfig(BaseModel):
     xmom_shadow_reward_r: float = Field(default=1.8, ge=0.1, le=10)
     xmom_shadow_max_stop_pct: float = Field(default=15.0, ge=0.1, le=30)
     xmom_shadow_max_hold_hours: int = Field(default=12, ge=1, le=168)
+    xmom_shadow_episode_minutes: int = Field(default=360, ge=30, le=1440)
     adaptive_30d_shadow_enabled: bool = True
     adaptive_30d_shadow_utc_hour: int = Field(default=0, ge=0, le=23)
     adaptive_30d_shadow_minute_start: int = Field(default=2, ge=0, le=59)
@@ -357,8 +358,9 @@ class TradingConfig(BaseModel):
     adaptive_30d_shadow_reward_r: float = Field(default=3.0, ge=0.1, le=10)
     adaptive_30d_shadow_max_stop_pct: float = Field(default=15.0, ge=0.1, le=30)
     adaptive_30d_shadow_max_hold_hours: int = Field(default=168, ge=1, le=720)
-    adaptive_30d_live_enabled: bool = True
+    adaptive_30d_live_enabled: bool = False
     adaptive_30d_live_new_entries_enabled: bool = True
+    adaptive_30d_live_manage_existing_enabled: bool = True
     adaptive_30d_live_entry_window_hours: int = Field(default=2, ge=1, le=6)
     adaptive_30d_live_direction_window: int = Field(default=8, ge=3, le=50)
     adaptive_30d_live_direction_min_trades: int = Field(default=3, ge=3, le=50)

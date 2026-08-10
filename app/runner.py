@@ -655,8 +655,8 @@ def manage_adaptive_30d_live_position(
     state: dict,
     account: dict,
 ) -> dict:
-    if not config.get("adaptive_30d_live_enabled", False):
-        return {"managed": False, "reason": "adaptive_takeover_disabled"}
+    if not config.get("adaptive_30d_live_manage_existing_enabled", True):
+        return {"managed": False, "reason": "adaptive_existing_management_disabled"}
     tracked = dict(state.get("runtime_protection_positions") or {})
     tracked_entry = next(
         (
@@ -929,16 +929,23 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             if fast_lane and not symbols_override:
                 return {"status": "grid_event_ignored", "results": grid_results, "loop_seconds": int(config.get("grid_loop_seconds", 300))}
 
-    event_takeover = bool(config.get("s0_event_live_enabled", False)) and str(
-        (state.get("stage_route") or {}).get("stage") or ""
-    ).upper() == "S0"
+    is_s0 = str((state.get("stage_route") or {}).get("stage") or "").upper() == "S0"
+    event_takeover = bool(config.get("s0_event_live_enabled", False)) and is_s0
     event_decision = build_s0_event_decision(config, state, account) if event_takeover else None
-    adaptive_takeover = bool(config.get("adaptive_30d_live_enabled", False)) and str(
-        (state.get("stage_route") or {}).get("stage") or ""
-    ).upper() == "S0"
+    # A background research strategy must not monopolize S0 routing merely by
+    # being enabled. Its new-entry route and existing-position management are
+    # deliberately separate so a protected research position can finish.
+    adaptive_entry_takeover = (
+        bool(config.get("adaptive_30d_live_enabled", False))
+        and bool(config.get("adaptive_30d_live_new_entries_enabled", True))
+        and is_s0
+    )
+    adaptive_management_enabled = bool(
+        config.get("adaptive_30d_live_manage_existing_enabled", True)
+    ) and is_s0
     adaptive_handoff = manage_adaptive_30d_handoff(
         client, config, state, account
-    ) if adaptive_takeover else {"managed": False}
+    ) if adaptive_entry_takeover else {"managed": False}
     if adaptive_handoff.get("closed"):
         return {
             "status": "adaptive_30d_handoff_closed",
@@ -947,7 +954,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         }
     adaptive_management = manage_adaptive_30d_live_position(
         client, config, state, account
-    ) if adaptive_takeover else {"managed": False}
+    ) if adaptive_management_enabled else {"managed": False}
     if adaptive_management.get("closed"):
         return {
             "status": "adaptive_30d_position_closed",
@@ -979,7 +986,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
                 "fallback": "adaptive_30d_momentum",
             },
         }
-    elif adaptive_takeover:
+    elif adaptive_entry_takeover:
         decision = build_adaptive_30d_live_decision(config, state, account)
         route = "adaptive_30d_momentum"
         if (
@@ -1018,7 +1025,23 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             symbols_override=symbols_override,
             fast_lane=fast_lane,
         )
+        route = str(
+            ((decision.get("scan") or {}).get("mode") or {}).get("mode")
+            or decision.get("mode")
+            or config.get("growth_mode")
+            or "configured_growth"
+        )
     resolve_runtime_protection_profile(decision)
+    execution_route = {
+        "new_entries": route,
+        "configured_opportunity_version": str(
+            config.get("opportunity_v4_strategy_version") or ""
+        ),
+        "event_overlay_enabled": event_takeover,
+        "adaptive_new_entries_enabled": adaptive_entry_takeover,
+        "adaptive_existing_position_management": bool(adaptive_management.get("managed")),
+        "adaptive_management_reason": adaptive_management.get("reason"),
+    }
     scan = decision.get("scan") or {}
     shadow_candidates = [item for item in scan.get("candidates", []) if not item.get("passed")]
     paired_active_candidates: list[dict[str, Any]] = []
@@ -1305,6 +1328,7 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         },
         "shadow_trading": shadow_status,
         "s0_event_engine": (decision.get("event_status") or event_engine_status(config)),
+        "execution_route": execution_route,
     }
     if not fast_lane and "audit_status" in locals():
         snapshot_updates["protection_audit"] = audit_status

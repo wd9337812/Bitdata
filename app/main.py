@@ -188,6 +188,7 @@ def status() -> dict[str, Any]:
             "risk_status",
             "shadow_trading",
             "s0_event_engine",
+            "execution_route",
         ]
     }
     return {

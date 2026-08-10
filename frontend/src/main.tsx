@@ -312,6 +312,7 @@ function App() {
   const baseStageRoute = Object.keys(rawStageRoute).length > 0 ? rawStageRoute : stageProfile;
   const adaptive30dRuntime = status?.adaptive_30d_runtime || {};
   const adaptive30dActive = Boolean(config.adaptive_30d_live_enabled)
+    && Boolean(config.adaptive_30d_live_new_entries_enabled)
     && String(baseStageRoute.stage || "").toUpperCase() === "S0";
   const stageRoute = adaptive30dActive
     ? {
@@ -672,7 +673,7 @@ function App() {
         {active === "config" && <ConfigPanel config={config} onSave={saveConfig} onTestApi={testBinanceApi} />}
         {active === "system" && (
           <section className="stack">
-            <StageRoutePanel route={stageRoute} profiles={stageProfiles} stream={stream} userStream={userStream} rate={binanceRate} equity={account.equity} storage={data.status?.storage || {}} />
+            <StageRoutePanel route={stageRoute} executionRoute={runtime?.execution_route || {}} profiles={stageProfiles} stream={stream} userStream={userStream} rate={binanceRate} equity={account.equity} storage={data.status?.storage || {}} />
             <TrainingDataQualityPanel quality={data.trainingQuality} />
             <LogsPanel rows={data.logs} />
           </section>
@@ -1210,7 +1211,7 @@ function ReviewPanel({ chartData, snapshots, learning, shadow, reaction, onSync 
   );
 }
 
-function StageRoutePanel({ route, profiles, stream, userStream, rate, equity, storage }: { route: any; profiles: any[]; stream: any; userStream: any; rate: any; equity: any; storage: any }) {
+function StageRoutePanel({ route, executionRoute, profiles, stream, userStream, rate, equity, storage }: { route: any; executionRoute: any; profiles: any[]; stream: any; userStream: any; rate: any; equity: any; storage: any }) {
   const routeReason: Record<string, string> = {
     equity_range: "账户权益位于当前区间",
     hysteresis_hold: "处于阶段切换缓冲区，暂不来回跳档",
@@ -1221,6 +1222,19 @@ function StageRoutePanel({ route, profiles, stream, userStream, rate, equity, st
   };
   const used = Number(rate.used_current_minute || 0);
   const advertised = Number(rate.budgets?.advertised || rate.request_weight_limit || 0);
+  const entryRouteLabel: Record<string, string> = {
+    s0_concentrated_event: "V6 事件确认覆盖",
+    adaptive_30d_momentum: "30 日山寨动量",
+    market_tsmom_bnb_fallback: "BNB 市场动量后备",
+    market_tsmom: "市场动量",
+    extreme_sprint: "V5 机会引擎",
+    yolo_scalp: "剥头皮引擎",
+    grid: "网格引擎",
+  };
+  const entryRoute = String(executionRoute?.new_entries || route.mode || "");
+  const managementNote = executionRoute?.adaptive_existing_position_management
+    ? "30 日研究仓只管理已有持仓，不接管新开仓"
+    : "没有研究仓接管；新开仓按当前主策略执行";
   return (
     <section className="stack">
       {route.pending && (
@@ -1228,7 +1242,7 @@ function StageRoutePanel({ route, profiles, stream, userStream, rate, equity, st
       )}
       <div className="metrics">
         <MetricCard title="当前阶段" value={`${route.stage || "-"} ${route.label || ""}`} sub={routeReason[route.reason] || route.reason || (route.stage ? "按账户权益默认计算" : "等待机器人同步")} tone="positive" />
-        <MetricCard title="实际执行策略" value={modeLabel[route.mode] || route.mode || "-"} sub={`策略信用：${strategyFamilyLabel(route.strategy_family)}`} />
+        <MetricCard title="实际新开仓路由" value={entryRouteLabel[entryRoute] || modeLabel[entryRoute] || entryRoute || "-"} sub={`${managementNote} · 当前版本 ${executionRoute?.configured_opportunity_version || "-"}`} />
         <MetricCard title="账户权益" value={`${fmt(equity, 4)} U`} sub={`阶段确认 ${fmt(route.confirmation_count, 0)} / ${fmt(route.confirmation_required, 0)}`} />
         <MetricCard title="单笔风险上限" value={`${fmt(route.risk_pct, 2)}%`} sub={`保证金上限 ${fmt(route.margin_pct, 1)}%`} tone={Number(route.risk_pct) >= 7 ? "negative" : ""} />
         <MetricCard
@@ -1942,9 +1956,11 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("shadow_trading_enabled", "影子交易", "只是假装开仓并跟踪结果，不会调用 Binance 下单接口")}
           {toggle("xmom_shadow_enabled", "横截面动量研究影子", "每小时从实时币种池选择动量最强端做独立纸面验证；不参与当前实盘准入、许可证、信用或仓位")}
           {number("xmom_shadow_min_onboard_age_days", "动量研究最低币龄", "默认 30 天；历史审计显示刚上市币种拖累结果，仅影响独立研究影子")}
+          {number("xmom_shadow_episode_minutes", "动量研究独立行情段", "默认 360 分钟；同一币种同方向在同一行情段只记录一次，避免把同一波趋势重复计成多笔胜利")}
           {toggle("adaptive_30d_shadow_enabled", "30 日山寨动量评估", "每天一次抓取最多 150 个高流动性币的连续小时数据，同时生成独立影子与当天实盘候选")}
           {number("adaptive_30d_shadow_symbol_limit", "30 日山寨扫描上限", "默认 150；REST 请求只走后台预算，交易与保护请求始终优先")}
           {toggle("adaptive_30d_live_enabled", "30 日山寨动量作为 S0 主路线", "开启后山寨动量优先，只有当天无可执行山寨候选时才检查 BNB 后备")}
+          {toggle("adaptive_30d_live_manage_existing_enabled", "继续管理旧版 30 日持仓", "关闭旧版新开仓后仍建议保持开启：仅跟踪已有旧仓的退出与保护，不会因此创建任何新仓")}
           {toggle("adaptive_30d_live_bnb_fallback_enabled", "允许 BNB 正期望后备", "推荐开启；它不会挤掉新鲜山寨候选")}
           {number("adaptive_30d_live_risk_pct", "山寨主路线计划风险%", "默认 20%；20% 按年重启均未触发 5U 硬停止，25%/30% 在 2026 年触发硬停止被拒")}
           {toggle("adaptive_30d_live_risk_tier_enabled", "权益阶梯风险", "默认关闭：22%/25% 档未通过 bootstrap 稳健性审计（无硬停止概率 <90%），等事件模型证据后再启用")}
