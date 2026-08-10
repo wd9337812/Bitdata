@@ -33,6 +33,14 @@ def _loss_level(consecutive_losses: int) -> int:
 
 def _level_multiplier(level: int, config: dict[str, Any], *, v50_active: bool = False) -> float:
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
+    if version.startswith("v5.3"):
+        values = (
+            float(config.get("opportunity_v50_loss_3_multiplier", 1.0)),
+            float(config.get("opportunity_v50_loss_2_multiplier", 0.60)),
+            float(config.get("opportunity_v50_loss_1_multiplier", 0.80)),
+            1.0,
+        )
+        return max(0.0, min(1.0, values[max(0, min(3, int(level)))]))
     if strategy_supports(version, "v511_incident_guard"):
         values = (
             float(config.get("opportunity_v50_loss_3_multiplier", 1.0)),

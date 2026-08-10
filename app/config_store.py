@@ -679,7 +679,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v5.2",
+    "opportunity_v4_strategy_version": "v5.3",
     "s0_moe_shadow_enabled": True,
     "s0_moe_runtime_model_enabled": False,
     "s0_moe_model_path": "",
@@ -981,6 +981,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v53_adaptive_rank_step": 0.05,
     "opportunity_v53_adaptive_expectancy_step_pct": 0.002,
     "opportunity_v53_adaptive_risk_step": 0.10,
+    # V5.3 observes release drawdown but does not turn it into a global S0
+    # entry freeze. The 5U hard-stop and exchange-side protection remain hard.
+    "opportunity_v53_release_drawdown_pause_enabled": False,
     "market_tsmom_shadow_enabled": True,
     "market_tsmom_shadow_utc_hour": 0,
     "market_tsmom_shadow_minute_start": 3,
@@ -1324,8 +1327,9 @@ def load_config(include_secret: bool = True) -> dict[str, Any]:
         config["execution_max_spread_pct"] = loaded["opportunity_v3_max_spread_pct"]
     if "execution_min_depth_notional_usdt" not in loaded and "opportunity_v3_min_depth_notional_usdt" in loaded:
         config["execution_min_depth_notional_usdt"] = loaded["opportunity_v3_min_depth_notional_usdt"]
-    # V5.2 remains the direct-live generation. V5.3 is available as an
-    # isolated candidate, but must not auto-promote before out-of-sample proof.
+    # V5.3 is the current direct-live generation. Legacy file migration stays
+    # on V5.2 so historical releases remain reproducible; promotion to V5.3 is
+    # an explicit release operation, never an accidental config rewrite.
     loaded_v4_version = str(loaded.get("opportunity_v4_strategy_version") or "").lower()
     if loaded_v4_version.startswith(("v3.", "v4.")) or loaded_v4_version in {
         "v5.0-s30", "v5.1", "v5.1.1"

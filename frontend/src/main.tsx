@@ -571,7 +571,7 @@ function App() {
                 }
                 sub={
                   dailyProfitLock.enabled
-                    ? `已实现 ${fmt(dailyProfitLock.realized_net_pnl, 4)}U / 目标 ${fmt(dailyProfitLock.target_profit_usdt, 4)}U（${fmt(dailyProfitLock.target_pct, 0)}%）· UTC 次日重置`
+                    ? `起始 ${fmt(dailyProfitLock.daily_start_equity, 4)}U · 需净赚 ${fmt(dailyProfitLock.target_profit_usdt, 4)}U（${fmt(dailyProfitLock.target_pct, 0)}%）· 锁仓权益 ${fmt(dailyProfitLock.lock_equity, 4)}U · 当前 ${fmt(dailyProfitLock.current_equity, 4)}U · UTC 次日重置`
                     : "当前阶段未启用"
                 }
                 tone={dailyProfitLock.active ? "positive" : dailyProfitLock.pending_flat ? "negative" : ""}

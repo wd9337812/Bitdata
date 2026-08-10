@@ -282,3 +282,25 @@ def test_extreme_equity_guard_prefers_current_release_baseline():
     assert guard["allowed"] is True
     assert guard["risk_multiplier"] == 1.0
     assert guard["baseline_mode"] == "extreme_v3_roll@v3.2"
+
+
+def test_v53_release_drawdown_is_observed_without_globally_freezing_s0():
+    config = {
+        **base_config(),
+        "equity_guard_enabled": True,
+        "equity_guard_release_baseline_enabled": True,
+        "opportunity_v4_strategy_version": "v5.3",
+        "opportunity_v44_full_bet_enabled": True,
+        "opportunity_v44_release_pause_drawdown_pct": 35,
+        "opportunity_v53_release_drawdown_pause_enabled": False,
+    }
+    state = {
+        "strategy_release_equity_id": "extreme_v5_roll@v5.3",
+        "strategy_release_equity_high_watermark": 20,
+    }
+
+    guard = equity_guard_status(config, state, 10, "extreme_sprint")
+
+    assert guard["allowed"] is True
+    assert guard["reason"] == "v53_release_drawdown_observation"
+    assert guard["release_pause_enabled"] is False

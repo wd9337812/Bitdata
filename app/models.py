@@ -693,7 +693,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v5.2"
+    opportunity_v4_strategy_version: str = "v5.3"
     s0_moe_shadow_enabled: bool = True
     s0_moe_runtime_model_enabled: bool = False
     s0_moe_model_path: str = ""
@@ -992,6 +992,7 @@ class TradingConfig(BaseModel):
     opportunity_v53_adaptive_rank_step: float = Field(default=0.05, ge=0, le=0.10)
     opportunity_v53_adaptive_expectancy_step_pct: float = Field(default=0.002, ge=0, le=0.10)
     opportunity_v53_adaptive_risk_step: float = Field(default=0.10, ge=0, le=0.10)
+    opportunity_v53_release_drawdown_pause_enabled: bool = False
     opportunity_v4_evidence_lookback_hours: float = Field(default=168, ge=1, le=8760)
     opportunity_v4_evidence_max_trades: int = Field(default=5000, ge=100, le=100000)
     opportunity_v4_evidence_cache_seconds: int = Field(default=60, ge=1, le=3600)

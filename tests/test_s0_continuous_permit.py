@@ -169,3 +169,31 @@ def test_v511_starts_at_half_risk_and_penalizes_first_two_losses(monkeypatch, tm
     assert initial["status"] == "initial_exploration"
     assert first_loss["risk_multiplier"] == 0.4
     assert second_loss["risk_multiplier"] == 0.25
+
+
+def test_v53_keeps_loss_penalty_proportional(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        **_config(),
+        "opportunity_v4_strategy_version": "v5.3",
+        "opportunity_v50_loss_1_multiplier": 0.80,
+        "opportunity_v50_loss_2_multiplier": 0.60,
+    }
+    now = datetime(2026, 8, 10, tzinfo=timezone.utc)
+
+    first_loss = s0_continuous_permit_status(
+        config,
+        equity=9.5,
+        live_rows=[_row(1, -0.5)],
+        now=now,
+    )
+    second_loss = s0_continuous_permit_status(
+        config,
+        equity=9.0,
+        live_rows=[_row(1, -0.5), _row(2, -0.5)],
+        now=now + timedelta(minutes=1),
+    )
+
+    assert first_loss["allowed"] is True
+    assert first_loss["risk_multiplier"] == 0.80
+    assert second_loss["risk_multiplier"] == 0.60

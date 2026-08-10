@@ -43,6 +43,7 @@ def test_daily_profit_target_locks_only_when_flat(monkeypatch, tmp_path):
     assert locked["active"] is True
     assert locked["blocks_new_entries"] is True
     assert locked["target_usdt"] == 8.0
+    assert locked["lock_equity"] == 28.0
     assert locked["reset_at"] == "2026-07-28T00:00:00+00:00"
 
 
