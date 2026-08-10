@@ -43,7 +43,7 @@ def s0_daily_profit_lock_status(
     route = config.get("_stage_route") or state.get("stage_route") or {}
     is_s0 = str(route.get("stage") or state.get("active_stage") or "") == "S0"
     enabled = bool(config.get("stage_s0_daily_profit_lock_enabled", True)) and is_s0
-    target_pct = float(config.get("stage_s0_daily_profit_target_pct", 40.0))
+    target_pct = float(config.get("stage_s0_daily_profit_target_pct", 50.0))
     daily_start = float(state.get("daily_start_equity") or account.get("equity") or 0.0)
     target_usdt = max(0.0, daily_start * target_pct / 100.0)
     if realized_net is None or closed_trades is None:

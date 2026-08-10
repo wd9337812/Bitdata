@@ -162,7 +162,7 @@ def _profile_values(profile: dict[str, Any], config: dict[str, Any], equity: flo
         else False
     )
     result["daily_profit_target_pct"] = (
-        float(config.get("stage_s0_daily_profit_target_pct", 40.0))
+        float(config.get("stage_s0_daily_profit_target_pct", 50.0))
         if result.get("stage") == "S0"
         else None
     )

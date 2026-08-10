@@ -59,3 +59,19 @@ def test_daily_profit_lock_does_not_apply_outside_s0(monkeypatch, tmp_path):
 
     assert status["enabled"] is False
     assert status["active"] is False
+
+
+def test_daily_profit_lock_uses_fifty_percent_default(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+
+    status = s0_daily_profit_lock_status(
+        {"_stage_route": {"stage": "S0"}, "stage_s0_daily_profit_lock_enabled": True},
+        {"daily_start_equity": 20.0, "active_stage": "S0"},
+        {"equity": 30.0, "positions": []},
+        realized_net=10.0,
+        closed_trades=1,
+    )
+
+    assert status["target_pct"] == 50.0
+    assert status["target_usdt"] == 10.0
+    assert status["active"] is True

@@ -1817,7 +1817,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {number("s0_event_stop_pct", "S 级事件初始止损%", "默认 3%；每一笔都由 Binance 条件单保护")}
             {toggle("stage_s0_daily_loss_stop_enabled", "S0 普通日亏损停牌", "默认关闭；5U 权益硬停止、每仓止盈止损和运行安全保护仍始终生效")}
             {toggle("stage_s0_daily_profit_lock_enabled", "S0 当日净利润锁", "默认开启；达到目标后不强平受保护持仓，空仓后停止当天新开仓")}
-          {number("stage_s0_daily_profit_target_pct", "S0 当日净利润目标%", "默认 200%；历史回测未模拟当日锁仓，200% 让实盘与审计口径对齐，同时保留极端连赢的安全上限")}
+          {number("stage_s0_daily_profit_target_pct", "S0 当日净利润目标%", "默认 50%；按 UTC 当日初始权益计算净利润，达到后先让已有受保护仓位自然平仓，再停止当天新开仓")}
             {number("runtime_protection_supervisor_seconds", "持仓快速保护检查秒数", "默认 5 秒；独立于完整扫描周期，WebSocket 最新价优先")}
             {toggle("s0_moe_shadow_enabled", "启用 MoE 研究影子", "本地训练模型在线只做推理并记录结果，不参与实盘准入、仓位或止盈止损")}
             {number("s0_moe_online_window_hours", "MoE 线上统计窗口（小时）", "默认 24 小时；同时保留当前策略版本的全量统计")}
@@ -2013,7 +2013,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
           {toggle("stage_s0_daily_loss_stop_enabled", "S0 普通日亏损停牌", "默认关闭；开启后才使用下面的 S0 当日亏损上限")}
           {number("stage_s0_daily_loss_limit_pct", "S0 当日亏损上限%", "仅在 S0 普通日亏损停牌开启时生效")}
           {toggle("stage_s0_daily_profit_lock_enabled", "S0 当日净利润锁", "达到目标且空仓后锁定当天新开仓，UTC 次日重置")}
-          {number("stage_s0_daily_profit_target_pct", "S0 当日净利润目标%", "默认 40%")}
+          {number("stage_s0_daily_profit_target_pct", "S0 当日净利润目标%", "默认 50%；达到后仅锁定当天新开仓")}
           {number("stage_s1_risk_pct", "S1 单笔风险%", "300-10000U，默认 7%")}
           {number("stage_s1_margin_pct", "S1 保证金上限%", "默认 85%")}
           {number("stage_s1_max_leverage", "S1 最大杠杆", "默认 5x")}
