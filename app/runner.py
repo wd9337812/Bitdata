@@ -1010,8 +1010,9 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
         }
     elif market_tsmom_takeover:
         decision = build_market_tsmom_live_decision(config, state, account)
+        route = "market_tsmom_consensus"
         decision["scan"] = {
-            "mode": {"mode": "market_tsmom", "strategy": "market_tsmom_consensus"},
+            "mode": {"mode": route, "strategy": "market_tsmom_consensus"},
             "candidates": [decision["candidate"]] if decision.get("candidate") else [],
             "v4_candidates": [],
             "funnel": {"takeover": "market_tsmom_consensus"},
