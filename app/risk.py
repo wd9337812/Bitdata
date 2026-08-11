@@ -52,12 +52,12 @@ def equity_guard_status(
         if v44_full_bet
         else config.get(pause_key, config.get("equity_guard_pause_drawdown_pct", 35.0))
     )
-    # For S0 V5.3 a release drawdown is an observation signal. It must not
+    # For S0 V5.3/V5.4 a release drawdown is an observation signal. It must not
     # freeze unrelated fresh opportunities after a losing cohort; hard-stop,
     # exchange TP/SL and cohort-level re-entry protection still apply.
     release_pause_enabled = not (
         v44_full_bet
-        and str(config.get("opportunity_v4_strategy_version") or "").lower().startswith("v5.3")
+        and str(config.get("opportunity_v4_strategy_version") or "").lower().startswith(("v5.3", "v5.4"))
         and not bool(config.get("opportunity_v53_release_drawdown_pause_enabled", False))
     )
     if drawdown_pct >= pause_pct and release_pause_enabled:

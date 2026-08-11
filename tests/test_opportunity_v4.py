@@ -117,6 +117,7 @@ def test_v53_fusion_weights_and_capabilities_are_isolated():
     assert strategy_supports("v5.3", "episode_evidence") is True
     assert strategy_supports("v5.3", "hard_stop_headroom") is True
     assert strategy_supports("v5.2", "v53_fusion") is False
+    assert strategy_supports("v5.4", "v54_history_router") is True
 
 
 def test_v53_routes_direction_with_market_regime():
@@ -134,6 +135,57 @@ def test_v53_routes_direction_with_market_regime():
 
     assert _regime_policy(long_candidate, config)["scope"] == "v53_broad_up_trend_route"
     assert _regime_policy(short_candidate, config)["scope"] == "v53_broad_down_trend_route"
+
+
+def test_v54_history_router_only_admits_supported_pullback_contexts():
+    short_candidate = _candidate("SHORTUSDT", 0.95, 2.0)
+    short_candidate["direction"] = "SHORT"
+    short_candidate["signal"]["signal"] = "SHORT"
+    short_candidate["entry_type"] = "v3_pullback"
+    short_candidate["market_state"]["state"] = "broad_down"
+    short_candidate["opportunity_v3"]["market_regime"] = "broad_down"
+    config = {
+        "opportunity_v4_strategy_version": "v5.4",
+        "opportunity_v44_full_bet_enabled": True,
+        "opportunity_v54_core_max_risk_pct": 15.0,
+    }
+
+    admitted = _regime_policy(short_candidate, config)
+    assert admitted["scope"] == "v54_broad_down_short_pullback_core"
+    assert admitted["live_scope"] is True
+    assert admitted["risk_cap_pct"] == 15.0
+
+    rejected = _candidate("LONGUSDT", 0.95, 2.0)
+    rejected["entry_type"] = "v3_pullback"
+    assert _regime_policy(rejected, config)["scope"] == "v54_history_shadow_only"
+
+
+def test_v54_position_confidence_respects_history_route_risk_cap():
+    confidence = v44_position_confidence(
+        {
+            "admission_lane": "full_bet",
+            "admitted": True,
+            "rank_percentile": 1.0,
+            "v44_confirmations": 5,
+            "cost_ratio": 12.0,
+            "lower_expected_net_pct": 1.0,
+            "liquidity_gate": {"passed": True},
+            "direction": "SHORT",
+            "v54_history_router": {"risk_cap_pct": 15.0},
+        },
+        {
+            "opportunity_v4_strategy_version": "v5.4",
+            "opportunity_v50_min_risk_pct": 12.0,
+            "opportunity_v50_max_risk_pct": 30.0,
+            "opportunity_v50_stressed_risk_cap_pct": 30.0,
+            "opportunity_v54_core_rank_percentile": 0.80,
+            "opportunity_v54_min_confirmations": 2,
+            "opportunity_v54_min_gross_cost_multiple": 3.50,
+        },
+    )
+
+    assert confidence["method"] == "s0_full_bet_v54_history_router"
+    assert confidence["target_initial_risk_pct"] <= 15.0
 
 
 def test_v53_uses_quieter_market_rank_floor_and_current_schema(monkeypatch, tmp_path):

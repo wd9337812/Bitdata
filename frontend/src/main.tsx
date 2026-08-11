@@ -834,7 +834,8 @@ function SignalExplain({ best }: { best?: any }) {
   const moe = v4.moe || {};
   const v52Edge = v4.v52_edge || {};
   const v53Fusion = v4.v53_fusion || {};
-  const activeEdge = v53Fusion.enabled ? v53Fusion : v52Edge;
+  const v54Router = v4.v54_history_router || {};
+  const activeEdge = v54Router.enabled ? v54Router : v53Fusion.enabled ? v53Fusion : v52Edge;
   const isGlobalCalibration = ["adaptive_v49_global", "adaptive_v410_global", "adaptive_v411_global", "adaptive_v53_global"].includes(adaptive.schema);
   return (
     <div className="panel signal-explain">
@@ -850,9 +851,9 @@ function SignalExplain({ best }: { best?: any }) {
         <div><span>MoE 预测/门槛</span><strong>{moe.active_gate ? `${fmt(moe.model_edge, 3)} / ${fmt(moe.edge_floor, 3)}` : "不参与实盘准入"}</strong></div>
         <div><span>{`${String(v4.strategy_version || "v5.2").toUpperCase()} 本轮排名`}</span><strong>{v4.enabled ? `前 ${fmt((1 - Number(v4.rank_percentile || 0)) * 100, 0)}%` : "-"}</strong></div>
         <div><span>{`${String(v4.strategy_version || "v5.2").toUpperCase()} 准入通道`}</span><strong>{v4.admission_lane === "full_bet" ? "全仓短打" : "仅影子"}</strong></div>
-        <div><span>V5.3 行情路由</span><strong>{v53Fusion.enabled ? `${v53Fusion.market_regime || "未知"} · ${v53Fusion.route || "等待结构"}` : "当前版本不适用"}</strong></div>
-        <div><span>V5.3 有效排名门槛</span><strong>{v53Fusion.enabled ? `前 ${fmt((1 - Number(v53Fusion.rank_floor || 0)) * 100, 0)}%` : "-"}</strong></div>
-        <div><span>V5.3 结构确认</span><strong>{v53Fusion.enabled ? `${fmt(v53Fusion.confirmations, 0)} / ${fmt(v53Fusion.confirmations_required, 0)}` : "-"}</strong></div>
+        <div><span>{v54Router.enabled ? "V5.4 历史路线" : "V5.3 行情路由"}</span><strong>{v54Router.enabled ? `${v54Router.market_regime || "未知"} · ${v54Router.route || "等待结构"}` : v53Fusion.enabled ? `${v53Fusion.market_regime || "未知"} · ${v53Fusion.route || "等待结构"}` : "当前版本不适用"}</strong></div>
+        <div><span>{v54Router.enabled ? "V5.4 有效排名门槛" : "V5.3 有效排名门槛"}</span><strong>{v54Router.enabled ? `前 ${fmt((1 - Number(v54Router.rank_floor || 0)) * 100, 0)}%` : v53Fusion.enabled ? `前 ${fmt((1 - Number(v53Fusion.rank_floor || 0)) * 100, 0)}%` : "-"}</strong></div>
+        <div><span>{v54Router.enabled ? "V5.4 结构确认 / 风险上限" : "V5.3 结构确认"}</span><strong>{v54Router.enabled ? `${fmt(v54Router.confirmations, 0)} / ${fmt(v54Router.confirmations_required, 0)} · ${v54Router.risk_cap_pct ? `${fmt(v54Router.risk_cap_pct, 0)}%` : "影子"}` : v53Fusion.enabled ? `${fmt(v53Fusion.confirmations, 0)} / ${fmt(v53Fusion.confirmations_required, 0)}` : "-"}</strong></div>
         <div><span>{isGlobalCalibration ? "校准范围" : "方向关系"}</span><strong>{isGlobalCalibration ? "全局 · 不按币种" : adaptive.relation === "aligned" ? "顺势" : adaptive.relation === "countertrend" ? "逆势" : adaptive.relation === "neutral" ? "中性" : "等待校准"}</strong></div>
         <div><span>{isGlobalCalibration ? "全局风险倍率" : "动态仓位倍率"}</span><strong>{adaptive.enabled ? `${fmt(adaptive.risk_multiplier, 2)}x` : "未启用"}</strong></div>
         <div><span>12 / 24小时样本</span><strong>{adaptive.enabled ? `${fmt(adaptive.stats_12h?.shadow_trades ?? adaptive.stats_12h?.current_trades, 0)} 影子 / ${fmt(adaptive.stats_24h?.live_trades ?? adaptive.stats_24h?.current_trades, 0)} 实盘` : "-"}</strong></div>
@@ -1801,9 +1802,11 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
       <input type="checkbox" checked={Boolean(form[key])} onChange={(event) => update(key, event.target.checked)} />
     </label>
   );
-  const v53Configured = String(form.opportunity_v4_strategy_version || "v5.2")
-    .toLowerCase()
-    .startsWith("v5.3");
+  const configuredVersion = String(form.opportunity_v4_strategy_version || "v5.2").toLowerCase();
+  const v54Configured = configuredVersion.startsWith("v5.4");
+  const v53Configured = configuredVersion.startsWith("v5.3");
+  const v5RouterConfigured = v53Configured || v54Configured;
+  const activeRouterLabel = v54Configured ? "V5.4 历史正证据路线" : "V5.3 候选融合";
 
   if (!expert) {
     return (
@@ -1811,7 +1814,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
         <div className="panel">
           <div className="panel-head"><div><h2>当前生效设置</h2><p>这里只显示当前阶段真正参与执行的参数。旧策略和未来阶段参数已收进专家设置。</p></div><button className="secondary" onClick={() => setExpert(true)}>进入专家设置</button></div>
           <div className="form-grid">
-            {toggle("stage_routing_enabled", "按权益自动选择阶段", `推荐开启；当前 S0 使用 ${v53Configured ? "V5.3 候选融合" : "V5.2 证据优势"}短打，后续阶段仍按权益自动切换`)}
+            {toggle("stage_routing_enabled", "按权益自动选择阶段", `推荐开启；当前 S0 使用 ${v5RouterConfigured ? activeRouterLabel : "V5.2 证据优势"}短打，后续阶段仍按权益自动切换`)}
             {select("stage_manual_mode", "阶段控制", stageManualOptions.slice(0, 4), "自动模式会按权益切换策略")}
             {toggle("dry_run", "模拟交易", "开启后绝不会真实下单")}
             {toggle("live_trading_enabled", "允许实盘交易", "还需要正确的实盘确认短语")}
@@ -1819,7 +1822,7 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {number("hard_stop_equity", "权益硬停止线 U", "当前建议保持 5U")}
             {number("stage_s0_risk_pct", "S0 压力风险硬上限%", "默认 30%；这是最强机会的压力上限，普通机会仍从 12% 基线起步")}
             {number("stage_s0_max_leverage", "S0 最大杠杆", "默认 10 倍；系统会按止损距离在 3-10 倍间动态选择")}
-            {toggle("opportunity_v4_live_enabled", `${v53Configured ? "V5.3" : "V5.2"} 当前实盘排序`, v53Configured ? "按行情状态选择顺势突破、预突破或回踩；旧版本只供复盘" : "按独立行情段、横截面强度和成本优势排序")}
+            {toggle("opportunity_v4_live_enabled", `${v5RouterConfigured ? (v54Configured ? "V5.4" : "V5.3") : "V5.2"} 当前实盘排序`, v54Configured ? "只放行历史实盘正证据的回踩组合；其他结构继续记录影子" : v53Configured ? "按行情状态选择顺势突破、预突破或回踩；旧版本只供复盘" : "按独立行情段、横截面强度和成本优势排序")}
             {toggle("opportunity_v44_full_bet_enabled", "启用 S0 单仓全进全出", "最多使用约 90% 新鲜可用保证金，只持有一个币种和一个方向")}
             {toggle("s0_event_live_enabled", "启用 S 级事件集中仓", "预测市场概率突变必须与 Binance 放量、价格方向同时确认；单一外部信息不会下单")}
             {number("s0_event_s_grade_max_account_risk_pct", "S 级事件止损账户风险上限%", "最高 50%；会被 5U 硬停止余量再次压低，不等于 50% 保证金")}
@@ -1840,7 +1843,11 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {number("opportunity_v50_min_risk_pct", "普通机会风险基线%", "默认 12%；亏损后降仓和三连止损冷却恢复都回到该基线")}
             {number("opportunity_v50_max_risk_pct", "最强机会风险上限%", "默认 30%；只在排名、确认、净期望和成本全部较强时接近上限")}
             {number("opportunity_v50_stressed_risk_cap_pct", "压力风险硬上限%", "默认 30%；仓位计算包含放大的手续费和滑点后仍不得越过")}
-            {v53Configured
+            {v54Configured
+              ? <>
+                  {number("opportunity_v54_core_rank_percentile", "V5.4 历史路线最低排名分位", "默认 0.80；只允许本轮前 20% 的历史正证据路线")}
+                </>
+              : v53Configured
               ? <>
                   {number("opportunity_v53_min_rank_percentile", "趋势行情最低排名分位", "默认 0.85，即只考虑本轮前 15%")}
                   {number("opportunity_v53_quiet_min_rank_percentile", "静市最低排名分位", "默认 0.90，静市只考虑前 10%")}
@@ -1850,7 +1857,15 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
             {number("opportunity_v50_min_quality_score", "最低模型质量分", "默认 52 分；当前版本独立计算")}
             {number("opportunity_v50_min_expected_net_pct", "最低扣费后期望%", "默认 0.02%；手续费和滑点已计入")}
             {number("opportunity_v50_min_lower_expectancy_pct", "最低保守净期望%", "默认 -0.08%；用于允许小样本但高排名机会受控试仓")}
-            {v53Configured
+            {v54Configured
+              ? <>
+                  {number("opportunity_v54_min_gross_cost_multiple", "V5.4 最低毛利覆盖成本倍数", "默认 3.5 倍；先覆盖手续费与滑点")}
+                  {number("opportunity_v54_min_confirmations", "V5.4 最低结构确认项", "默认至少 2 项；仅历史实盘正证据的路线允许进入")}
+                  {number("opportunity_v54_core_max_risk_pct", "广泛下跌做空回踩风险上限%", "默认 15%；单仓全进不等于让错误结构承担 30% 账户风险")}
+                  {number("opportunity_v54_quiet_pullback_max_risk_pct", "静市做多回踩风险上限%", "默认 10%；这是较弱的跨版本证据路线")}
+                  {number("opportunity_v54_mixed_pullback_max_risk_pct", "混合市做多回踩风险上限%", "默认 12%；仅顺势回踩结构")}
+                </>
+              : v53Configured
               ? <>
                   {number("opportunity_v53_min_gross_cost_multiple", "最低毛利覆盖成本倍数", "默认 3.5 倍，先覆盖手续费和滑点")}
                   {number("opportunity_v53_min_confirmations", "最低结构确认项", "默认至少 2 项；静市、恐慌行情会自动更严格")}
@@ -1862,9 +1877,9 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
                   {number("opportunity_v50_smart_flow_max_points", "聪明钱最大软修正分", "V5.2 默认正负 10 分")}
                 </>}
           {number("opportunity_v52_episode_minutes", "独立行情段分钟", "默认 30 分钟；同币同向同形态在一个行情段内只算一份证据")}
-          {number(v53Configured ? "opportunity_v53_min_cross_sectional_strength" : "opportunity_v52_min_cross_sectional_strength", "最低横截面强度", v53Configured ? "V5.3 候选默认 0.72" : "V5.2 默认 0.78")}
+          {number(v54Configured ? "opportunity_v54_min_cross_sectional_strength" : v53Configured ? "opportunity_v53_min_cross_sectional_strength" : "opportunity_v52_min_cross_sectional_strength", "最低横截面强度", v54Configured ? "V5.4 历史路线默认 0.72" : v53Configured ? "V5.3 候选默认 0.72" : "V5.2 默认 0.78")}
           {toggle("opportunity_v52_momentum_live_enabled", "允许纯动量追涨实盘", "默认关闭；只交易突破、预突破或回踩结构")}
-          {v53Configured && toggle("opportunity_v53_adaptive_enabled", "启用 V5.3 全局小步校准", "只用当前版本独立机会，单次只小幅调整一个全局参数")}
+          {v53Configured && !v54Configured && toggle("opportunity_v53_adaptive_enabled", "启用 V5.3 全局小步校准", "只用当前版本独立机会，单次只小幅调整一个全局参数")}
           {number("opportunity_v52_hard_stop_reserve_usdt", "5U 硬停止额外预留", "默认 0.15U；下单时会把实际风险限制在硬停止线之上")}
             {number("opportunity_v50_min_leverage", "最低动态杠杆", "默认 3 倍")}
             {number("opportunity_v50_max_leverage", "最高动态杠杆", "默认 10 倍")}

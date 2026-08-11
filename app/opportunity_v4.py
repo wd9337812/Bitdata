@@ -780,6 +780,16 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
     trend_aligned = aligned or regime_aligned
     if regime == "panic":
         version = str(config.get("opportunity_v4_strategy_version") or "").lower()
+        if strategy_supports(version, "v54_history_router"):
+            return {
+                "scope": "v54_panic_shadow_only",
+                "market_phase": "panic",
+                "live_scope": False,
+                "canary_scope": False,
+                "exploration_scope": False,
+                "trend_aligned": trend_aligned,
+                "reason": "V5.4 历史路由未验证恐慌扩张中的短打优势，仅记录影子",
+            }
         signal = candidate.get("signal") or {}
         volume = float(signal.get("volume_acceleration") or 0.0)
         directed_flow = float(signal.get("directed_trade_flow") or 0.0)
@@ -846,6 +856,67 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
     v472_router = strategy_supports(version, "v472_router")
     v50_active = strategy_supports(version, "v50_s30")
     v53_active = strategy_supports(version, "v53_fusion")
+    v54_active = strategy_supports(version, "v54_history_router")
+    if v54_active:
+        base = {
+            "market_phase": regime,
+            "canary_scope": True,
+            "exploration_scope": False,
+            "trend_aligned": trend_aligned,
+        }
+        if (
+            regime == "broad_down"
+            and direction == "SHORT"
+            and setup_type == "pullback"
+            and phase == "RETEST"
+            and trend_aligned
+        ):
+            return {
+                **base,
+                "scope": "v54_broad_down_short_pullback_core",
+                "live_scope": True,
+                "risk_cap_pct": float(config.get("opportunity_v54_core_max_risk_pct", 15.0)),
+                "reason": "V5.4 历史核心：广泛下跌中的顺势做空回踩",
+            }
+        if (
+            regime == "quiet"
+            and direction == "LONG"
+            and setup_type == "pullback"
+            and phase == "RETEST"
+            and aligned
+        ):
+            return {
+                **base,
+                "scope": "v54_quiet_long_pullback_core",
+                "live_scope": True,
+                "risk_cap_pct": float(
+                    config.get("opportunity_v54_quiet_pullback_max_risk_pct", 10.0)
+                ),
+                "reason": "V5.4 历史核心：静市中的趋势对齐做多回踩",
+            }
+        if (
+            regime == "mixed"
+            and direction == "LONG"
+            and setup_type == "pullback"
+            and phase == "RETEST"
+            and aligned
+        ):
+            return {
+                **base,
+                "scope": "v54_mixed_long_pullback_core",
+                "live_scope": True,
+                "risk_cap_pct": float(
+                    config.get("opportunity_v54_mixed_pullback_max_risk_pct", 12.0)
+                ),
+                "reason": "V5.4 历史核心：混合行情中的趋势对齐做多回踩",
+            }
+        return {
+            **base,
+            "scope": "v54_history_shadow_only",
+            "live_scope": False,
+            "canary_scope": False,
+            "reason": "V5.4 未将该市场、方向和结构组合列入历史正证据实盘路线，仅记录影子",
+        }
     if (
         v53_active
         and trend_aligned
@@ -1166,13 +1237,14 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
     v50_active = strategy_supports(version_label, "v50_s30")
     v52_active = strategy_supports(version_label, "v52_evidence_edge")
     v53_active = strategy_supports(version_label, "v53_fusion")
+    v54_active = strategy_supports(version_label, "v54_history_router")
     lane = str(opportunity.get("admission_lane") or "shadow_only")
     admitted = bool(opportunity.get("admitted"))
     if lane != "full_bet" or not admitted:
         return {
             "enabled": True,
             "applied": False,
-            "method": "s0_full_bet_v53_fusion" if v53_active else "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
+            "method": "s0_full_bet_v54_history_router" if v54_active else "s0_full_bet_v53_fusion" if v53_active else "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
             "lane": lane,
             "confidence": 0.0,
             "display_label": "仅影子观察",
@@ -1197,7 +1269,7 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
         if v50_active
         else "opportunity_v44_stressed_risk_cap_pct"
     )
-    route = opportunity.get("v53_fusion") or {}
+    route = opportunity.get("v54_history_router") or opportunity.get("v53_fusion") or {}
     rank_floor = (
         float(route.get("rank_floor"))
         if v53_active and route.get("rank_floor") is not None
@@ -1258,15 +1330,17 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
             quality_target = float(config.get("opportunity_v52_risk_base_pct", 12.0))
     else:
         quality_target = minimum_risk + (maximum_risk - minimum_risk) * confidence
+    route_risk_cap = float(route.get("risk_cap_pct") or maximum_risk)
     target = min(
         maximum_risk,
         stressed_cap,
+        route_risk_cap,
         quality_target * direction_risk_multiplier,
     )
     return {
         "enabled": True,
         "applied": True,
-        "method": "s0_full_bet_v53_fusion" if v53_active else "s0_full_bet_v52_edge" if v52_active else "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
+        "method": "s0_full_bet_v54_history_router" if v54_active else "s0_full_bet_v53_fusion" if v53_active else "s0_full_bet_v52_edge" if v52_active else "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
         "lane": lane,
         "confidence": round(confidence, 6),
         "display_label": "全仓强机会" if confidence >= 0.65 else "全仓机会",
@@ -1277,6 +1351,7 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
             "conservative_expectancy": round(lower_component, 6),
             "liquidity": round(liquidity_component, 6),
             "direction_risk": round(direction_risk_multiplier, 6),
+            "route_risk_cap_pct": round(route_risk_cap, 6),
         },
         "target_initial_risk_pct": round(target, 6),
         "quality_risk_pct": round(quality_target, 6),
@@ -1284,7 +1359,9 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
         "add_on_eligible": False,
         "adaptive_calibration": calibration,
         "reason": (
-            "V5.3 按行情路由、相对排名与结构确认映射 12%/18%/24%/30% 请求风险，下单时再按 5U 硬停止余量封顶"
+            "V5.4 仅放行有跨版本实盘正证据的回踩路线，单仓保证金可全进全出，但计划止损风险按路线封顶"
+            if v54_active
+            else "V5.3 按行情路由、相对排名与结构确认映射 12%/18%/24%/30% 请求风险，下单时再按 5U 硬停止余量封顶"
             if v53_active
             else "V5.2 按机会质量映射 12%/18%/24%/30% 请求风险，下单时再按 5U 硬停止余量封顶"
             if v52_active
@@ -1329,6 +1406,7 @@ def attach_v4_rankings(
     v50_active = strategy_supports(version, "v50_s30")
     v52_active = strategy_supports(version, "v52_evidence_edge")
     v53_active = strategy_supports(version, "v53_fusion")
+    v54_active = strategy_supports(version, "v54_history_router")
     if v50_active:
         v44_rank = float(config.get("opportunity_v50_min_rank_percentile", 0.85))
         v44_quality = float(config.get("opportunity_v50_min_quality_score", 52.0)) / 100
@@ -1340,6 +1418,10 @@ def attach_v4_rankings(
         v44_rank = float(config.get("opportunity_v53_min_rank_percentile", 0.85))
         v44_cost_ratio = float(config.get("opportunity_v53_min_gross_cost_multiple", 3.50))
         v44_confirmations_required = int(config.get("opportunity_v53_min_confirmations", 2))
+    if v54_active:
+        v44_rank = float(config.get("opportunity_v54_core_rank_percentile", 0.80))
+        v44_cost_ratio = float(config.get("opportunity_v54_min_gross_cost_multiple", 3.50))
+        v44_confirmations_required = int(config.get("opportunity_v54_min_confirmations", 2))
     if v48_active:
         v44_quality = float(config.get("opportunity_v48_min_quality_score", 56.0)) / 100
         v44_expected = float(config.get("opportunity_v48_min_expected_net_pct", 0.03))
@@ -1440,7 +1522,9 @@ def attach_v4_rankings(
         execution = candidate.get("execution_filter") or {}
         executable = not execution.get("enabled") or bool(execution.get("executable"))
         policy = _regime_policy(candidate, config)
-        calibration = adaptive_calibration(candidate, config) if strategy_supports(version, "adaptive_calibration") else {
+        calibration = adaptive_calibration(candidate, config) if (
+            strategy_supports(version, "adaptive_calibration") and not v54_active
+        ) else {
             "enabled": False,
             "relation": "legacy",
             "risk_multiplier": 1.0,
@@ -1464,7 +1548,9 @@ def attach_v4_rankings(
             not v52_active
             or features["cross_sectional_strength"]
             >= float(
-                config.get("opportunity_v53_min_cross_sectional_strength", 0.72)
+                config.get("opportunity_v54_min_cross_sectional_strength", 0.72)
+                if v54_active
+                else config.get("opportunity_v53_min_cross_sectional_strength", 0.72)
                 if v53_active
                 else config.get("opportunity_v52_min_cross_sectional_strength", 0.78)
             )
@@ -1494,7 +1580,9 @@ def attach_v4_rankings(
             candidate_min_cost_ratio = max(
                 candidate_min_cost_ratio,
                 float(
-                    config.get("opportunity_v53_min_gross_cost_multiple", 3.50)
+                    config.get("opportunity_v54_min_gross_cost_multiple", 3.50)
+                    if v54_active
+                    else config.get("opportunity_v53_min_gross_cost_multiple", 3.50)
                     if v53_active
                     else config.get("opportunity_v52_min_gross_cost_multiple", 3.50)
                 ),
@@ -1657,7 +1745,7 @@ def attach_v4_rankings(
         effective_v44_rank = v44_rank
         effective_v44_expected = v44_expected
         effective_v44_confirmations = v44_confirmations_required
-        if strategy_supports(version, "v51_setup_router"):
+        if strategy_supports(version, "v51_setup_router") and not v54_active:
             effective_v44_rank = {
                 "pullback": float(config.get("opportunity_v51_pullback_min_rank_percentile", 0.80)),
                 "prebreakout": float(config.get("opportunity_v51_prebreakout_min_rank_percentile", 0.82)),
@@ -1681,7 +1769,11 @@ def attach_v4_rankings(
                     effective_v44_confirmations,
                     int(config.get("opportunity_v51_panic_recovery_min_confirmations", 3)),
                 )
-        if v53_active:
+        if v54_active:
+            effective_v44_rank = v44_rank
+            effective_v44_expected = v44_expected
+            effective_v44_confirmations = v44_confirmations_required
+        elif v53_active:
             regime = _market_regime(candidate)
             route_rank = (
                 float(config.get("opportunity_v53_panic_min_rank_percentile", 0.95))
@@ -1978,7 +2070,7 @@ def attach_v4_rankings(
                 ),
             },
             "v53_fusion": {
-                "enabled": v53_active,
+                "enabled": v53_active and not v54_active,
                 "route": str(policy.get("scope") or "shadow_only"),
                 "market_regime": _market_regime(candidate),
                 "rank_floor": round(effective_v44_rank, 6),
@@ -1996,6 +2088,24 @@ def attach_v4_rankings(
                 "adaptive_action": str(
                     calibration.get("adjustment_action") or "继续积累当前版本证据"
                 ),
+            },
+            "v54_history_router": {
+                "enabled": v54_active,
+                "route": str(policy.get("scope") or "shadow_only"),
+                "market_regime": _market_regime(candidate),
+                "rank_floor": round(effective_v44_rank, 6),
+                "confirmations": v44_confirmations,
+                "confirmations_required": effective_v44_confirmations,
+                "cross_sectional_strength": round(features["cross_sectional_strength"], 6),
+                "cross_sectional_floor": float(
+                    config.get("opportunity_v54_min_cross_sectional_strength", 0.72)
+                ),
+                "gross_cost_multiple": round(float(model["cost_ratio"]), 6),
+                "gross_cost_floor": float(
+                    config.get("opportunity_v54_min_gross_cost_multiple", 3.50)
+                ),
+                "risk_cap_pct": float(policy.get("risk_cap_pct") or 0.0),
+                "historical_route": bool(policy.get("live_scope")),
             },
             "uncertainty_pct": round(model["uncertainty_pct"] * (1.0 - empirical_weight), 6),
             "model_win_probability": round(model["win_probability"], 6),

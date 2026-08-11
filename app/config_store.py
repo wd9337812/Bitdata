@@ -693,7 +693,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v5.3",
+    "opportunity_v4_strategy_version": "v5.4",
     "s0_moe_shadow_enabled": True,
     "s0_moe_runtime_model_enabled": False,
     "s0_moe_model_path": "",
@@ -998,6 +998,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # V5.3 observes release drawdown but does not turn it into a global S0
     # entry freeze. The 5U hard-stop and exchange-side protection remain hard.
     "opportunity_v53_release_drawdown_pause_enabled": False,
+    # V5.4 only promotes market/direction/setup combinations with positive
+    # cross-version live evidence. Other combinations remain shadow-only.
+    "opportunity_v54_core_rank_percentile": 0.80,
+    "opportunity_v54_min_cross_sectional_strength": 0.72,
+    "opportunity_v54_min_gross_cost_multiple": 3.50,
+    "opportunity_v54_min_confirmations": 2,
+    "opportunity_v54_core_max_risk_pct": 15.0,
+    "opportunity_v54_quiet_pullback_max_risk_pct": 10.0,
+    "opportunity_v54_mixed_pullback_max_risk_pct": 12.0,
     "market_tsmom_shadow_enabled": True,
     "market_tsmom_shadow_utc_hour": 0,
     "market_tsmom_shadow_minute_start": 3,

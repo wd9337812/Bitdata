@@ -33,7 +33,7 @@ def _loss_level(consecutive_losses: int) -> int:
 
 def _level_multiplier(level: int, config: dict[str, Any], *, v50_active: bool = False) -> float:
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
-    if version.startswith("v5.3"):
+    if version.startswith(("v5.3", "v5.4")):
         values = (
             float(config.get("opportunity_v50_loss_3_multiplier", 1.0)),
             float(config.get("opportunity_v50_loss_2_multiplier", 0.60)),
@@ -63,7 +63,7 @@ def _base_state(release_id: str, config: dict[str, Any], *, v50_active: bool = F
     version = str(config.get("opportunity_v4_strategy_version") or "").lower()
     initial_multiplier = (
         float(config.get("opportunity_v50_initial_multiplier", 1.0))
-        if version.startswith("v5.3")
+        if version.startswith(("v5.3", "v5.4"))
         else float(config.get("opportunity_v511_initial_multiplier", 0.50))
         if strategy_supports(version, "v511_incident_guard")
         else float(config.get("opportunity_v50_initial_multiplier", 1.0))
@@ -227,7 +227,7 @@ def s0_continuous_permit_status(
             result_multiplier,
             (
                 float(config.get("opportunity_v50_initial_multiplier", 1.0))
-                if version.lower().startswith("v5.3")
+                if version.lower().startswith(("v5.3", "v5.4"))
                 else float(config.get("opportunity_v511_initial_multiplier", 0.50))
                 if strategy_supports(version, "v511_incident_guard")
                 else float(config.get("opportunity_v50_initial_multiplier", 1.0))
