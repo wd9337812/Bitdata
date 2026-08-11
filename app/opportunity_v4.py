@@ -548,6 +548,7 @@ def _v48_reentry_policy(
     cohort_streak = int(local_circuit.get("live_loss_streak") or 0)
     episode_streak = int(episode.get("loss_streak") or 0)
     streak = max(cohort_streak, episode_streak)
+    recent_loss_count = int(episode.get("recent_loss_count") or 0)
     signal = candidate.get("signal") or {}
     phase = _entry_phase(candidate)
     volume = max(0.0, float(signal.get("volume_acceleration") or 1.0))
@@ -570,12 +571,18 @@ def _v48_reentry_policy(
         int(episode.get("recent_event_count") or 0)
         >= int(episode.get("recent_event_limit") or 3)
     )
+    # A real structural reset can relax duplicate-event handling, but it must
+    # not erase a fresh two-loss episode for the same symbol and direction.
+    hard_recent_losses = bool(incident_guard and recent_loss_count >= hard_losses)
     blocked = bool(
-        not structural_reset
-        and (
-            streak >= hard_losses
+        hard_recent_losses
+        or (
+            not structural_reset
+            and (
+                streak >= hard_losses
             or duplicate_event
             or event_limit_reached
+            )
         )
     )
     caution = bool(streak > 0 and not structural_reset and not blocked)
@@ -597,6 +604,8 @@ def _v48_reentry_policy(
         "live_loss_streak": streak,
         "cohort_loss_streak": cohort_streak,
         "episode_loss_streak": episode_streak,
+        "recent_loss_count": recent_loss_count,
+        "hard_recent_losses": hard_recent_losses,
         "duplicate_event": duplicate_event,
         "event_limit_reached": event_limit_reached,
         "recent_event_count": int(episode.get("recent_event_count") or 0),

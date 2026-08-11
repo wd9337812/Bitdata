@@ -161,6 +161,7 @@ def test_v511_tracks_v5_losses_across_setup_names(monkeypatch, tmp_path):
     )
 
     assert status["episode"]["loss_streak"] == 2
+    assert status["episode"]["recent_loss_count"] == 2
     assert status["episode"]["within_dedupe_window"] is True
     assert status["release_id"] == release_id
 

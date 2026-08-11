@@ -226,6 +226,13 @@ def reconcile_v4_local_circuit(
                 if int(value or 0) > 0
             ]
             close_times.append(close_time)
+            loss_times = [
+                int(value)
+                for value in list(episode.get("loss_times") or [])
+                if int(value or 0) > 0
+            ]
+            if net_pnl < 0:
+                loss_times.append(close_time)
             episode.update(
                 {
                     "episode_key": symbol_episode_key,
@@ -240,6 +247,9 @@ def reconcile_v4_local_circuit(
                         else 0
                     ),
                     "close_times": close_times[-12:],
+                    # Keep a small timestamped loss history so a V5 structural
+                    # reset cannot bypass two recent losses on the same side.
+                    "loss_times": loss_times[-12:],
                 }
             )
             episodes[symbol_episode_key] = episode
@@ -366,6 +376,16 @@ def candidate_local_circuit_status(
         int(value or 0) >= recent_cutoff
         for value in list(episode.get("close_times") or [])
     )
+    stored_loss_times = [
+        int(value)
+        for value in list(episode.get("loss_times") or [])
+        if int(value or 0) > 0
+    ]
+    recent_loss_count = sum(value >= recent_cutoff for value in stored_loss_times)
+    # Releases before this timestamp field existed still retain loss_streak.
+    # Use it only while the most recent close remains inside the same window.
+    if not stored_loss_times and last_close_time >= recent_cutoff:
+        recent_loss_count = int(episode.get("loss_streak") or 0)
     episode.update(
         {
             "within_dedupe_window": bool(
@@ -373,6 +393,7 @@ def candidate_local_circuit_status(
                 and now_ms - last_close_time <= dedupe_minutes * 60 * 1000
             ),
             "recent_event_count": recent_event_count,
+            "recent_loss_count": recent_loss_count,
             "recent_event_limit": int(
                 config.get("opportunity_v511_same_direction_max_events", 2)
                 if incident_guard

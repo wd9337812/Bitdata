@@ -466,6 +466,35 @@ def test_v511_reentry_uses_same_direction_incident_guard():
     assert result["dedupe_minutes"] == 120
 
 
+def test_v53_reentry_does_not_reset_two_recent_same_direction_losses():
+    candidate = _candidate("BEATUSDT", 0.95, 1.0)
+    candidate["signal"].update(
+        {"volume_acceleration": 1.20, "breakout_extension_atr": 0.20, "entry_phase": "RETEST"}
+    )
+    candidate["opportunity_v3"]["medium_path_efficiency"] = 0.40
+    config = {
+        "opportunity_v4_strategy_version": "v5.3",
+        "opportunity_v48_reentry_enabled": True,
+        "opportunity_v511_same_direction_hard_losses": 2,
+    }
+    local = {
+        "live_loss_streak": 0,
+        "episode": {
+            "loss_streak": 2,
+            "recent_loss_count": 2,
+            "within_dedupe_window": False,
+            "recent_event_count": 2,
+            "recent_event_limit": 3,
+        },
+    }
+
+    result = _v48_reentry_policy(candidate, _model_features(candidate, config), local, config)
+
+    assert result["structural_reset"] is True
+    assert result["hard_recent_losses"] is True
+    assert result["blocked"] is True
+
+
 def test_v462_rewards_momentum_and_penalizes_pullback_before_smart_flow():
     momentum = _candidate("MOMENTUMUSDT", 0.90, 2.0)
     momentum["entry_type"] = "v3_momentum"
