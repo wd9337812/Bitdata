@@ -243,7 +243,7 @@ def test_v4_shadow_summary_counts_one_decision_per_opportunity(monkeypatch, tmp_
     }
     candidate = {
         **_candidate(100),
-        "strategy_family": "extreme_v4_roll",
+        "strategy_family": "extreme_v5_roll",
         "strategy_version": "v5.4",
         "strategy_role": "active",
         "evidence_type": "decision",

@@ -827,7 +827,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             dict(row)
             for row in conn.execute(
                 "SELECT * FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ? "
-                "AND strategy_role = 'active' ORDER BY id DESC LIMIT ?",
+                "ORDER BY id DESC LIMIT ?",
                 (evidence_family, evidence_version, max(500, int(config.get("opportunity_v3_calibration_max_shadow_trades", 1500)))),
             ).fetchall()
         ]
@@ -844,10 +844,10 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
                 ),
             ).fetchall()
         ]
-    # The global panel is research telemetry.  For V4/V5 it must use the same
-    # independent-decision definition as release evidence; otherwise repeated
-    # scans of one event make the UI claim a false sample size.
-    stats = _shadow_stats(_independent_decision_rows(aggregate_rows)) if configured_v4_release else _shadow_stats(aggregate_rows)
+    # For V4/V5 the top-level Dashboard metrics describe the release currently
+    # being evaluated. Historical releases stay available in the comparison
+    # table, but cannot make the current release look more sampled than it is.
+    stats = _shadow_stats(active_rows) if configured_v4_release else _shadow_stats(aggregate_rows)
     by_strategy = []
     for row in strategy_rows:
         item = dict(row)
@@ -901,6 +901,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
     # controls remain visible by evidence type, but cannot inflate live admission.
     if configured_v4_release:
         active_rows = _independent_decision_rows(active_rows)
+        release_decision_rows = list(active_rows)
         if strategy_supports(evidence_version, "continuous_permit"):
             eligible_active_rows = filter_live_eligible_v4_shadows(
                 active_rows,
@@ -914,7 +915,10 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             research_parallel_excluded = 0
     else:
         research_parallel_excluded = 0
+        release_decision_rows = list(active_rows)
     candidate_rows = _independent_decision_rows(candidate_rows)
+    if configured_v4_release:
+        stats = _shadow_stats(release_decision_rows)
     active_closed = [row for row in active_rows if str(row.get("status")) == "CLOSED"]
     candidate_closed = [row for row in candidate_rows if str(row.get("status")) == "CLOSED"]
     shadow_window = int(config.get("performance_guard_shadow_window_trades", 100))
@@ -949,6 +953,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             "strategy_version": evidence_version,
             "strategy_role": ACTIVE_ROLE,
             "all": _shadow_stats(active_rows),
+            "decision_evidence": _shadow_stats(release_decision_rows),
             "recent": _shadow_stats(active_closed[:shadow_window]),
             "recovery": _shadow_stats(active_closed[:recovery_window]),
             "primary_evidence_type": "decision"
