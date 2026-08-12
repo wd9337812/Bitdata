@@ -706,6 +706,7 @@ class TradingConfig(BaseModel):
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
     opportunity_v4_strategy_version: str = "v5.4"
+    opportunity_v4_evidence_version: str = ""
     s0_moe_shadow_enabled: bool = True
     s0_moe_runtime_model_enabled: bool = False
     s0_moe_model_path: str = ""

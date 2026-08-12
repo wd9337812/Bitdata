@@ -229,3 +229,41 @@ def test_v52_can_use_full_thirty_percent_when_equity_has_headroom():
 
     assert result["target_risk_pct"] == 30.0
     assert result["stressed_risk_pct"] <= 30.0
+
+
+def test_v54_route_cap_cannot_be_overridden_by_full_bet_profile_cap():
+    candidate = {
+        "strategy_version": "v5.4",
+        "opportunity_v4": {
+            "strategy_version": "v5.4",
+            "full_bet_admitted": True,
+            "estimated_cost_pct": 0.14,
+            "v54_history_router": {"risk_cap_pct": 12.0},
+        },
+    }
+    config = {
+        **_config(),
+        "opportunity_v4_strategy_version": "v5.4",
+        "opportunity_v50_margin_pct": 90.0,
+        "opportunity_v50_min_risk_pct": 12.0,
+        "opportunity_v50_max_risk_pct": 30.0,
+        "opportunity_v50_stressed_risk_cap_pct": 30.0,
+        "opportunity_v50_min_leverage": 3,
+        "opportunity_v50_max_leverage": 10,
+        "opportunity_v50_cost_stress_multiplier": 1.5,
+    }
+
+    result = build_s0_full_bet_sizing(
+        equity=20.0,
+        available_balance=20.0,
+        entry=100.0,
+        stop=99.0,
+        requested_risk_pct=30.0,
+        candidate=candidate,
+        config=config,
+    )
+
+    assert result["route_risk_cap_pct"] == 12.0
+    assert result["configured_maximum_risk_pct"] == 12.0
+    assert result["target_risk_pct"] == 12.0
+    assert result["stressed_risk_pct"] <= 12.0

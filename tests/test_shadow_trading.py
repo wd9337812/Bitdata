@@ -230,6 +230,49 @@ def test_v4_decision_exploration_and_control_are_separate(monkeypatch, tmp_path)
     assert duplicate_after_upgrade["opened"] == 0
 
 
+def test_v4_shadow_summary_counts_one_decision_per_opportunity(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        "shadow_trading_enabled": True,
+        "opportunity_v4_strategy_version": "v5.4",
+        "opportunity_v4_evidence_version": "v5.4",
+        "shadow_dedupe_minutes": 0,
+        "shadow_max_hold_minutes": 120,
+        "shadow_reference_notional_usdt": 20,
+        "shadow_round_trip_cost_pct": 0.12,
+    }
+    candidate = {
+        **_candidate(100),
+        "strategy_family": "extreme_v4_roll",
+        "strategy_version": "v5.4",
+        "strategy_role": "active",
+        "evidence_type": "decision",
+        "opportunity_v4": {"shadow_eligible": True, "score": 90},
+    }
+    assert update_shadow_trades([candidate], config)["opened"] == 1
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM shadow_trades").fetchone()
+        duplicate = dict(row)
+        duplicate.pop("id", None)
+        duplicate["dedupe_key"] = "duplicate-decision"
+        duplicate["status"] = "CLOSED"
+        duplicate["net_pnl"] = 9.0
+        duplicate["estimated_cost"] = 0.1
+        columns = ", ".join(duplicate)
+        values = ", ".join("?" for _ in duplicate)
+        conn.execute(f"INSERT INTO shadow_trades ({columns}) VALUES ({values})", tuple(duplicate.values()))
+        conn.execute(
+            "UPDATE shadow_trades SET status = 'CLOSED', net_pnl = -1, estimated_cost = 0.1 WHERE id = ?",
+            (row["id"],),
+        )
+        conn.commit()
+
+    summary = shadow_summary(config=config)
+    assert summary["stats"]["closed"] == 1
+    assert summary["stats"]["net_pnl"] == 9.0
+    assert summary["active_release"]["independent_opportunity_only"] is True
+
+
 def test_v43_shadow_counts_one_continuous_episode_until_price_resets(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     candidate = {

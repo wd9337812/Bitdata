@@ -708,29 +708,52 @@ def _shadow_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _independent_decision_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep one latest decision row per opportunity for release evidence.
+
+    A scan can observe the same opportunity more than once.  Those rows remain
+    useful as raw telemetry, but treating them as separate trades inflates PF,
+    wins, and the sample count used to judge a release.
+    """
+    latest: dict[str, dict[str, Any]] = {}
+    without_opportunity: list[dict[str, Any]] = []
+    for row in rows:
+        if str(row.get("evidence_type") or "decision") != "decision":
+            continue
+        opportunity_id = str(row.get("opportunity_id") or "").strip()
+        if not opportunity_id:
+            without_opportunity.append(row)
+            continue
+        previous = latest.get(opportunity_id)
+        if previous is None or int(row.get("id") or 0) > int(previous.get("id") or 0):
+            latest[opportunity_id] = row
+    return [*latest.values(), *without_opportunity]
+
+
 def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or {}
     initialize_strategy_releases(config)
     current_family = active_family(config)
     current_version = active_release_version(config)
     candidate_version = challenger_version(config)
-    v4_live = current_family in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY}
+    paused_evidence_version = str(config.get("opportunity_v4_evidence_version") or "")
+    configured_v4_release = bool(
+        current_family in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY}
+        or paused_evidence_version.lower().startswith(("v4.", "v5."))
+    )
+    evidence_family = (
+        V5_STRATEGY_FAMILY
+        if candidate_version.lower().startswith("v5.")
+        else V4_STRATEGY_FAMILY
+        if candidate_version.lower().startswith("v4.")
+        else current_family
+    )
+    evidence_version = paused_evidence_version or (candidate_version if configured_v4_release else current_version)
     with connect() as conn:
         ensure_shadow_tables(conn)
         migrate_shadow_release_metadata(conn, config)
         rows = conn.execute("SELECT * FROM shadow_trades ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
-        aggregate = conn.execute(
-            """
-            SELECT
-                COUNT(*) AS total,
-                SUM(CASE WHEN status = 'OPEN' THEN 1 ELSE 0 END) AS active,
-                SUM(CASE WHEN status = 'CLOSED' THEN 1 ELSE 0 END) AS closed,
-                SUM(CASE WHEN status = 'CLOSED' AND net_pnl > 0 THEN 1 ELSE 0 END) AS wins,
-                SUM(CASE WHEN status = 'CLOSED' THEN net_pnl ELSE 0 END) AS net_pnl,
-                SUM(CASE WHEN status = 'CLOSED' THEN estimated_cost ELSE 0 END) AS cost
-            FROM shadow_trades
-            """
-        ).fetchone()
+        aggregate_rows = [dict(row) for row in conn.execute("SELECT * FROM shadow_trades").fetchall()]
         strategy_rows = conn.execute(
             """
             SELECT
@@ -780,7 +803,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ?
             GROUP BY COALESCE(evidence_type, 'decision')
             """,
-            (current_family if v4_live else V4_STRATEGY_FAMILY, candidate_version),
+            (evidence_family, evidence_version),
         ).fetchall()
         admission_lane_rows = conn.execute(
             """
@@ -798,14 +821,14 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
               AND COALESCE(evidence_type, 'decision') = 'decision'
             GROUP BY COALESCE(NULLIF(json_extract(payload, '$.admission_lane'), ''), 'unclassified')
             """,
-            (current_family if v4_live else V4_STRATEGY_FAMILY, candidate_version),
+            (evidence_family, evidence_version),
         ).fetchall()
         active_rows = [
             dict(row)
             for row in conn.execute(
                 "SELECT * FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ? "
                 "AND strategy_role = 'active' ORDER BY id DESC LIMIT ?",
-                (current_family, current_version, max(500, int(config.get("opportunity_v3_calibration_max_shadow_trades", 1500)))),
+                (evidence_family, evidence_version, max(500, int(config.get("opportunity_v3_calibration_max_shadow_trades", 1500)))),
             ).fetchall()
         ]
         candidate_rows = [
@@ -814,19 +837,17 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
                 "SELECT * FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ? "
                 "AND strategy_role = ? ORDER BY id DESC LIMIT ?",
                 (
-                    current_family if v4_live else V4_STRATEGY_FAMILY,
-                    candidate_version,
-                    "active" if v4_live else "challenger",
+                    evidence_family,
+                    evidence_version,
+                    "active" if configured_v4_release else "challenger",
                     max(500, int(config.get("opportunity_v4_admission_min_trades", 40)) * 10),
                 ),
             ).fetchall()
         ]
-    stats = dict(aggregate) if aggregate else {}
-    for key in ["total", "active", "closed", "wins", "net_pnl", "cost"]:
-        stats[key] = stats.get(key) or 0
-    closed = int(stats.get("closed") or 0)
-    wins = int(stats.get("wins") or 0)
-    stats["win_rate"] = wins / closed * 100 if closed else 0.0
+    # The global panel is research telemetry.  For V4/V5 it must use the same
+    # independent-decision definition as release evidence; otherwise repeated
+    # scans of one event make the UI claim a false sample size.
+    stats = _shadow_stats(_independent_decision_rows(aggregate_rows)) if configured_v4_release else _shadow_stats(aggregate_rows)
     by_strategy = []
     for row in strategy_rows:
         item = dict(row)
@@ -878,12 +899,12 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         trades.append(item)
     # V4 primary performance uses only decision shadows. Exploration and paired
     # controls remain visible by evidence type, but cannot inflate live admission.
-    if current_family in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY}:
-        active_rows = [row for row in active_rows if str(row.get("evidence_type") or "decision") == "decision"]
-        if strategy_supports(current_version, "continuous_permit"):
+    if configured_v4_release:
+        active_rows = _independent_decision_rows(active_rows)
+        if strategy_supports(evidence_version, "continuous_permit"):
             eligible_active_rows = filter_live_eligible_v4_shadows(
                 active_rows,
-                strategy_version=current_version,
+                strategy_version=evidence_version,
                 allow_unclassified_legacy=False,
             )
             executable_active_rows = executable_single_position_shadows(eligible_active_rows)
@@ -893,7 +914,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             research_parallel_excluded = 0
     else:
         research_parallel_excluded = 0
-    candidate_rows = [row for row in candidate_rows if str(row.get("evidence_type") or "decision") == "decision"]
+    candidate_rows = _independent_decision_rows(candidate_rows)
     active_closed = [row for row in active_rows if str(row.get("status")) == "CLOSED"]
     candidate_closed = [row for row in candidate_rows if str(row.get("status")) == "CLOSED"]
     shadow_window = int(config.get("performance_guard_shadow_window_trades", 100))
@@ -924,22 +945,23 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         "by_evidence_type": by_evidence_type,
         "by_admission_lane": by_admission_lane,
         "active_release": {
-            "strategy_family": current_family,
-            "strategy_version": current_version,
+            "strategy_family": evidence_family,
+            "strategy_version": evidence_version,
             "strategy_role": ACTIVE_ROLE,
             "all": _shadow_stats(active_rows),
             "recent": _shadow_stats(active_closed[:shadow_window]),
             "recovery": _shadow_stats(active_closed[:recovery_window]),
             "primary_evidence_type": "decision"
-            if current_family in {V4_STRATEGY_FAMILY, V5_STRATEGY_FAMILY}
+            if configured_v4_release
             else "all",
+            "independent_opportunity_only": configured_v4_release,
             "execution_scope": "single_position_non_overlapping"
-            if strategy_supports(current_version, "continuous_permit")
+            if strategy_supports(evidence_version, "continuous_permit")
             else "all_eligible_decisions",
             "research_parallel_excluded": research_parallel_excluded,
         },
-        "challenger_release": None if v4_live else {
-            "strategy_family": current_family if v4_live else V4_STRATEGY_FAMILY,
+        "challenger_release": None if configured_v4_release else {
+            "strategy_family": V4_STRATEGY_FAMILY,
             "strategy_version": candidate_version,
             "strategy_role": CHALLENGER_ROLE,
             "all": candidate_stats,

@@ -71,6 +71,11 @@ def build_s0_full_bet_sizing(
     margin_budget = capital * margin_pct / 100
 
     opportunity = (candidate or {}).get("opportunity_v4") or {}
+    # A release route can be deliberately narrower than the S0 full-bet profile.
+    # Preserve that route cap all the way through final sizing: the profile-wide
+    # 30% ceiling is an upper bound, never permission to override a route cap.
+    route = opportunity.get("v54_history_router") or opportunity.get("v53_fusion") or {}
+    route_risk_cap = float(route.get("risk_cap_pct") or 0.0)
     observed_cost_pct = max(
         float(opportunity.get("estimated_cost_pct") or 0.0),
         float((candidate or {}).get("estimated_cost_pct") or 0.0),
@@ -88,6 +93,8 @@ def build_s0_full_bet_sizing(
         hard_risk_cap,
         max(0.01, float(config.get(f"{prefix}_max_risk_pct", default_cap))),
     )
+    if route_risk_cap > 0:
+        configured_maximum_risk = min(configured_maximum_risk, route_risk_cap)
     hard_stop_equity = max(0.0, float(config.get("hard_stop_equity", 0.0)))
     hard_stop_reserve = (
         max(0.0, float(config.get("opportunity_v52_hard_stop_reserve_usdt", 0.15)))
@@ -169,6 +176,7 @@ def build_s0_full_bet_sizing(
         "stressed_risk_pct": round(stressed_risk_pct, 6),
         "hard_risk_cap_pct": round(hard_risk_cap, 6),
         "configured_maximum_risk_pct": round(configured_maximum_risk, 6),
+        "route_risk_cap_pct": round(route_risk_cap, 6) if route_risk_cap > 0 else None,
         "hard_stop_headroom_cap_pct": round(hard_stop_headroom_pct, 6),
         "hard_stop_equity": round(hard_stop_equity, 8),
         "hard_stop_reserve_usdt": round(hard_stop_reserve, 8),

@@ -694,6 +694,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
     "opportunity_v4_strategy_version": "v5.4",
+    # When an active V4/V5 release is temporarily paused, keep this version so
+    # the Dashboard and evidence pipeline continue to evaluate the paused release.
+    "opportunity_v4_evidence_version": "",
     "s0_moe_shadow_enabled": True,
     "s0_moe_runtime_model_enabled": False,
     "s0_moe_model_path": "",

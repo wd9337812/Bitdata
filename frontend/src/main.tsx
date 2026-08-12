@@ -1562,11 +1562,11 @@ function ShadowTradingPanel({ data }: { data: ShadowData }) {
           </div>
         </div>
         <div className="metrics">
-          <MetricCard title="记录机会" value={fmt(stats.total, 0)} sub="去掉重复信号后的数量" />
+          <MetricCard title="记录机会" value={fmt(stats.total, 0)} sub={data?.active_release?.independent_opportunity_only ? "当前版本：决策型独立机会" : "去掉重复信号后的数量"} />
           <MetricCard title="正在观察" value={fmt(stats.active, 0)} sub="还没有碰到模拟止盈或止损" />
           <MetricCard title="已经结束" value={fmt(stats.closed, 0)} />
           <MetricCard title="模拟胜率" value={`${fmt(stats.win_rate, 1)}%`} sub="样本少时只供观察" />
-          <MetricCard title="全部历史净收益" value={`${fmt(stats.net_pnl, 4)} U`} sub={`包含归档版本；已扣模拟成本 ${fmt(stats.cost, 4)} U`} tone={Number(stats.net_pnl || 0) >= 0 ? "positive" : "negative"} />
+          <MetricCard title="影子净收益" value={`${fmt(stats.net_pnl, 4)} U`} sub={`${data?.active_release?.independent_opportunity_only ? "决策型独立机会" : "全部历史"}；已扣模拟成本 ${fmt(stats.cost, 4)} U`} tone={Number(stats.net_pnl || 0) >= 0 ? "positive" : "negative"} />
         </div>
       </div>
       <div className="panel table-wrap">
