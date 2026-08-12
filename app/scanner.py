@@ -26,7 +26,7 @@ from app.opportunity_queue import read_opportunities
 from app.opportunity_v4 import attach_v4_rankings
 from app.s0_moe import attach_moe_shadow
 from app.position_sizing import effective_position_risk
-from app.s0_full_bet import s0_full_bet_profile_active
+from app.s0_full_bet import is_s0_full_bet, s0_full_bet_profile_active
 from app.scalp_engine import build_scalp_signal
 from app.shadow_trading import active_shadow_symbols
 from app.smart_flow import enrich_smart_flow_candidates
@@ -1909,7 +1909,7 @@ def _apply_v4_live_selection(
     version_label = version.upper()
     strategy_family = strategy_family_for_version(version)
     v50_active = strategy_supports(version, "v50_s30")
-    full_bet = bool(strategy_supports(version, "full_bet") and v4.get("full_bet_admitted"))
+    full_bet = is_s0_full_bet(candidate, config)
     signal = dict(candidate.get("signal") or {})
     if v4.get("protection_profile"):
         signal["protection_profile"] = dict(v4["protection_profile"])
@@ -1991,7 +1991,11 @@ def _apply_v4_live_selection(
         result["quality_risk_reasons"] = [f"{version.upper()} 当前轮相对排名与五项确认通过"]
         result["symbol_quality"] = {
             **(result.get("symbol_quality") or {}),
-            "tier": f"{version.upper()}-FULL-BET",
+            "tier": (
+                f"{version.upper()}-FULL-BET"
+                if v4.get("full_bet_admitted")
+                else f"{version.upper()}-LIMITED-EXPLORATION"
+            ),
             "quality_risk_multiplier": 1.0,
             "quality_risk_reasons": [str(v4.get("reason") or f"{version.upper()} 独立排序")],
             "continuous_position_confidence": v4.get("position_confidence") or {},
@@ -2005,7 +2009,7 @@ def _apply_v4_live_selection(
             "type": "v50_s30_dynamic_risk" if v50_active else "v44_full_bet_dynamic_risk",
             "multiplier": 1.0,
             "v4_admission_multiplier": 1.0,
-            "admission_lane": "full_bet",
+            "admission_lane": v4.get("admission_lane") or "full_bet",
         }
     return result
 
@@ -2827,7 +2831,7 @@ def scan_growth_candidates(
         1
         for candidate in candidates
         if (
-            (candidate.get("opportunity_v4") or {}).get("full_bet_admitted")
+            (candidate.get("opportunity_v4") or {}).get("admitted")
             if v44_active
             else (candidate.get("opportunity_v4") or {}).get("canary_eligible")
         )

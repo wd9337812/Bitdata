@@ -693,7 +693,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v5.4",
+    "opportunity_v4_strategy_version": "v5.5",
     # When an active V4/V5 release is temporarily paused, keep this version so
     # the Dashboard and evidence pipeline continue to evaluate the paused release.
     "opportunity_v4_evidence_version": "",
@@ -1010,6 +1010,23 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v54_core_max_risk_pct": 15.0,
     "opportunity_v54_quiet_pullback_max_risk_pct": 10.0,
     "opportunity_v54_mixed_pullback_max_risk_pct": 12.0,
+    # V5.5 keeps V5.4's narrow core routes, but adds a separately labelled
+    # candidate-level exploration lane. The lane is never admitted by a global
+    # shadow PF: it must pass the current trigger, cost and liquidity hard gates.
+    "opportunity_v55_core_rank_percentile": 0.80,
+    "opportunity_v55_min_cross_sectional_strength": 0.72,
+    "opportunity_v55_min_gross_cost_multiple": 3.50,
+    "opportunity_v55_min_confirmations": 2,
+    "opportunity_v55_core_max_risk_pct": 15.0,
+    "opportunity_v55_quiet_pullback_max_risk_pct": 10.0,
+    "opportunity_v55_mixed_pullback_max_risk_pct": 12.0,
+    "opportunity_v55_exploration_enabled": True,
+    "opportunity_v55_exploration_rank_percentile": 0.72,
+    "opportunity_v55_exploration_min_quality_score": 54.0,
+    "opportunity_v55_exploration_min_cross_sectional_strength": 0.64,
+    "opportunity_v55_exploration_min_gross_cost_multiple": 2.40,
+    "opportunity_v55_exploration_min_confirmations": 3,
+    "opportunity_v55_exploration_max_risk_pct": 8.0,
     "market_tsmom_shadow_enabled": True,
     "market_tsmom_shadow_utc_hour": 0,
     "market_tsmom_shadow_minute_start": 3,

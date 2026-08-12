@@ -33,6 +33,8 @@ def admission_lane_from_row(row: dict[str, Any]) -> str:
 
 def live_evidence_lanes(strategy_version: str) -> frozenset[str]:
     version = str(strategy_version or "").strip().lower()
+    if strategy_supports(version, "v55_candidate_exploration"):
+        return frozenset({"full_bet", "limited_exploration"})
     if strategy_supports(version, "full_bet"):
         return V44_LIVE_ADMISSION_LANES
     return LEGACY_LIVE_ADMISSION_LANES

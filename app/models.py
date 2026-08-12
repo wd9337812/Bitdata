@@ -705,7 +705,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v5.4"
+    opportunity_v4_strategy_version: str = "v5.5"
     opportunity_v4_evidence_version: str = ""
     s0_moe_shadow_enabled: bool = True
     s0_moe_runtime_model_enabled: bool = False
@@ -1013,6 +1013,20 @@ class TradingConfig(BaseModel):
     opportunity_v54_core_max_risk_pct: float = Field(default=15.0, ge=0.01, le=100)
     opportunity_v54_quiet_pullback_max_risk_pct: float = Field(default=10.0, ge=0.01, le=100)
     opportunity_v54_mixed_pullback_max_risk_pct: float = Field(default=12.0, ge=0.01, le=100)
+    opportunity_v55_core_rank_percentile: float = Field(default=0.80, ge=0, le=1)
+    opportunity_v55_min_cross_sectional_strength: float = Field(default=0.72, ge=0, le=1)
+    opportunity_v55_min_gross_cost_multiple: float = Field(default=3.50, ge=1, le=1000)
+    opportunity_v55_min_confirmations: int = Field(default=2, ge=1, le=5)
+    opportunity_v55_core_max_risk_pct: float = Field(default=15.0, ge=0.01, le=100)
+    opportunity_v55_quiet_pullback_max_risk_pct: float = Field(default=10.0, ge=0.01, le=100)
+    opportunity_v55_mixed_pullback_max_risk_pct: float = Field(default=12.0, ge=0.01, le=100)
+    opportunity_v55_exploration_enabled: bool = True
+    opportunity_v55_exploration_rank_percentile: float = Field(default=0.72, ge=0, le=1)
+    opportunity_v55_exploration_min_quality_score: float = Field(default=54.0, ge=0, le=100)
+    opportunity_v55_exploration_min_cross_sectional_strength: float = Field(default=0.64, ge=0, le=1)
+    opportunity_v55_exploration_min_gross_cost_multiple: float = Field(default=2.40, ge=1, le=1000)
+    opportunity_v55_exploration_min_confirmations: int = Field(default=3, ge=1, le=5)
+    opportunity_v55_exploration_max_risk_pct: float = Field(default=8.0, ge=0.01, le=100)
     opportunity_v4_evidence_lookback_hours: float = Field(default=168, ge=1, le=8760)
     opportunity_v4_evidence_max_trades: int = Field(default=5000, ge=100, le=100000)
     opportunity_v4_evidence_cache_seconds: int = Field(default=60, ge=1, le=3600)

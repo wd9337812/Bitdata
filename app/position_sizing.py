@@ -175,7 +175,7 @@ def effective_position_risk(
     target = target or {}
     raw_risk = max(0.0, float(candidate_risk_pct))
     v4 = candidate.get("opportunity_v4") or {}
-    full_bet_applied = is_s0_full_bet(candidate, config) and bool(v4.get("full_bet_admitted"))
+    full_bet_applied = is_s0_full_bet(candidate, config)
     position_confidence = v4.get("position_confidence") or {}
     continuous_target = position_confidence.get("target_initial_risk_pct")
     release_fallback_active = bool(config.get("_release_fallback_active")) and not full_bet_applied

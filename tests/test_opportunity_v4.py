@@ -118,6 +118,8 @@ def test_v53_fusion_weights_and_capabilities_are_isolated():
     assert strategy_supports("v5.3", "hard_stop_headroom") is True
     assert strategy_supports("v5.2", "v53_fusion") is False
     assert strategy_supports("v5.4", "v54_history_router") is True
+    assert strategy_supports("v5.5", "v54_history_router") is True
+    assert strategy_supports("v5.5", "v55_candidate_exploration") is True
 
 
 def test_v53_routes_direction_with_market_regime():
@@ -186,6 +188,64 @@ def test_v54_position_confidence_respects_history_route_risk_cap():
 
     assert confidence["method"] == "s0_full_bet_v54_history_router"
     assert confidence["target_initial_risk_pct"] <= 15.0
+
+
+def test_v55_keeps_core_routes_and_adds_limited_candidate_exploration():
+    core = _candidate("SHORTUSDT", 0.95, 2.0)
+    core["direction"] = "SHORT"
+    core["signal"]["signal"] = "SHORT"
+    core["entry_type"] = "v3_pullback"
+    core["market_state"]["state"] = "broad_down"
+    core["opportunity_v3"]["market_regime"] = "broad_down"
+    config = {
+        "opportunity_v4_strategy_version": "v5.5",
+        "opportunity_v44_full_bet_enabled": True,
+        "opportunity_v55_exploration_enabled": True,
+    }
+    assert _regime_policy(core, config)["scope"] == "v55_broad_down_short_pullback_core"
+
+    exploration = _candidate("LONGUSDT", 0.95, 2.0)
+    exploration["entry_type"] = "v3_breakout"
+    policy = _regime_policy(exploration, config)
+    assert policy["scope"] == "v55_broad_up_long_limited_exploration"
+    assert policy["live_scope"] is False
+    assert policy["exploration_scope"] is True
+    assert policy["risk_cap_pct"] == 8.0
+
+
+def test_v55_candidate_exploration_can_be_admitted_without_global_pf(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    candidate = _candidate("LONGUSDT", 0.99, 2.0)
+    candidate["entry_type"] = "v3_breakout"
+    config = {
+        "opportunity_v4_strategy_version": "v5.5",
+        "opportunity_v4_live_enabled": True,
+        "opportunity_v44_full_bet_enabled": True,
+        "opportunity_v50_min_quality_score": 0.0,
+        "opportunity_v50_min_expected_net_pct": -10.0,
+        "opportunity_v50_min_lower_expectancy_pct": -10.0,
+        "opportunity_v55_core_rank_percentile": 1.0,
+        "opportunity_v55_min_cross_sectional_strength": 0.0,
+        "opportunity_v55_min_gross_cost_multiple": 1.0,
+        "opportunity_v55_min_confirmations": 2,
+        "opportunity_v55_exploration_enabled": True,
+        "opportunity_v55_exploration_rank_percentile": 0.0,
+        "opportunity_v55_exploration_min_quality_score": 0.0,
+        "opportunity_v55_exploration_min_cross_sectional_strength": 0.0,
+        "opportunity_v55_exploration_min_gross_cost_multiple": 1.0,
+        "opportunity_v55_exploration_min_confirmations": 2,
+        "opportunity_v48_exhaustion_enabled": False,
+        "opportunity_v48_reentry_enabled": False,
+        "opportunity_v48_local_evidence_enabled": False,
+        "opportunity_v53_adaptive_enabled": False,
+    }
+
+    attach_v4_rankings([candidate], config)
+    opportunity = candidate["opportunity_v4"]
+    assert opportunity["admitted"] is True
+    assert opportunity["admission_lane"] == "limited_exploration"
+    assert opportunity["v55_exploration_admitted"] is True
+    assert opportunity["v55_candidate_exploration"]["risk_cap_pct"] == 8.0
 
 
 def test_v53_uses_quieter_market_rank_floor_and_current_schema(monkeypatch, tmp_path):

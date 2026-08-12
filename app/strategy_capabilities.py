@@ -62,7 +62,7 @@ def strategy_supports(value: Any, capability: str) -> bool:
             "direct_live",
             "v50_s30",
         }
-        if raw_version.startswith(("v5.1", "v5.2", "v5.3", "v5.4")):
+        if raw_version.startswith(("v5.1", "v5.2", "v5.3", "v5.4", "v5.5")):
             supported.update(
                 {
                     "v51_candidate_regime",
@@ -70,14 +70,16 @@ def strategy_supports(value: Any, capability: str) -> bool:
                     "event_group_dedupe",
                 }
             )
-        if raw_version.startswith(("v5.1.1", "v5.2", "v5.3", "v5.4")):
+        if raw_version.startswith(("v5.1.1", "v5.2", "v5.3", "v5.4", "v5.5")):
             supported.update({"exhaustion_reentry", "v511_incident_guard"})
-        if raw_version.startswith(("v5.2", "v5.3", "v5.4")):
+        if raw_version.startswith(("v5.2", "v5.3", "v5.4", "v5.5")):
             supported.update({"v52_evidence_edge", "episode_evidence", "hard_stop_headroom"})
-        if raw_version.startswith(("v5.3", "v5.4")):
+        if raw_version.startswith(("v5.3", "v5.4", "v5.5")):
             supported.update({"v53_fusion", "adaptive_calibration", "global_adaptive", "global_market"})
-        if raw_version.startswith("v5.4"):
+        if raw_version.startswith(("v5.4", "v5.5")):
             supported.add("v54_history_router")
+        if raw_version.startswith("v5.5"):
+            supported.add("v55_candidate_exploration")
         return capability in supported
     if capability == "v472_router":
         return raw_version.startswith(("v4.7.2", "v4.7.3", "v4.7.4"))

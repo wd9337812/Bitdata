@@ -857,11 +857,12 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
     v50_active = strategy_supports(version, "v50_s30")
     v53_active = strategy_supports(version, "v53_fusion")
     v54_active = strategy_supports(version, "v54_history_router")
+    v55_active = strategy_supports(version, "v55_candidate_exploration")
     if v54_active:
         base = {
             "market_phase": regime,
             "canary_scope": True,
-            "exploration_scope": False,
+            "exploration_scope": bool(v55_active),
             "trend_aligned": trend_aligned,
         }
         if (
@@ -873,9 +874,9 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
         ):
             return {
                 **base,
-                "scope": "v54_broad_down_short_pullback_core",
+                "scope": "v55_broad_down_short_pullback_core" if v55_active else "v54_broad_down_short_pullback_core",
                 "live_scope": True,
-                "risk_cap_pct": float(config.get("opportunity_v54_core_max_risk_pct", 15.0)),
+                "risk_cap_pct": float(config.get("opportunity_v55_core_max_risk_pct" if v55_active else "opportunity_v54_core_max_risk_pct", 15.0)),
                 "reason": "V5.4 历史核心：广泛下跌中的顺势做空回踩",
             }
         if (
@@ -887,10 +888,10 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
         ):
             return {
                 **base,
-                "scope": "v54_quiet_long_pullback_core",
+                "scope": "v55_quiet_long_pullback_core" if v55_active else "v54_quiet_long_pullback_core",
                 "live_scope": True,
                 "risk_cap_pct": float(
-                    config.get("opportunity_v54_quiet_pullback_max_risk_pct", 10.0)
+                    config.get("opportunity_v55_quiet_pullback_max_risk_pct" if v55_active else "opportunity_v54_quiet_pullback_max_risk_pct", 10.0)
                 ),
                 "reason": "V5.4 历史核心：静市中的趋势对齐做多回踩",
             }
@@ -903,18 +904,40 @@ def _regime_policy(candidate: dict[str, Any], config: dict[str, Any] | None = No
         ):
             return {
                 **base,
-                "scope": "v54_mixed_long_pullback_core",
+                "scope": "v55_mixed_long_pullback_core" if v55_active else "v54_mixed_long_pullback_core",
                 "live_scope": True,
                 "risk_cap_pct": float(
-                    config.get("opportunity_v54_mixed_pullback_max_risk_pct", 12.0)
+                    config.get("opportunity_v55_mixed_pullback_max_risk_pct" if v55_active else "opportunity_v54_mixed_pullback_max_risk_pct", 12.0)
                 ),
                 "reason": "V5.4 历史核心：混合行情中的趋势对齐做多回踩",
             }
+        if (
+            v55_active
+            and bool(config.get("opportunity_v55_exploration_enabled", True))
+            and trend_aligned
+            and regime in {"broad_up", "broad_down", "quiet", "mixed", "rotation"}
+            and (
+                setup_type in {"breakout", "prebreakout"}
+                or (setup_type == "pullback" and phase == "RETEST")
+            )
+        ):
+            return {
+                **base,
+                "scope": f"v55_{regime}_{direction.lower()}_limited_exploration",
+                "live_scope": False,
+                "canary_scope": False,
+                "exploration_scope": True,
+                "risk_cap_pct": float(
+                    config.get("opportunity_v55_exploration_max_risk_pct", 8.0)
+                ),
+                "reason": "V5.5 candidate-level limited exploration",
+            }
         return {
             **base,
-            "scope": "v54_history_shadow_only",
+            "scope": "v55_history_shadow_only" if v55_active else "v54_history_shadow_only",
             "live_scope": False,
             "canary_scope": False,
+            "exploration_scope": False,
             "reason": "V5.4 未将该市场、方向和结构组合列入历史正证据实盘路线，仅记录影子",
         }
     if (
@@ -1238,13 +1261,14 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
     v52_active = strategy_supports(version_label, "v52_evidence_edge")
     v53_active = strategy_supports(version_label, "v53_fusion")
     v54_active = strategy_supports(version_label, "v54_history_router")
+    v55_active = strategy_supports(version_label, "v55_candidate_exploration")
     lane = str(opportunity.get("admission_lane") or "shadow_only")
     admitted = bool(opportunity.get("admitted"))
-    if lane != "full_bet" or not admitted:
+    if lane not in {"full_bet", "limited_exploration"} or not admitted:
         return {
             "enabled": True,
             "applied": False,
-            "method": "s0_full_bet_v54_history_router" if v54_active else "s0_full_bet_v53_fusion" if v53_active else "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
+            "method": "s0_full_bet_v55_candidate_exploration" if v55_active else "s0_full_bet_v54_history_router" if v54_active else "s0_full_bet_v53_fusion" if v53_active else "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
             "lane": lane,
             "confidence": 0.0,
             "display_label": "仅影子观察",
@@ -1253,10 +1277,10 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
             "reason": f"{version_label} 只对通过相对排名和三重确认的 S0 候选计算全仓风险",
         }
 
-    rank_key = "opportunity_v53_min_rank_percentile" if v53_active else "opportunity_v50_min_rank_percentile" if v50_active else "opportunity_v44_min_rank_percentile"
+    rank_key = "opportunity_v55_core_rank_percentile" if v55_active else "opportunity_v53_min_rank_percentile" if v53_active else "opportunity_v50_min_rank_percentile" if v50_active else "opportunity_v44_min_rank_percentile"
     quality_key = "opportunity_v50_min_quality_score" if v50_active else "opportunity_v44_min_quality_score"
-    cost_key = "opportunity_v53_min_gross_cost_multiple" if v53_active else "opportunity_v50_min_cost_ratio" if v50_active else "opportunity_v44_min_cost_ratio"
-    confirmations_key = "opportunity_v53_min_confirmations" if v53_active else "opportunity_v50_min_confirmations" if v50_active else "opportunity_v44_min_confirmations"
+    cost_key = "opportunity_v55_min_gross_cost_multiple" if v55_active else "opportunity_v53_min_gross_cost_multiple" if v53_active else "opportunity_v50_min_cost_ratio" if v50_active else "opportunity_v44_min_cost_ratio"
+    confirmations_key = "opportunity_v55_min_confirmations" if v55_active else "opportunity_v53_min_confirmations" if v53_active else "opportunity_v50_min_confirmations" if v50_active else "opportunity_v44_min_confirmations"
     lower_key = (
         "opportunity_v50_min_lower_expectancy_pct"
         if v50_active
@@ -1269,7 +1293,7 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
         if v50_active
         else "opportunity_v44_stressed_risk_cap_pct"
     )
-    route = opportunity.get("v54_history_router") or opportunity.get("v53_fusion") or {}
+    route = opportunity.get("v55_candidate_exploration") or opportunity.get("v54_history_router") or opportunity.get("v53_fusion") or {}
     rank_floor = (
         float(route.get("rank_floor"))
         if v53_active and route.get("rank_floor") is not None
@@ -1340,7 +1364,7 @@ def v44_position_confidence(opportunity: dict[str, Any], config: dict[str, Any])
     return {
         "enabled": True,
         "applied": True,
-        "method": "s0_full_bet_v54_history_router" if v54_active else "s0_full_bet_v53_fusion" if v53_active else "s0_full_bet_v52_edge" if v52_active else "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
+        "method": "s0_full_bet_v55_candidate_exploration" if v55_active else "s0_full_bet_v54_history_router" if v54_active else "s0_full_bet_v53_fusion" if v53_active else "s0_full_bet_v52_edge" if v52_active else "s0_full_bet_v50_s30" if v50_active else "s0_full_bet_v44",
         "lane": lane,
         "confidence": round(confidence, 6),
         "display_label": "全仓强机会" if confidence >= 0.65 else "全仓机会",
@@ -1407,6 +1431,7 @@ def attach_v4_rankings(
     v52_active = strategy_supports(version, "v52_evidence_edge")
     v53_active = strategy_supports(version, "v53_fusion")
     v54_active = strategy_supports(version, "v54_history_router")
+    v55_active = strategy_supports(version, "v55_candidate_exploration")
     if v50_active:
         v44_rank = float(config.get("opportunity_v50_min_rank_percentile", 0.85))
         v44_quality = float(config.get("opportunity_v50_min_quality_score", 52.0)) / 100
@@ -1419,9 +1444,9 @@ def attach_v4_rankings(
         v44_cost_ratio = float(config.get("opportunity_v53_min_gross_cost_multiple", 3.50))
         v44_confirmations_required = int(config.get("opportunity_v53_min_confirmations", 2))
     if v54_active:
-        v44_rank = float(config.get("opportunity_v54_core_rank_percentile", 0.80))
-        v44_cost_ratio = float(config.get("opportunity_v54_min_gross_cost_multiple", 3.50))
-        v44_confirmations_required = int(config.get("opportunity_v54_min_confirmations", 2))
+        v44_rank = float(config.get("opportunity_v55_core_rank_percentile" if v55_active else "opportunity_v54_core_rank_percentile", 0.80))
+        v44_cost_ratio = float(config.get("opportunity_v55_min_gross_cost_multiple" if v55_active else "opportunity_v54_min_gross_cost_multiple", 3.50))
+        v44_confirmations_required = int(config.get("opportunity_v55_min_confirmations" if v55_active else "opportunity_v54_min_confirmations", 2))
     if v48_active:
         v44_quality = float(config.get("opportunity_v48_min_quality_score", 56.0)) / 100
         v44_expected = float(config.get("opportunity_v48_min_expected_net_pct", 0.03))
@@ -1495,6 +1520,13 @@ def attach_v4_rankings(
             config.get("opportunity_v42_exploration_risk_multiplier", 0.40),
         )
     )
+    v55_exploration_enabled = bool(config.get("opportunity_v55_exploration_enabled", True))
+    v55_core_cross = float(config.get("opportunity_v55_min_cross_sectional_strength", 0.72))
+    v55_exploration_rank = float(config.get("opportunity_v55_exploration_rank_percentile", 0.72))
+    v55_exploration_quality = float(config.get("opportunity_v55_exploration_min_quality_score", 54.0)) / 100
+    v55_exploration_cross = float(config.get("opportunity_v55_exploration_min_cross_sectional_strength", 0.64))
+    v55_exploration_cost = float(config.get("opportunity_v55_exploration_min_gross_cost_multiple", 2.40))
+    v55_exploration_confirmations = int(config.get("opportunity_v55_exploration_min_confirmations", 3))
     ranked: list[tuple[float, dict[str, Any]]] = []
     strategy_family = strategy_family_for_version(version)
     circuit_state = local_circuit_state(f"{strategy_family}@{version}")
@@ -1548,7 +1580,12 @@ def attach_v4_rankings(
             not v52_active
             or features["cross_sectional_strength"]
             >= float(
-                config.get("opportunity_v54_min_cross_sectional_strength", 0.72)
+                config.get(
+                    "opportunity_v55_min_cross_sectional_strength"
+                    if v55_active
+                    else "opportunity_v54_min_cross_sectional_strength",
+                    0.72,
+                )
                 if v54_active
                 else config.get("opportunity_v53_min_cross_sectional_strength", 0.72)
                 if v53_active
@@ -1580,7 +1617,12 @@ def attach_v4_rankings(
             candidate_min_cost_ratio = max(
                 candidate_min_cost_ratio,
                 float(
-                    config.get("opportunity_v54_min_gross_cost_multiple", 3.50)
+                    config.get(
+                        "opportunity_v55_min_gross_cost_multiple"
+                        if v55_active
+                        else "opportunity_v54_min_gross_cost_multiple",
+                        3.50,
+                    )
                     if v54_active
                     else config.get("opportunity_v53_min_gross_cost_multiple", 3.50)
                     if v53_active
@@ -1742,6 +1784,7 @@ def attach_v4_rankings(
             or policy["canary_scope"]
             or (policy["exploration_scope"] and not strategy_supports(version, "v472_router"))
         )
+        v55_core_scope = bool(policy["live_scope"]) if v55_active else v44_scope
         effective_v44_rank = v44_rank
         effective_v44_expected = v44_expected
         effective_v44_confirmations = v44_confirmations_required
@@ -1848,7 +1891,7 @@ def attach_v4_rankings(
         v44_admitted = bool(
             v44_active
             and live_enabled
-            and v44_scope
+            and v55_core_scope
             and setup_type != "unknown"
             and v52_setup_ok
             and v52_cross_ok
@@ -1858,6 +1901,28 @@ def attach_v4_rankings(
             and lower >= v44_lower
             and model["cost_ratio"] >= effective_v44_cost_ratio
             and v44_confirmations >= effective_v44_confirmations
+            and direction_quality_ok
+            and executable
+            and full_bet_liquidity["passed"]
+            and not bool(exhaustion.get("blocked"))
+            and not bool(evidence_policy.get("blocked"))
+            and not bool(reentry_policy.get("blocked"))
+        )
+        v55_exploration_admitted = bool(
+            v55_active
+            and live_enabled
+            and v55_exploration_enabled
+            and policy["exploration_scope"]
+            and not policy["live_scope"]
+            and setup_type != "unknown"
+            and v52_setup_ok
+            and features["cross_sectional_strength"] >= v55_exploration_cross
+            and rank >= v55_exploration_rank
+            and model["quality"] >= v55_exploration_quality
+            and expected >= v44_expected
+            and lower >= v44_lower
+            and model["cost_ratio"] >= max(v55_exploration_cost, candidate_min_cost_ratio)
+            and v44_confirmations >= v55_exploration_confirmations
             and direction_quality_ok
             and executable
             and full_bet_liquidity["passed"]
@@ -1905,11 +1970,17 @@ def attach_v4_rankings(
             validated = False
             provisional = False
             bootstrap_admitted = False
-            exploration_admitted = False
-            permit_eligible = v44_admitted
-            admitted = v44_admitted
-            admission_lane = "full_bet" if v44_admitted else "shadow_only"
-            lane_risk_multiplier = 1.0 if v44_admitted else 0.0
+            exploration_admitted = v55_exploration_admitted if v55_active else False
+            permit_eligible = v44_admitted or v55_exploration_admitted
+            admitted = permit_eligible
+            admission_lane = (
+                "full_bet"
+                if v44_admitted
+                else "limited_exploration"
+                if v55_exploration_admitted
+                else "shadow_only"
+            )
+            lane_risk_multiplier = 1.0 if v44_admitted else 1.0 if v55_exploration_admitted else 0.0
             risk_multiplier = (
                 lane_risk_multiplier
                 * adaptive_risk_multiplier
@@ -1918,14 +1989,15 @@ def attach_v4_rankings(
                 * float(reentry_policy.get("risk_multiplier") or 1.0)
                 * v52_evidence_multiplier
             )
-            exploring = False
+            exploring = bool(v55_exploration_admitted)
             selected_liquidity = full_bet_liquidity
         blockers: list[str] = []
-        applicable_rank = effective_v44_rank if v44_active else exploration_rank if exploring else bootstrap_rank
-        applicable_quality = effective_absolute_quality if v44_active else exploration_quality if exploring else bootstrap_quality
-        applicable_expected = effective_v44_expected if v44_active else exploration_expected if exploring else min_expected
-        applicable_lower = v44_lower if v44_active else exploration_lower if exploring else min_lower
-        applicable_cost_ratio = effective_v44_cost_ratio if v44_active else exploration_cost_ratio if exploring else min_cost_ratio
+        v55_exploration_route = bool(v55_active and policy["exploration_scope"] and not policy["live_scope"])
+        applicable_rank = v55_exploration_rank if v55_exploration_route else effective_v44_rank if v44_active else exploration_rank if exploring else bootstrap_rank
+        applicable_quality = v55_exploration_quality if v55_exploration_route else effective_absolute_quality if v44_active else exploration_quality if exploring else bootstrap_quality
+        applicable_expected = v44_expected if v55_exploration_route else effective_v44_expected if v44_active else exploration_expected if exploring else min_expected
+        applicable_lower = v44_lower if v55_exploration_route else v44_lower if v44_active else exploration_lower if exploring else min_lower
+        applicable_cost_ratio = max(v55_exploration_cost, candidate_min_cost_ratio) if v55_exploration_route else effective_v44_cost_ratio if v44_active else exploration_cost_ratio if exploring else min_cost_ratio
         if not policy["canary_scope"] and not policy["live_scope"] and not policy["exploration_scope"]:
             blockers.append(policy["reason"])
         if rank < applicable_rank:
@@ -1942,7 +2014,9 @@ def attach_v4_rankings(
             blockers.append(
                 f"受限探索确认不足：{momentum_confirmations}/{exploration_confirmations_required}，或回踩/突破结构未确认"
             )
-        if v44_active and v44_confirmations < effective_v44_confirmations:
+        if v55_exploration_route and v44_confirmations < v55_exploration_confirmations:
+            blockers.append(f"V5.5 limited exploration confirmations {v44_confirmations}/{v55_exploration_confirmations}")
+        elif v44_active and v44_confirmations < effective_v44_confirmations:
             blockers.append(f"{version.upper()} 五项确认仅通过 {v44_confirmations}/{effective_v44_confirmations}")
         if v44_active and not direction_quality_ok:
             blockers.append(
@@ -2098,14 +2172,48 @@ def attach_v4_rankings(
                 "confirmations_required": effective_v44_confirmations,
                 "cross_sectional_strength": round(features["cross_sectional_strength"], 6),
                 "cross_sectional_floor": float(
-                    config.get("opportunity_v54_min_cross_sectional_strength", 0.72)
+                    config.get(
+                        "opportunity_v55_min_cross_sectional_strength"
+                        if v55_active
+                        else "opportunity_v54_min_cross_sectional_strength",
+                        0.72,
+                    )
                 ),
                 "gross_cost_multiple": round(float(model["cost_ratio"]), 6),
                 "gross_cost_floor": float(
-                    config.get("opportunity_v54_min_gross_cost_multiple", 3.50)
+                    config.get(
+                        "opportunity_v55_min_gross_cost_multiple"
+                        if v55_active
+                        else "opportunity_v54_min_gross_cost_multiple",
+                        3.50,
+                    )
                 ),
                 "risk_cap_pct": float(policy.get("risk_cap_pct") or 0.0),
                 "historical_route": bool(policy.get("live_scope")),
+            },
+            "v55_candidate_exploration": {
+                "enabled": v55_active,
+                "route": str(policy.get("scope") or "shadow_only"),
+                "core_route": bool(policy.get("live_scope")),
+                "exploration_route": bool(policy.get("exploration_scope") and not policy.get("live_scope")),
+                "rank_floor": round(v55_exploration_rank if v55_exploration_route else effective_v44_rank, 6),
+                "quality_floor": round(v55_exploration_quality if v55_exploration_route else effective_absolute_quality, 6),
+                "confirmations": v44_confirmations,
+                "confirmations_required": v55_exploration_confirmations if v55_exploration_route else effective_v44_confirmations,
+                "cross_sectional_strength": round(features["cross_sectional_strength"], 6),
+                "cross_sectional_floor": round(
+                    v55_exploration_cross if v55_exploration_route else v55_core_cross,
+                    6,
+                ),
+                "gross_cost_multiple": round(float(model["cost_ratio"]), 6),
+                "gross_cost_floor": round(
+                    max(v55_exploration_cost, candidate_min_cost_ratio)
+                    if v55_exploration_route
+                    else effective_v44_cost_ratio,
+                    6,
+                ),
+                "risk_cap_pct": float(policy.get("risk_cap_pct") or 0.0),
+                "admitted": bool(v44_admitted or v55_exploration_admitted),
             },
             "uncertainty_pct": round(model["uncertainty_pct"] * (1.0 - empirical_weight), 6),
             "model_win_probability": round(model["win_probability"], 6),
@@ -2128,6 +2236,7 @@ def attach_v4_rankings(
             "core_canary_eligible": canary_eligible,
             "bootstrap_admitted": bootstrap_admitted,
             "exploration_admitted": exploration_admitted,
+            "v55_exploration_admitted": v55_exploration_admitted,
             "full_bet_admitted": v44_admitted,
             "admission_lane": admission_lane,
             "momentum_confirmations": momentum_confirmations,

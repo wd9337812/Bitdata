@@ -36,7 +36,17 @@ def is_s0_full_bet(candidate: dict[str, Any] | None, config: dict[str, Any]) -> 
         or config.get("opportunity_v4_strategy_version")
         or ""
     ).lower()
-    return bool(strategy_supports(version, "full_bet") and opportunity.get("full_bet_admitted"))
+    return bool(
+        strategy_supports(version, "full_bet")
+        and (
+            opportunity.get("full_bet_admitted")
+            or (
+                strategy_supports(version, "v55_candidate_exploration")
+                and opportunity.get("admission_lane") == "limited_exploration"
+                and opportunity.get("v55_exploration_admitted")
+            )
+        )
+    )
 
 
 def build_s0_full_bet_sizing(
@@ -74,7 +84,12 @@ def build_s0_full_bet_sizing(
     # A release route can be deliberately narrower than the S0 full-bet profile.
     # Preserve that route cap all the way through final sizing: the profile-wide
     # 30% ceiling is an upper bound, never permission to override a route cap.
-    route = opportunity.get("v54_history_router") or opportunity.get("v53_fusion") or {}
+    route = (
+        opportunity.get("v55_candidate_exploration")
+        or opportunity.get("v54_history_router")
+        or opportunity.get("v53_fusion")
+        or {}
+    )
     route_risk_cap = float(route.get("risk_cap_pct") or 0.0)
     observed_cost_pct = max(
         float(opportunity.get("estimated_cost_pct") or 0.0),
