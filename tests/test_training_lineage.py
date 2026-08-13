@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from app.live_learning import (
     build_trade_records_from_user_trades,
     init_live_learning_schema,
+    pending_lineage_symbols,
     upsert_trade_records,
 )
 from app.market_stream import write_snapshot
@@ -117,6 +118,15 @@ def test_exact_order_lineage_captures_features_and_real_costs(monkeypatch, tmp_p
         ensure_shadow_tables(conn)
 
     decision = _decision()
+    decision["full_bet_sizing"] = {
+        "target_risk_pct": 8.0,
+        "stressed_risk_pct": 7.4,
+        "route_risk_cap_pct": 8.0,
+        "hard_risk_cap_pct": 30.0,
+        "notional": 40.0,
+        "margin_used": 8.0,
+        "leverage": 5,
+    }
     opportunity_id = record_decision_opportunity(decision)
     assert opportunity_id
     assert decision["candidate"]["opportunity_id"] == opportunity_id
@@ -131,6 +141,7 @@ def test_exact_order_lineage_captures_features_and_real_costs(monkeypatch, tmp_p
             "take_profit_order": {"algoId": 789},
         },
     )
+    assert pending_lineage_symbols() == ["BTCUSDT"]
     record = {
         "symbol": "BTCUSDT",
         "direction": "LONG",

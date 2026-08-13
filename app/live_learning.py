@@ -13,6 +13,7 @@ from app.telemetry import connect, now_iso, record_event
 from app.training_lineage import (
     ensure_live_lineage_columns,
     finalize_trade_lineage,
+    init_training_lineage_schema,
     match_trade_record,
 )
 
@@ -1314,10 +1315,29 @@ def build_trade_records_from_user_trades(
     return records
 
 
+def pending_lineage_symbols(limit: int = 4, strategy_version: str | None = None) -> list[str]:
+    """Prioritize executed entries whose closure has not reached local lineage."""
+    init_training_lineage_schema()
+    with connect() as conn:
+        where = "decision_status = 'EXECUTED' AND close_fill_time IS NULL"
+        params: list[Any] = []
+        if strategy_version:
+            where += " AND strategy_version = ?"
+            params.append(str(strategy_version))
+        params.append(max(1, int(limit)))
+        rows = conn.execute(
+            f"SELECT symbol FROM opportunity_lineage WHERE {where} ORDER BY updated_at DESC LIMIT ?",
+            tuple(params),
+        ).fetchall()
+    return list(dict.fromkeys(str(row["symbol"] or "").upper() for row in rows if row["symbol"]))
+
+
 def sync_live_learning_from_binance(
     client: BinanceFuturesClient,
     config: dict[str, Any],
     lookback_hours: float | None = None,
+    priority_symbols: list[str] | None = None,
+    priority_only: bool = False,
 ) -> dict[str, Any]:
     if not config.get("live_credit_enabled", True):
         return {"enabled": False, "reason": "disabled"}
@@ -1325,9 +1345,10 @@ def sync_live_learning_from_binance(
     end_ms = int(time.time() * 1000)
     start_ms = int((time.time() - lookback_hours * 3600) * 1000)
     income = client.signed_request("GET", "/fapi/v1/income", {"startTime": start_ms, "endTime": end_ms, "limit": 1000})
-    symbols = sorted({str(row.get("symbol", "")).upper() for row in income if row.get("symbol")})
+    income_symbols = sorted({str(row.get("symbol", "")).upper() for row in income if row.get("symbol")})
     max_symbols = int(config.get("live_credit_sync_max_symbols", 20))
-    symbols = symbols[:max_symbols]
+    priority = list(dict.fromkeys(str(symbol).upper() for symbol in (priority_symbols or []) if symbol))
+    symbols = priority[:max_symbols] if priority_only else list(dict.fromkeys([*priority, *income_symbols]))[:max_symbols]
     trades_by_symbol: dict[str, list[dict[str, Any]]] = {}
     for symbol in symbols:
         rows = client.signed_request(
@@ -1355,6 +1376,8 @@ def sync_live_learning_from_binance(
         "enabled": True,
         "lookback_hours": lookback_hours,
         "symbols": symbols,
+        "priority_symbols": priority,
+        "priority_only": bool(priority_only),
         "records": upserted,
         "scores": scores,
     }

@@ -317,7 +317,7 @@ def live_learning(limit: int = 100) -> dict[str, Any]:
 
 @app.get("/api/training-data/quality", dependencies=[Depends(require_auth)])
 def training_quality() -> dict[str, Any]:
-    return training_data_quality()
+    return training_data_quality(load_config())
 
 
 @app.get("/api/training-data/dataset", dependencies=[Depends(require_auth)])

@@ -276,12 +276,29 @@ def _compact_decision(decision: dict[str, Any]) -> dict[str, Any]:
     candidate = decision.get("candidate") or {}
     signal = decision.get("signal") or candidate.get("signal") or {}
     v4 = candidate.get("opportunity_v4") or {}
+    full_bet = decision.get("full_bet_sizing") or (decision.get("risk") or {}).get("full_bet") or {}
     return {
         "action": decision.get("action"),
         "reason": decision.get("reason") or (decision.get("risk") or {}).get("reason"),
         "quantity": decision.get("quantity"),
         "leverage": decision.get("leverage"),
         "risk_pct": decision.get("risk_pct"),
+        "final_sizing": {
+            key: full_bet.get(key)
+            for key in (
+                "target_risk_pct",
+                "stressed_risk_pct",
+                "route_risk_cap_pct",
+                "hard_risk_cap_pct",
+                "configured_maximum_risk_pct",
+                "notional",
+                "margin_used",
+                "margin_utilization_pct",
+                "leverage",
+                "reason",
+            )
+            if key in full_bet
+        },
         "signal": {
             key: signal.get(key)
             for key in ("signal", "entry_type", "last_price", "stop", "take_profit", "atr", "atr_pct")
@@ -624,7 +641,8 @@ def finalize_trade_lineage(record: dict[str, Any]) -> None:
     record["exit_reason"] = exit_reason
 
 
-def training_data_quality() -> dict[str, Any]:
+def training_data_quality(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    config = config or {}
     init_training_lineage_schema()
     with connect() as conn:
         ensure_live_lineage_columns(conn)
@@ -689,6 +707,50 @@ def training_data_quality() -> dict[str, Any]:
             if _table_exists(conn, "live_trade_records") and _table_exists(conn, "shadow_trades")
             else 0
         )
+        active_version = str(config.get("opportunity_v4_strategy_version") or "").strip()
+        active_execution: dict[str, Any] = {
+            "strategy_version": active_version,
+            "lineage": {"executed": 0, "closed": 0, "pending": 0},
+            "live": {"records": 0, "net_pnl": 0.0, "runtime_loss_exit": 0, "runtime_profit_exit": 0},
+        }
+        if active_version:
+            active_execution["lineage"] = dict(
+                conn.execute(
+                    """
+                    SELECT
+                        SUM(CASE WHEN decision_status IN ('EXECUTED', 'CLOSED') THEN 1 ELSE 0 END) AS executed,
+                        SUM(CASE WHEN decision_status = 'CLOSED' THEN 1 ELSE 0 END) AS closed,
+                        SUM(CASE WHEN decision_status = 'EXECUTED' AND close_fill_time IS NULL THEN 1 ELSE 0 END) AS pending
+                    FROM opportunity_lineage WHERE strategy_version = ?
+                    """,
+                    (active_version,),
+                ).fetchone()
+            )
+            if _table_exists(conn, "live_trade_records"):
+                active_execution["live"] = dict(
+                    conn.execute(
+                        """
+                        SELECT COUNT(*) AS records,
+                               COALESCE(SUM(net_pnl), 0) AS net_pnl,
+                               SUM(CASE WHEN exit_reason = 'runtime_loss_exit' THEN 1 ELSE 0 END) AS runtime_loss_exit,
+                               SUM(CASE WHEN exit_reason = 'runtime_profit_exit' THEN 1 ELSE 0 END) AS runtime_profit_exit
+                        FROM live_trade_records WHERE strategy_version = ?
+                        """,
+                        (active_version,),
+                    ).fetchone()
+                )
+        loss_exits = int(active_execution["live"].get("runtime_loss_exit") or 0)
+        closed_count = int(active_execution["lineage"].get("closed") or 0)
+        active_execution["runtime_exit_review"] = {
+            "ready": loss_exits >= 12 and closed_count >= 20,
+            "runtime_loss_exits": loss_exits,
+            "closed_records": closed_count,
+            "message": (
+                "已达到运行时退出离线回放门槛；可以比较不同保护退出规则。"
+                if loss_exits >= 12 and closed_count >= 20
+                else "运行时亏损退出样本不足，暂不自动修改止盈止损规则。"
+            ),
+        }
     exact = int(live.get("exact_matches") or 0)
     total_live = int(live.get("total") or 0)
     ready = exact >= 30 and int(lineage.get("feature_rows") or 0) >= 100
@@ -699,6 +761,15 @@ def training_data_quality() -> dict[str, Any]:
         "live": {key: int(value or 0) for key, value in live.items()},
         "shadow": {key: int(value or 0) for key, value in shadow.items()},
         "paired_events": paired_events,
+        "active_execution": {
+            "strategy_version": active_execution["strategy_version"],
+            "lineage": {key: int(value or 0) for key, value in active_execution["lineage"].items()},
+            "live": {
+                key: round(float(value or 0), 8) if key == "net_pnl" else int(value or 0)
+                for key, value in active_execution["live"].items()
+            },
+            "runtime_exit_review": active_execution["runtime_exit_review"],
+        },
         "high_weight_training_ready": ready,
         "exact_live_link_rate_pct": round(exact / total_live * 100, 2) if total_live else 0.0,
         "message": (

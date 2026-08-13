@@ -32,7 +32,11 @@ from app.training_lineage import (
     record_shadow_opportunity,
 )
 from app.strategy_capabilities import strategy_supports
-from app.v4_evidence import executable_single_position_shadows, filter_live_eligible_v4_shadows
+from app.v4_evidence import (
+    executable_single_position_shadows,
+    filter_live_eligible_v4_shadows,
+    live_evidence_lanes,
+)
 
 
 def ensure_shadow_tables(conn: sqlite3.Connection) -> None:
@@ -730,6 +734,11 @@ def _independent_decision_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any
     return [*latest.values(), *without_opportunity]
 
 
+def _research_shadow_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize research-only rows without using them as live evidence."""
+    return _shadow_stats(_independent_decision_rows(rows))
+
+
 def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or {}
     initialize_strategy_releases(config)
@@ -749,6 +758,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         else current_family
     )
     evidence_version = paused_evidence_version or (candidate_version if configured_v4_release else current_version)
+    candidate_lane_split = strategy_supports(evidence_version, "v55_candidate_exploration")
     with connect() as conn:
         ensure_shadow_tables(conn)
         migrate_shadow_release_metadata(conn, config)
@@ -831,6 +841,26 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
                 (evidence_family, evidence_version, max(500, int(config.get("opportunity_v3_calibration_max_shadow_trades", 1500)))),
             ).fetchall()
         ]
+        eligible_release_rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ? "
+                "AND COALESCE(evidence_type, 'decision') = 'decision' "
+                f"AND COALESCE(NULLIF(json_extract(payload, '$.admission_lane'), ''), 'unclassified') IN ({','.join('?' for _ in live_evidence_lanes(evidence_version))}) "
+                "ORDER BY id DESC",
+                (evidence_family, evidence_version, *sorted(live_evidence_lanes(evidence_version))),
+            ).fetchall()
+        ] if configured_v4_release and candidate_lane_split else []
+        research_release_rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ? "
+                "AND COALESCE(evidence_type, 'decision') = 'decision' "
+                "AND COALESCE(NULLIF(json_extract(payload, '$.admission_lane'), ''), 'unclassified') "
+                "IN ('shadow_only', 'research', 'exploration') ORDER BY id DESC LIMIT ?",
+                (evidence_family, evidence_version, max(500, int(config.get("opportunity_v3_calibration_max_shadow_trades", 1500)))),
+            ).fetchall()
+        ] if configured_v4_release and candidate_lane_split else []
         candidate_rows = [
             dict(row)
             for row in conn.execute(
@@ -902,9 +932,10 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
     if configured_v4_release:
         active_rows = _independent_decision_rows(active_rows)
         release_decision_rows = list(active_rows)
-        if strategy_supports(evidence_version, "continuous_permit"):
+        eligible_release_rows = _independent_decision_rows(eligible_release_rows)
+        if candidate_lane_split:
             eligible_active_rows = filter_live_eligible_v4_shadows(
-                active_rows,
+                eligible_release_rows,
                 strategy_version=evidence_version,
                 allow_unclassified_legacy=False,
             )
@@ -918,7 +949,9 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
         release_decision_rows = list(active_rows)
     candidate_rows = _independent_decision_rows(candidate_rows)
     if configured_v4_release:
-        stats = _shadow_stats(release_decision_rows)
+        # Headline data is limited to opportunities that the live route could
+        # actually execute. Research-only recall remains visible separately.
+        stats = _shadow_stats(active_rows if candidate_lane_split else release_decision_rows)
     active_closed = [row for row in active_rows if str(row.get("status")) == "CLOSED"]
     candidate_closed = [row for row in candidate_rows if str(row.get("status")) == "CLOSED"]
     shadow_window = int(config.get("performance_guard_shadow_window_trades", 100))
@@ -952,11 +985,15 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             "strategy_family": evidence_family,
             "strategy_version": evidence_version,
             "strategy_role": ACTIVE_ROLE,
-            "all": _shadow_stats(active_rows),
+            "all": _shadow_stats(active_rows if candidate_lane_split else release_decision_rows),
             "decision_evidence": _shadow_stats(release_decision_rows),
+            "candidate_decision": _shadow_stats(active_rows if candidate_lane_split else release_decision_rows),
+            "research_shadow_only": _research_shadow_stats(research_release_rows),
+            "candidate_evidence_lanes": sorted(live_evidence_lanes(evidence_version))
+            if candidate_lane_split else [],
             "recent": _shadow_stats(active_closed[:shadow_window]),
             "recovery": _shadow_stats(active_closed[:recovery_window]),
-            "primary_evidence_type": "decision"
+            "primary_evidence_type": "eligible_decision"
             if configured_v4_release
             else "all",
             "independent_opportunity_only": configured_v4_release,

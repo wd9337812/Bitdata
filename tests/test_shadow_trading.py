@@ -273,6 +273,52 @@ def test_v4_shadow_summary_counts_one_decision_per_opportunity(monkeypatch, tmp_
     assert summary["active_release"]["independent_opportunity_only"] is True
 
 
+def test_v55_shadow_summary_separates_research_only_from_executable_candidates(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {
+        "shadow_trading_enabled": True,
+        "opportunity_v4_strategy_version": "v5.5",
+        "opportunity_v4_evidence_version": "v5.5",
+        "shadow_dedupe_minutes": 0,
+        "shadow_max_hold_minutes": 120,
+        "shadow_reference_notional_usdt": 20,
+        "shadow_round_trip_cost_pct": 0.12,
+    }
+    executable = {
+        **_candidate(100),
+        "strategy_family": "extreme_v5_roll",
+        "strategy_version": "v5.5",
+        "strategy_role": "active",
+        "evidence_type": "decision",
+        "opportunity_v4": {"shadow_eligible": True, "score": 90, "admission_lane": "full_bet"},
+    }
+    research = {
+        **_candidate(101),
+        "symbol": "ETHUSDT",
+        "strategy_family": "extreme_v5_roll",
+        "strategy_version": "v5.5",
+        "strategy_role": "active",
+        "evidence_type": "decision",
+        "opportunity_v4": {"shadow_eligible": True, "score": 60, "admission_lane": "shadow_only"},
+    }
+    assert update_shadow_trades([executable, research], config)["opened"] == 2
+    with connect() as conn:
+        rows = conn.execute("SELECT id, payload FROM shadow_trades ORDER BY id").fetchall()
+        for row in rows:
+            payload = row["payload"]
+            if '"full_bet"' in payload:
+                conn.execute("UPDATE shadow_trades SET status = 'CLOSED', net_pnl = 2, estimated_cost = 0.1 WHERE id = ?", (row["id"],))
+            else:
+                conn.execute("UPDATE shadow_trades SET status = 'CLOSED', net_pnl = -7, estimated_cost = 0.1 WHERE id = ?", (row["id"],))
+        conn.commit()
+
+    summary = shadow_summary(config=config)
+    assert summary["stats"]["closed"] == 1
+    assert summary["stats"]["net_pnl"] == 2.0
+    assert summary["active_release"]["research_shadow_only"]["closed"] == 1
+    assert summary["active_release"]["research_shadow_only"]["net_pnl"] == -7.0
+
+
 def test_v43_shadow_counts_one_continuous_episode_until_price_resets(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     candidate = {

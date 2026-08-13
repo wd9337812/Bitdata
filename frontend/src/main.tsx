@@ -1547,6 +1547,8 @@ function MarketTable({ rows }: { rows: any[] }) {
 
 function ShadowTradingPanel({ data }: { data: ShadowData }) {
   const stats = data?.stats || {};
+  const eligible = data?.active_release?.candidate_decision || stats;
+  const research = data?.active_release?.research_shadow_only || {};
   const releases = data?.by_release || [];
   const rows = data?.trades || [];
   const outcomeLabel: Record<string, string> = {
@@ -1564,11 +1566,12 @@ function ShadowTradingPanel({ data }: { data: ShadowData }) {
           </div>
         </div>
         <div className="metrics">
-          <MetricCard title="记录机会" value={fmt(stats.total, 0)} sub={data?.active_release?.independent_opportunity_only ? "当前版本：决策型独立机会（许可另看可执行样本）" : "去掉重复信号后的数量"} />
-          <MetricCard title="正在观察" value={fmt(stats.active, 0)} sub="还没有碰到模拟止盈或止损" />
-          <MetricCard title="已经结束" value={fmt(stats.closed, 0)} />
-          <MetricCard title="模拟胜率" value={`${fmt(stats.win_rate, 1)}%`} sub="样本少时只供观察" />
-          <MetricCard title="影子净收益" value={`${fmt(stats.net_pnl, 4)} U`} sub={`${data?.active_release?.independent_opportunity_only ? "决策型独立机会" : "全部历史"}；已扣模拟成本 ${fmt(stats.cost, 4)} U`} tone={Number(stats.net_pnl || 0) >= 0 ? "positive" : "negative"} />
+          <MetricCard title="可执行候选" value={fmt(eligible.total, 0)} sub="仅统计全仓短打/受限探索通道；用于评估当前实盘选择" />
+          <MetricCard title="候选观察中" value={fmt(eligible.active, 0)} sub="已经进入可执行通道，尚未结束" />
+          <MetricCard title="候选已结束" value={fmt(eligible.closed, 0)} />
+          <MetricCard title="候选胜率" value={`${fmt(eligible.win_rate, 1)}%`} sub="样本少时只供观察" />
+          <MetricCard title="候选净收益" value={`${fmt(eligible.net_pnl, 4)} U`} sub={`已扣模拟成本 ${fmt(eligible.cost, 4)} U；仅可执行候选`} tone={Number(eligible.net_pnl || 0) >= 0 ? "positive" : "negative"} />
+          <MetricCard title="仅研究影子" value={fmt(research.closed, 0)} sub={`净收益 ${fmt(research.net_pnl, 4)} U；不参与许可证或实盘准入`} tone={Number(research.net_pnl || 0) >= 0 ? "positive" : "negative"} />
         </div>
       </div>
       <div className="panel table-wrap">

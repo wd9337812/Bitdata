@@ -19,7 +19,7 @@ from app.binance_rate import BinanceRateLimitError, rate_status, request_priorit
 from app.config_store import load_config
 from app.cross_sectional_momentum import start_cross_sectional_momentum_thread
 from app.learning_report import save_daily_learning_report
-from app.live_learning import sync_live_learning_from_binance
+from app.live_learning import pending_lineage_symbols, sync_live_learning_from_binance
 from app.live_reaction import sync_live_reaction_from_binance
 from app.local_circuit import record_v4_live_open
 from app.market_stream import start_market_stream_thread
@@ -360,15 +360,37 @@ def maybe_sync_live_learning(client: BinanceFuturesClient, config: dict, state: 
     last = state.get("last_live_learning_sync")
     min_seconds = int(config.get("live_credit_sync_seconds", 600))
     now = datetime.now(timezone.utc)
+    pending_symbols = pending_lineage_symbols(
+        limit=4,
+        strategy_version=str(config.get("opportunity_v4_strategy_version") or ""),
+    )
+    reconcile_last = state.get("last_live_execution_reconcile")
+    reconcile_due = bool(pending_symbols)
+    if reconcile_last:
+        try:
+            reconcile_due = reconcile_due and (now - datetime.fromisoformat(reconcile_last)).total_seconds() >= 120
+        except ValueError:
+            pass
     if last:
         try:
-            if (now - datetime.fromisoformat(last)).total_seconds() < min_seconds:
+            if (now - datetime.fromisoformat(last)).total_seconds() < min_seconds and not reconcile_due:
                 return
         except ValueError:
             pass
     try:
-        result = sync_live_learning_from_binance(client, config)
-        save_state({"last_live_learning_sync": now.isoformat(), "last_live_learning_records": result.get("records", 0)})
+        fast_reconcile = reconcile_due and bool(last)
+        result = sync_live_learning_from_binance(
+            client,
+            config,
+            priority_symbols=pending_symbols if fast_reconcile else None,
+            priority_only=fast_reconcile,
+        )
+        updates = {"last_live_learning_records": result.get("records", 0)}
+        if fast_reconcile:
+            updates["last_live_execution_reconcile"] = now.isoformat()
+        else:
+            updates["last_live_learning_sync"] = now.isoformat()
+        save_state(updates)
     except Exception as exc:
         record_event("warning", "live_learning", f"实盘信用分同步失败：{exc}")
 

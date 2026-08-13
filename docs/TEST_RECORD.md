@@ -787,3 +787,11 @@ This file tracks local verification for the two-stage futures system.
 - OI 24h 变化、taker 长空量比、toptrader 多空比特征重要性仅 127/142/191（动量类 1000-1300）。
 - v5 基础合并 PF 1.16、v5+回踩+追踪 PF 1.13，均触发 5U；去头部 3 币后转负或 <1。
 - 结论：数据增强未修复事件通道；Phase 1 全部拒绝，事件通道保持未启用。留档 `docs/s0-tail-event-v5-enriched-rejection-2026-08-05.md`。
+
+## 2026-08-14 V5.5.1 证据口径与成交回写
+
+- V5.5 可执行候选影子与 `shadow_only` 研究样本拆分展示；研究样本不再混入当前实盘路线的顶部 PF 或许可证口径。
+- 当前版本已执行但尚未关闭回写的币种优先同步，快速核对每 120 秒最多 4 个币种；常规同步周期与 API 限频保持不变。
+- 决策留档增加最终风险快照；训练质量接口展示当前版本的执行回写和运行时退出回放样本门槛。
+- 定向后端测试 `tests/test_shadow_trading.py tests/test_training_lineage.py`：12 通过。前端 `npm run build`：通过。
+- 完整 pytest 收集受本机缺失 `lightgbm`、`sklearn`、`joblib` 阻断，和本次改动无关。
