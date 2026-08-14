@@ -693,7 +693,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v33_validation_min_regimes": 2,
     "opportunity_v4_enabled": True,
     "opportunity_v4_live_enabled": True,
-    "opportunity_v4_strategy_version": "v5.5",
+    "opportunity_v4_strategy_version": "v5.5.2",
     # When an active V4/V5 release is temporarily paused, keep this version so
     # the Dashboard and evidence pipeline continue to evaluate the paused release.
     "opportunity_v4_evidence_version": "",
@@ -1027,6 +1027,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "opportunity_v55_exploration_min_gross_cost_multiple": 2.40,
     "opportunity_v55_exploration_min_confirmations": 3,
     "opportunity_v55_exploration_max_risk_pct": 8.0,
+    # V5.5.2 keeps the existing entry hard gates, but makes local loss
+    # protection time bounded. A later probe must be a fresh, high-confirmation
+    # structure and uses half of the otherwise permitted route risk.
+    "opportunity_v552_execution_mirror_enabled": True,
+    "opportunity_v552_local_circuit_hard_cooldown_minutes": 90,
+    "opportunity_v552_reentry_min_confirmations": 3,
+    "opportunity_v552_reentry_risk_multiplier": 0.50,
+    "opportunity_v552_reentry_min_medium_path": 0.35,
+    "opportunity_v552_reentry_min_anti_chase": 0.65,
+    "opportunity_v552_reentry_min_volume": 1.05,
+    "opportunity_v552_long_breakout_research_only": True,
     "market_tsmom_shadow_enabled": True,
     "market_tsmom_shadow_utc_hour": 0,
     "market_tsmom_shadow_minute_start": 3,

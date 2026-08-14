@@ -189,6 +189,13 @@ _V55_FINGERPRINT_KEYS = (
     "opportunity_v55_exploration_min_gross_cost_multiple",
     "opportunity_v55_exploration_min_confirmations",
     "opportunity_v55_exploration_max_risk_pct",
+    "opportunity_v552_local_circuit_hard_cooldown_minutes",
+    "opportunity_v552_reentry_min_confirmations",
+    "opportunity_v552_reentry_risk_multiplier",
+    "opportunity_v552_reentry_min_medium_path",
+    "opportunity_v552_reentry_min_anti_chase",
+    "opportunity_v552_reentry_min_volume",
+    "opportunity_v552_long_breakout_research_only",
 )
 
 

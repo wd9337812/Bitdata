@@ -519,6 +519,38 @@ def _v48_evidence_policy(local_circuit: dict[str, Any], config: dict[str, Any]) 
         and trades >= int(config.get("opportunity_v48_evidence_hard_min_trades", 20))
         and pf < float(config.get("opportunity_v48_evidence_hard_pf", 0.55))
     )
+    version = str(config.get("opportunity_v4_strategy_version") or "").lower()
+    if strategy_supports(version, "v552_timed_reentry"):
+        blocked_at = local_circuit.get("live_blocked_at")
+        try:
+            blocked_time = datetime.fromisoformat(str(blocked_at).replace("Z", "+00:00")) if blocked_at else None
+            if blocked_time and blocked_time.tzinfo is None:
+                blocked_time = blocked_time.replace(tzinfo=timezone.utc)
+        except ValueError:
+            blocked_time = None
+        cooldown_minutes = int(config.get("opportunity_v552_local_circuit_hard_cooldown_minutes", 90))
+        elapsed_seconds = (
+            max(0.0, (datetime.now(timezone.utc) - blocked_time).total_seconds())
+            if blocked_time
+            else 0.0
+        )
+        hard_cooldown = bool(
+            live_streak >= 2
+            and blocked_time
+            and elapsed_seconds < cooldown_minutes * 60
+        )
+        return {
+            "level": "shadow_hard" if severe_shadow else "hard_cooldown" if hard_cooldown else "probation" if live_streak >= 2 else "clear",
+            "blocked": severe_shadow or hard_cooldown,
+            "risk_multiplier": 0.0 if severe_shadow or hard_cooldown else 1.0,
+            "threshold_delta": 0.0,
+            "reason": reason,
+            "live_loss_streak": live_streak,
+            "shadow_trigger_trades": trades,
+            "shadow_trigger_pf": pf,
+            "hard_cooldown_minutes": cooldown_minutes,
+            "elapsed_seconds": round(elapsed_seconds, 1),
+        }
     # Re-entry owns live-loss handling because a genuinely new structure may
     # reset the sequence. Shadow evidence remains version/cohort isolated.
     hard = severe_shadow
@@ -566,6 +598,50 @@ def _v48_reentry_policy(
         if incident_guard
         else config.get("opportunity_v48_reentry_hard_losses", 2)
     )
+    if strategy_supports(version, "v552_timed_reentry") and streak >= hard_losses:
+        blocked_at = local_circuit.get("live_blocked_at")
+        try:
+            blocked_time = datetime.fromisoformat(str(blocked_at).replace("Z", "+00:00")) if blocked_at else None
+            if blocked_time and blocked_time.tzinfo is None:
+                blocked_time = blocked_time.replace(tzinfo=timezone.utc)
+        except ValueError:
+            blocked_time = None
+        cooldown_minutes = int(config.get("opportunity_v552_local_circuit_hard_cooldown_minutes", 90))
+        hard_cooldown = bool(
+            blocked_time
+            and (datetime.now(timezone.utc) - blocked_time).total_seconds() < cooldown_minutes * 60
+        )
+        fresh_structure = bool(
+            phase in {"RETEST", "ARMED"}
+            and features.get("medium_path", 0.0) >= float(config.get("opportunity_v552_reentry_min_medium_path", 0.35))
+            and features.get("anti_chase", 0.0) >= float(config.get("opportunity_v552_reentry_min_anti_chase", 0.65))
+            and volume >= float(config.get("opportunity_v552_reentry_min_volume", 1.05))
+            and extension <= float(config.get("opportunity_v48_reentry_reset_extension_atr", 0.35))
+        )
+        state = "hard_cooldown" if hard_cooldown else "probation" if fresh_structure else "awaiting_fresh_structure"
+        return {
+            "state": state,
+            "blocked": hard_cooldown or not fresh_structure,
+            "risk_multiplier": (
+                0.0
+                if hard_cooldown or not fresh_structure
+                else float(config.get("opportunity_v552_reentry_risk_multiplier", 0.50))
+            ),
+            "structural_reset": fresh_structure,
+            "live_loss_streak": streak,
+            "cohort_loss_streak": cohort_streak,
+            "episode_loss_streak": episode_streak,
+            "recent_loss_count": recent_loss_count,
+            "hard_recent_losses": bool(recent_loss_count >= hard_losses),
+            "duplicate_event": False,
+            "event_limit_reached": False,
+            "recent_event_count": int(episode.get("recent_event_count") or 0),
+            "recent_event_limit": int(episode.get("recent_event_limit") or 3),
+            "dedupe_minutes": int(episode.get("dedupe_minutes") or 45),
+            "entry_phase": phase,
+            "medium_path": round(float(features.get("medium_path") or 0.0), 6),
+            "hard_cooldown_minutes": cooldown_minutes,
+        }
     duplicate_event = bool(episode.get("within_dedupe_window"))
     event_limit_reached = bool(
         int(episode.get("recent_event_count") or 0)
@@ -1432,6 +1508,7 @@ def attach_v4_rankings(
     v53_active = strategy_supports(version, "v53_fusion")
     v54_active = strategy_supports(version, "v54_history_router")
     v55_active = strategy_supports(version, "v55_candidate_exploration")
+    v552_active = strategy_supports(version, "v552_timed_reentry")
     if v50_active:
         v44_rank = float(config.get("opportunity_v50_min_rank_percentile", 0.85))
         v44_quality = float(config.get("opportunity_v50_min_quality_score", 52.0)) / 100
@@ -1645,7 +1722,7 @@ def attach_v4_rankings(
                 state=circuit_state,
             )
         )
-        negative_evidence = bool(local_circuit.get("blocked"))
+        negative_evidence = bool(local_circuit.get("blocked")) and not v552_active
         exhaustion = _v48_exhaustion(candidate, features, config) if v48_active else {
             "enabled": False, "score": 0.0, "blocked": False, "caution": False,
             "risk_multiplier": 1.0, "components": {}, "reason": "legacy",
@@ -1727,6 +1804,13 @@ def attach_v4_rankings(
             )
         )
         direction = str(candidate.get("direction") or "").upper()
+        v552_reentry_probe = bool(v552_active and reentry_policy.get("state") == "probation")
+        v552_research_only_route = bool(
+            v552_active
+            and config.get("opportunity_v552_long_breakout_research_only", True)
+            and direction == "LONG"
+            and setup_type == "breakout"
+        )
         if strategy_supports(version, "adaptive_calibration"):
             direction_quality_ok = bool(
                 calibration.get("relation") != "countertrend"
@@ -1874,6 +1958,11 @@ def attach_v4_rankings(
                 5,
                 max(effective_v44_confirmations, v44_confirmations_required + 1),
             )
+        if v552_reentry_probe:
+            effective_v44_confirmations = max(
+                effective_v44_confirmations,
+                int(config.get("opportunity_v552_reentry_min_confirmations", 3)),
+            )
         effective_absolute_quality = (
             v44_quality
             + float(evidence_policy.get("threshold_delta") or 0.0)
@@ -1929,6 +2018,7 @@ def attach_v4_rankings(
             and not bool(exhaustion.get("blocked"))
             and not bool(evidence_policy.get("blocked"))
             and not bool(reentry_policy.get("blocked"))
+            and not v552_research_only_route
         )
         permit_eligible = canary_eligible or exploration_admitted
         bootstrap_admitted = canary_eligible
@@ -2018,6 +2108,10 @@ def attach_v4_rankings(
             blockers.append(f"V5.5 limited exploration confirmations {v44_confirmations}/{v55_exploration_confirmations}")
         elif v44_active and v44_confirmations < effective_v44_confirmations:
             blockers.append(f"{version.upper()} 五项确认仅通过 {v44_confirmations}/{effective_v44_confirmations}")
+        if v552_research_only_route:
+            blockers.append("V5.5.2 long breakout is mirror-only while its live route is weak")
+        if v552_reentry_probe and v44_confirmations < int(config.get("opportunity_v552_reentry_min_confirmations", 3)):
+            blockers.append("V5.5.2 re-entry probe requires at least three confirmations")
         if v44_active and not direction_quality_ok:
             blockers.append(
                 "逆市场方向需要更强的资金流、市场匹配和中周期路径确认"
@@ -2214,6 +2308,14 @@ def attach_v4_rankings(
                 ),
                 "risk_cap_pct": float(policy.get("risk_cap_pct") or 0.0),
                 "admitted": bool(v44_admitted or v55_exploration_admitted),
+            },
+            "v552_execution_policy": {
+                "enabled": v552_active,
+                "execution_mirror": bool(config.get("opportunity_v552_execution_mirror_enabled", True)),
+                "long_breakout_mirror_only": v552_research_only_route,
+                "local_reentry_state": str(reentry_policy.get("state") or "clear"),
+                "local_reentry_risk_multiplier": round(float(reentry_policy.get("risk_multiplier") or 1.0), 4),
+                "hard_cooldown_minutes": int(config.get("opportunity_v552_local_circuit_hard_cooldown_minutes", 90)),
             },
             "uncertainty_pct": round(model["uncertainty_pct"] * (1.0 - empirical_weight), 6),
             "model_win_probability": round(model["win_probability"], 6),

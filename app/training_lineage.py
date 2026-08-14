@@ -590,6 +590,43 @@ def finalize_trade_lineage(record: dict[str, Any]) -> None:
         return
     with connect() as conn:
         init_training_lineage_schema()
+        # V5.5.2 execution mirrors have the same final opportunity id as the
+        # Binance fill. They are intentionally excluded from admission data;
+        # this update exists only for exact real-vs-shadow diagnostics.
+        if _table_exists(conn, "shadow_trades"):
+            close_price = _float(record.get("close_price"))
+            gross_pnl = _float(record.get("realized_pnl")) or 0.0
+            commission = _float(record.get("commission"))
+            if commission is None:
+                commission = (_float(record.get("entry_commission")) or 0.0) + (
+                    _float(record.get("close_commission")) or 0.0
+                )
+            funding_fee = _float(record.get("funding_fee")) or 0.0
+            net_pnl = _float(record.get("net_pnl"))
+            if net_pnl is None:
+                net_pnl = gross_pnl - commission - funding_fee
+            conn.execute(
+                """
+                UPDATE shadow_trades
+                SET status = 'CLOSED', closed_at = ?, last_price = COALESCE(?, last_price),
+                    high_price = MAX(COALESCE(high_price, entry), COALESCE(?, entry)),
+                    low_price = MIN(COALESCE(low_price, entry), COALESCE(?, entry)),
+                    gross_pnl = ?, estimated_cost = ?, estimated_fee = ?, estimated_slippage = 0,
+                    net_pnl = ?, outcome = 'LIVE_EXECUTION'
+                WHERE opportunity_id = ? AND evidence_type = 'execution_mirror' AND status = 'OPEN'
+                """,
+                (
+                    now_iso(),
+                    close_price,
+                    close_price,
+                    close_price,
+                    gross_pnl,
+                    commission + funding_fee,
+                    commission,
+                    net_pnl,
+                    opportunity_id,
+                ),
+            )
         found = conn.execute(
             "SELECT * FROM opportunity_lineage WHERE opportunity_id = ?",
             (opportunity_id,),

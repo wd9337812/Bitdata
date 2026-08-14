@@ -80,6 +80,8 @@ def strategy_supports(value: Any, capability: str) -> bool:
             supported.add("v54_history_router")
         if raw_version.startswith("v5.5"):
             supported.add("v55_candidate_exploration")
+        if raw_version.startswith("v5.5.2"):
+            supported.update({"v552_execution_mirror", "v552_timed_reentry"})
         return capability in supported
     if capability == "v472_router":
         return raw_version.startswith(("v4.7.2", "v4.7.3", "v4.7.4"))

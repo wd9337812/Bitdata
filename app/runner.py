@@ -43,7 +43,7 @@ from app.risk import direction_cooldown_key, live_trading_allowed
 from app.runtime_protection import manage_runtime_protection, tighten_position_stop_to_price
 from app.s0_daily_profit_lock import s0_daily_profit_lock_status
 from app.s0_event_engine import build_s0_event_decision, event_engine_status
-from app.shadow_trading import update_shadow_trades
+from app.shadow_trading import record_execution_mirror, update_shadow_trades
 from app.stage_modes import apply_stage_route
 from app.strategy_capabilities import strategy_family_for_version, strategy_supports
 from app.trading_engine import (
@@ -1273,6 +1273,19 @@ def run_once(symbols_override: list[str] | None = None, fast_lane: bool = False)
             {"error": str(exc), "symbol": decision.get("symbol")},
             throttle_seconds=300,
         )
+    if result.get("mode") in {"live", "rotation_live"}:
+        try:
+            record_execution_mirror(decision, result, config)
+        except Exception as exc:
+            # Evidence observability must never interfere with an accepted,
+            # exchange-protected live trade.
+            record_event_throttled(
+                "warning",
+                "execution_mirror",
+                "真实成交镜像写入失败，不影响已提交订单；后续仍可由 Binance 成交记录补齐。",
+                {"error": str(exc), "symbol": decision.get("symbol")},
+                throttle_seconds=300,
+            )
     if result.get("mode") in {"protection_failed_closed", "protection_confirm_failed_closed"}:
         revoke_recovery_permit("exchange_protection_confirmation_failed")
         revoke_strategy_canary("exchange_protection_confirmation_failed")

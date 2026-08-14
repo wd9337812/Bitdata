@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from app.shadow_trading import shadow_summary, update_shadow_trades
+from app.shadow_trading import record_execution_mirror, shadow_summary, update_shadow_trades
 from app.telemetry import connect
 
 
@@ -39,6 +39,46 @@ def test_shadow_trade_is_deduplicated_and_settled_without_exchange(monkeypatch, 
     assert summary["stats"]["total"] == 1
     assert summary["stats"]["wins"] == 1
     assert summary["trades"][0]["outcome"] == "TAKE_PROFIT"
+
+
+def test_execution_mirror_uses_final_live_opportunity_id(monkeypatch, tmp_path):
+    monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
+    config = {"opportunity_v552_execution_mirror_enabled": True}
+    decision = {
+        "opportunity_id": "live-opportunity-1",
+        "event_id": "event-1",
+        "execution_id": "binance:123",
+        "symbol": "SOLUSDT",
+        "direction": "LONG",
+        "quantity": 0.2,
+        "candidate": {
+            "symbol": "SOLUSDT",
+            "direction": "LONG",
+            "strategy_family": "extreme_v5_roll",
+            "strategy_version": "v5.5.2",
+            "strategy_role": "active",
+            "entry_type": "pullback",
+            "signal": {"last_price": 100, "stop": 98, "take_profit": 104},
+            "opportunity_v4": {"score": 72, "admission_lane": "full_bet"},
+        },
+    }
+
+    assert record_execution_mirror(
+        decision,
+        {"mode": "live", "entry_order": {"orderId": 123, "avgPrice": "100", "executedQty": "0.2"}},
+        config,
+    )
+    assert not record_execution_mirror(
+        decision,
+        {"mode": "live", "entry_order": {"orderId": 123, "avgPrice": "100", "executedQty": "0.2"}},
+        config,
+    )
+    with connect() as conn:
+        row = dict(conn.execute("SELECT * FROM shadow_trades").fetchone())
+
+    assert row["opportunity_id"] == "live-opportunity-1"
+    assert row["evidence_type"] == "execution_mirror"
+    assert row["notional"] == 20.0
 
 
 def test_independent_research_shadow_can_force_eligibility_and_stay_single_position(monkeypatch, tmp_path):

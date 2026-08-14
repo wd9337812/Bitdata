@@ -9,7 +9,7 @@ from app.live_learning import (
     upsert_trade_records,
 )
 from app.market_stream import write_snapshot
-from app.shadow_trading import ensure_shadow_tables
+from app.shadow_trading import ensure_shadow_tables, record_execution_mirror
 from app.telemetry import connect
 from app.training_lineage import (
     ensure_event_group_id,
@@ -127,6 +127,7 @@ def test_exact_order_lineage_captures_features_and_real_costs(monkeypatch, tmp_p
         "margin_used": 8.0,
         "leverage": 5,
     }
+    decision["candidate"]["strategy_version"] = "v5.5.2"
     opportunity_id = record_decision_opportunity(decision)
     assert opportunity_id
     assert decision["candidate"]["opportunity_id"] == opportunity_id
@@ -140,6 +141,14 @@ def test_exact_order_lineage_captures_features_and_real_costs(monkeypatch, tmp_p
             "stop_order": {"algoId": 456},
             "take_profit_order": {"algoId": 789},
         },
+    )
+    assert record_execution_mirror(
+        decision,
+        {
+            "mode": "live",
+            "entry_order": {"orderId": 123, "avgPrice": "100.1", "executedQty": "0.1"},
+        },
+        {"opportunity_v552_execution_mirror_enabled": True},
     )
     assert pending_lineage_symbols() == ["BTCUSDT"]
     record = {
@@ -187,6 +196,19 @@ def test_exact_order_lineage_captures_features_and_real_costs(monkeypatch, tmp_p
     assert stored["execution_id"] == "binance:123"
     assert stored["exit_reason"] == "take_profit"
     assert stored["lineage_quality"] == "exact_order_id"
+    with connect() as conn:
+        mirror = dict(
+            conn.execute(
+                "SELECT status, gross_pnl, estimated_cost, net_pnl, outcome FROM shadow_trades "
+                "WHERE opportunity_id = ? AND evidence_type = 'execution_mirror'",
+                (opportunity_id,),
+            ).fetchone()
+        )
+    assert mirror["status"] == "CLOSED"
+    assert mirror["gross_pnl"] == 0.39
+    assert mirror["estimated_cost"] == 0.02
+    assert mirror["net_pnl"] == 0.37
+    assert mirror["outcome"] == "LIVE_EXECUTION"
 
     monkeypatch.setattr(
         "app.live_learning.match_trade_record",

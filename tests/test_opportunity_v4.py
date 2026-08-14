@@ -248,6 +248,27 @@ def test_v55_candidate_exploration_can_be_admitted_without_global_pf(monkeypatch
     assert opportunity["v55_candidate_exploration"]["risk_cap_pct"] == 8.0
 
 
+def test_v552_local_reentry_is_time_bounded_and_half_risk():
+    candidate = _candidate("RESETUSDT", 0.95, 1.2)
+    candidate["signal"]["entry_phase"] = "RETEST"
+    features = {"medium_path": 0.5, "anti_chase": 0.8}
+    local_circuit = {
+        "live_loss_streak": 2,
+        "live_blocked_at": (datetime.now(timezone.utc) - timedelta(minutes=100)).isoformat(),
+        "episode": {"loss_streak": 2, "recent_loss_count": 2},
+    }
+    policy = _v48_reentry_policy(
+        candidate,
+        features,
+        local_circuit,
+        {"opportunity_v4_strategy_version": "v5.5.2"},
+    )
+
+    assert policy["state"] == "probation"
+    assert policy["blocked"] is False
+    assert policy["risk_multiplier"] == 0.5
+
+
 def test_v53_uses_quieter_market_rank_floor_and_current_schema(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_CONFIG_PATH", str(tmp_path / "config.json"))
     config = {

@@ -1878,6 +1878,12 @@ function ConfigPanel({ config, onSave, onTestApi }: { config: any; onSave: (payl
                   {number("opportunity_v55_exploration_min_gross_cost_multiple", "V5.5 探索最低毛利覆盖成本倍数", "默认 2.4 倍；低于核心，但仍必须覆盖估算手续费和滑点")}
                   {number("opportunity_v55_exploration_min_confirmations", "V5.5 探索最低结构确认项", "默认 3 项；探索比核心多一道确认")}
                   {number("opportunity_v55_exploration_max_risk_pct", "V5.5 探索风险上限%", "默认 8%；用于积累真实当前版本证据，不是全仓路线")}
+                  {configuredVersion.startsWith("v5.5.2") ? <>
+                    {number("opportunity_v552_local_circuit_hard_cooldown_minutes", "V5.5.2 同类两连亏硬冷却分钟", "默认 90 分钟；结束后不会自动放开，必须满足新结构和三项确认")}
+                    {number("opportunity_v552_reentry_min_confirmations", "V5.5.2 重入场最少确认项", "默认 3 项；仅用于冷却结束后的半风险试探")}
+                    {number("opportunity_v552_reentry_risk_multiplier", "V5.5.2 重入场风险倍率", "默认 0.50x；不改变 5U 硬停止、交易所止盈止损或流动性硬门")}
+                    {toggle("opportunity_v552_long_breakout_research_only", "做多突破探索仅作镜像研究", "近期该路线真实净收益较弱，开启时保留影子证据但不占用真实风险")}
+                  </> : null}
                 </>
               : v54Configured
               ? <>

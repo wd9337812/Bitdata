@@ -301,6 +301,107 @@ def manage_shadow_strategy_positions(
     return {"updated": updated, "closed": closed}
 
 
+def _finite_float(value: Any, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+        return number if number == number and abs(number) != float("inf") else default
+    except (TypeError, ValueError):
+        return default
+
+
+def record_execution_mirror(
+    decision: dict[str, Any],
+    result: dict[str, Any],
+    config: dict[str, Any],
+) -> bool:
+    """Store an exact live-execution mirror without feeding admission evidence.
+
+    Decision shadows are created during candidate recall and can legitimately use
+    another opportunity id. This row is created only after Binance accepted the
+    final decision, so later live PnL can be paired with the exact decision.
+    """
+    if not config.get("opportunity_v552_execution_mirror_enabled", True):
+        return False
+    if result.get("mode") not in {"live", "rotation_live"}:
+        return False
+    candidate = decision.get("candidate") or {}
+    opportunity_id = str(decision.get("opportunity_id") or candidate.get("opportunity_id") or "").strip()
+    strategy_version = str(candidate.get("strategy_version") or "")
+    strategy_family = str(candidate.get("strategy_family") or "")
+    if not opportunity_id or not strategy_supports(strategy_version, "v552_execution_mirror"):
+        return False
+    signal = decision.get("signal") or candidate.get("signal") or {}
+    entry_order = result.get("entry_order") or {}
+    entry = _finite_float(
+        entry_order.get("avgPrice") or entry_order.get("price") or signal.get("last_price")
+    )
+    stop = _finite_float(signal.get("stop"))
+    take_profit = _finite_float(signal.get("take_profit"))
+    if entry <= 0 or stop <= 0 or take_profit <= 0:
+        return False
+    quantity = _finite_float(entry_order.get("executedQty") or entry_order.get("origQty") or decision.get("quantity"))
+    notional = max(0.0, quantity * entry)
+    if notional <= 0:
+        notional = _finite_float((decision.get("full_bet_sizing") or {}).get("notional"))
+    if notional <= 0:
+        return False
+    v4 = candidate.get("opportunity_v4") or {}
+    structure = market_structure(candidate)
+    event_id = str(decision.get("event_id") or candidate.get("event_id") or ensure_event_id(candidate))
+    opened_at = now_iso()
+    hold_minutes = max(5, int((v4.get("protection_profile") or {}).get("max_hold_bars") or 12) * 5)
+    payload = {
+        "mirror_of": "live_execution",
+        "execution_id": decision.get("execution_id"),
+        "entry_order_id": entry_order.get("orderId"),
+        "admission_lane": v4.get("admission_lane"),
+        "exclusion": "execution mirror only; never used for shadow admission or local circuits",
+    }
+    with connect() as conn:
+        ensure_shadow_tables(conn)
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO shadow_trades (
+                dedupe_key, opened_at, symbol, direction, signal_type, mode, status,
+                blocked_reason, entry, stop, take_profit, last_price, high_price, low_price, notional,
+                estimated_cost, estimated_fee, estimated_slippage, expires_at, strategy_family, strategy_version,
+                strategy_role, release_id, opportunity_id, parameter_fingerprint, feature_schema_version,
+                evidence_type, market_regime, opportunity_score, event_id, payload
+            ) VALUES (?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, 'execution_mirror', ?, ?, ?, ?)
+            """,
+            (
+                f"execution_mirror:{opportunity_id}",
+                opened_at,
+                str(candidate.get("symbol") or decision.get("symbol") or "").upper(),
+                str(candidate.get("direction") or decision.get("direction") or "").upper(),
+                _candidate_signal_type(candidate),
+                str(candidate.get("mode") or "growth"),
+                "真实成交镜像：仅用于实盘与影子逐笔对照，不参与准入或恢复许可证",
+                entry,
+                stop,
+                take_profit,
+                entry,
+                entry,
+                entry,
+                notional,
+                (datetime.now(timezone.utc) + timedelta(minutes=hold_minutes)).isoformat(),
+                strategy_family,
+                strategy_version,
+                str(candidate.get("strategy_role") or "active"),
+                release_id(strategy_family, strategy_version),
+                opportunity_id,
+                str(candidate.get("parameter_fingerprint") or parameter_fingerprint(config, "active", strategy_family)),
+                str(v4.get("feature_schema_version") or "v2"),
+                str(structure.get("market_regime") or "unknown"),
+                _finite_float(v4.get("score") or candidate.get("score")),
+                event_id,
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+            ),
+        )
+        conn.commit()
+    return bool(cursor.rowcount)
+
+
 def update_shadow_trades(candidates: list[dict[str, Any]], config: dict[str, Any]) -> dict[str, int]:
     init_training_lineage_schema()
     """Maintain paper-only trades from scan data. This function never calls Binance."""
@@ -874,6 +975,14 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
                 ),
             ).fetchall()
         ]
+        execution_mirror_rows = [
+            dict(row)
+            for row in conn.execute(
+                "SELECT * FROM shadow_trades WHERE strategy_family = ? AND strategy_version = ? "
+                "AND evidence_type = 'execution_mirror' ORDER BY id DESC",
+                (evidence_family, evidence_version),
+            ).fetchall()
+        ]
     # For V4/V5 the top-level Dashboard metrics describe the release currently
     # being evaluated. Historical releases stay available in the comparison
     # table, but cannot make the current release look more sampled than it is.
@@ -989,6 +1098,7 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             "decision_evidence": _shadow_stats(release_decision_rows),
             "candidate_decision": _shadow_stats(active_rows if candidate_lane_split else release_decision_rows),
             "research_shadow_only": _research_shadow_stats(research_release_rows),
+            "execution_mirror": _shadow_stats(execution_mirror_rows),
             "research_window_limit": max(500, int(config.get("opportunity_v3_calibration_max_shadow_trades", 1500)))
             if candidate_lane_split else 0,
             "candidate_evidence_lanes": sorted(live_evidence_lanes(evidence_version))

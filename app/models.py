@@ -705,7 +705,7 @@ class TradingConfig(BaseModel):
     opportunity_v33_validation_min_regimes: int = Field(default=2, ge=1, le=20)
     opportunity_v4_enabled: bool = True
     opportunity_v4_live_enabled: bool = True
-    opportunity_v4_strategy_version: str = "v5.5"
+    opportunity_v4_strategy_version: str = "v5.5.2"
     opportunity_v4_evidence_version: str = ""
     s0_moe_shadow_enabled: bool = True
     s0_moe_runtime_model_enabled: bool = False
@@ -1027,6 +1027,14 @@ class TradingConfig(BaseModel):
     opportunity_v55_exploration_min_gross_cost_multiple: float = Field(default=2.40, ge=1, le=1000)
     opportunity_v55_exploration_min_confirmations: int = Field(default=3, ge=1, le=5)
     opportunity_v55_exploration_max_risk_pct: float = Field(default=8.0, ge=0.01, le=100)
+    opportunity_v552_execution_mirror_enabled: bool = True
+    opportunity_v552_local_circuit_hard_cooldown_minutes: int = Field(default=90, ge=1, le=1440)
+    opportunity_v552_reentry_min_confirmations: int = Field(default=3, ge=2, le=5)
+    opportunity_v552_reentry_risk_multiplier: float = Field(default=0.50, ge=0.01, le=1)
+    opportunity_v552_reentry_min_medium_path: float = Field(default=0.35, ge=0, le=1)
+    opportunity_v552_reentry_min_anti_chase: float = Field(default=0.65, ge=0, le=1)
+    opportunity_v552_reentry_min_volume: float = Field(default=1.05, ge=0.1, le=10)
+    opportunity_v552_long_breakout_research_only: bool = True
     opportunity_v4_evidence_lookback_hours: float = Field(default=168, ge=1, le=8760)
     opportunity_v4_evidence_max_trades: int = Field(default=5000, ge=100, le=100000)
     opportunity_v4_evidence_cache_seconds: int = Field(default=60, ge=1, le=3600)
