@@ -989,6 +989,8 @@ def shadow_summary(limit: int = 100, config: dict[str, Any] | None = None) -> di
             "decision_evidence": _shadow_stats(release_decision_rows),
             "candidate_decision": _shadow_stats(active_rows if candidate_lane_split else release_decision_rows),
             "research_shadow_only": _research_shadow_stats(research_release_rows),
+            "research_window_limit": max(500, int(config.get("opportunity_v3_calibration_max_shadow_trades", 1500)))
+            if candidate_lane_split else 0,
             "candidate_evidence_lanes": sorted(live_evidence_lanes(evidence_version))
             if candidate_lane_split else [],
             "recent": _shadow_stats(active_closed[:shadow_window]),

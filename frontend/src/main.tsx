@@ -1571,7 +1571,7 @@ function ShadowTradingPanel({ data }: { data: ShadowData }) {
           <MetricCard title="候选已结束" value={fmt(eligible.closed, 0)} />
           <MetricCard title="候选胜率" value={`${fmt(eligible.win_rate, 1)}%`} sub="样本少时只供观察" />
           <MetricCard title="候选净收益" value={`${fmt(eligible.net_pnl, 4)} U`} sub={`已扣模拟成本 ${fmt(eligible.cost, 4)} U；仅可执行候选`} tone={Number(eligible.net_pnl || 0) >= 0 ? "positive" : "negative"} />
-          <MetricCard title="仅研究影子" value={fmt(research.closed, 0)} sub={`净收益 ${fmt(research.net_pnl, 4)} U；不参与许可证或实盘准入`} tone={Number(research.net_pnl || 0) >= 0 ? "positive" : "negative"} />
+          <MetricCard title="仅研究影子" value={fmt(research.closed, 0)} sub={`近期 ${fmt(data?.active_release?.research_window_limit || 0, 0)} 条中净收益 ${fmt(research.net_pnl, 4)} U；不参与许可证或实盘准入`} tone={Number(research.net_pnl || 0) >= 0 ? "positive" : "negative"} />
         </div>
       </div>
       <div className="panel table-wrap">
