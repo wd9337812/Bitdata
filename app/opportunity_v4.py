@@ -2109,9 +2109,9 @@ def attach_v4_rankings(
         elif v44_active and v44_confirmations < effective_v44_confirmations:
             blockers.append(f"{version.upper()} 五项确认仅通过 {v44_confirmations}/{effective_v44_confirmations}")
         if v552_research_only_route:
-            blockers.append("V5.5.2 long breakout is mirror-only while its live route is weak")
+            blockers.append("V5.5.2 做多突破路线近期偏弱，仅记录镜像证据")
         if v552_reentry_probe and v44_confirmations < int(config.get("opportunity_v552_reentry_min_confirmations", 3)):
-            blockers.append("V5.5.2 re-entry probe requires at least three confirmations")
+            blockers.append("V5.5.2 同类重入场试探至少需要三项确认")
         if v44_active and not direction_quality_ok:
             blockers.append(
                 "逆市场方向需要更强的资金流、市场匹配和中周期路径确认"
